@@ -1,0 +1,30 @@
+if(NOT DEFINED OUTPUT_PATH OR OUTPUT_PATH STREQUAL "")
+    message(FATAL_ERROR "OUTPUT_PATH is required")
+endif()
+if(NOT DEFINED BUILD_CONFIGURATION OR
+   NOT BUILD_CONFIGURATION MATCHES "^(Debug|Release|RelWithDebInfo|MinSizeRel)$")
+    message(FATAL_ERROR "BUILD_CONFIGURATION is invalid: ${BUILD_CONFIGURATION}")
+endif()
+
+get_filename_component(DNP3_BUILD_INFO_DIRECTORY "${OUTPUT_PATH}" DIRECTORY)
+file(MAKE_DIRECTORY "${DNP3_BUILD_INFO_DIRECTORY}")
+string(TIMESTAMP DNP3_BUILD_TIME_UTC "%Y-%m-%dT%H:%M:%SZ" UTC)
+
+file(
+    WRITE "${OUTPUT_PATH}"
+    "{\n"
+    "  \"schema_version\": 1,\n"
+    "  \"host_version\": \"@PROJECT_VERSION@\",\n"
+    "  \"git_commit\": \"@DNP3_GIT_COMMIT@\",\n"
+    "  \"opendnp3_version\": \"@DNP3_OPENDNP3_VERSION@\",\n"
+    "  \"opendnp3_commit\": \"@DNP3_OPENDNP3_COMMIT@\",\n"
+    "  \"compiler_id\": \"@CMAKE_CXX_COMPILER_ID@\",\n"
+    "  \"compiler_version\": \"@CMAKE_CXX_COMPILER_VERSION@\",\n"
+    "  \"build_time_utc\": \"${DNP3_BUILD_TIME_UTC}\",\n"
+    "  \"build_configuration\": \"${BUILD_CONFIGURATION}\",\n"
+    "  \"target_architecture\": \"@DNP3_TARGET_ARCHITECTURE@\",\n"
+    "  \"protocol_schema_version\": @DNP3_PROTOCOL_SCHEMA_VERSION@,\n"
+    "  \"capability_matrix_sha256\": \"@DNP3_CAPABILITY_MATRIX_SHA256@\",\n"
+    "  \"dependency_lock_sha256\": \"@DNP3_DEPENDENCY_LOCK_SHA256@\"\n"
+    "}\n"
+)

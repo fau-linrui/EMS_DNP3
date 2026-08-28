@@ -1,0 +1,11 @@
+DNP3 Windows Master Automation Test Framework
+
+This distribution includes OpenDNP3 3.1.2. Its upstream NOTICE states:
+
+This product includes software developed by Green Energy Corp
+(http://www.greenenergycorp.com/) and Automatak LLC
+(https://wwww.automatak.com).
+
+Complete, unmodified upstream notices and license texts are distributed in
+the licenses directory. Dependency identities and hashes are recorded in
+build-info.json and the source dependency lock files.

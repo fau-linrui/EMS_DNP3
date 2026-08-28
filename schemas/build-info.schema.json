@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dnp3-master/build-info.schema.json",
+  "title": "DNP3 master host build identity v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "host_version",
+    "git_commit",
+    "opendnp3_version",
+    "opendnp3_commit",
+    "compiler_id",
+    "compiler_version",
+    "build_time_utc",
+    "build_configuration",
+    "target_architecture",
+    "protocol_schema_version",
+    "capability_matrix_sha256",
+    "dependency_lock_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "host_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "git_commit": {
+      "type": "string",
+      "oneOf": [
+        { "const": "unversioned" },
+        { "pattern": "^[0-9a-f]{40}$" }
+      ]
+    },
+    "opendnp3_version": { "const": "3.1.2" },
+    "opendnp3_commit": {
+      "const": "26b4c01e4839bbbda8866655e086471c4917ee53"
+    },
+    "compiler_id": { "type": "string", "minLength": 1 },
+    "compiler_version": {
+      "type": "string",
+      "pattern": "^[0-9]+(?:\\.[0-9]+)+$"
+    },
+    "build_time_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "build_configuration": {
+      "enum": ["Debug", "Release", "RelWithDebInfo", "MinSizeRel"]
+    },
+    "target_architecture": { "const": "x64" },
+    "protocol_schema_version": { "const": 1 },
+    "capability_matrix_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "dependency_lock_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dnp3-master-test-framework"
+version = "0.1.0"
+description = "Pytest-facing client package for the Windows DNP3 master test host"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [
+  { name = "DNP3 Automation Project" }
+]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Framework :: Pytest",
+  "Operating System :: Microsoft :: Windows :: Windows 10",
+  "Operating System :: Microsoft :: Windows :: Windows 11",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only"
+]
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = ["-ra", "--strict-config", "--strict-markers"]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+  "lifecycle_stress: repeated native process lifecycle and handle-leak acceptance test",
+  "dnp3_capability(name): trace a test to one capability-matrix identifier"
+]

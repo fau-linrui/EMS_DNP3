@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "build_policy": "vendored-offline-no-network-fetch",
+  "opendnp3_version": "3.1.2",
+  "opendnp3_commit": "26b4c01e4839bbbda8866655e086471c4917ee53",
+  "retrieved_utc": "2026-08-28T15:27:20.7885972Z",
+  "dependencies": [
+    {
+      "name": "asio",
+      "version": "asio-1-16-0",
+      "source_url": "https://github.com/chriskohlhoff/asio/archive/asio-1-16-0.zip",
+      "archive_path": "third_party/distfiles/asio-1-16-0.zip",
+      "archive_sha1": "6bdd33522d5b95b36445abb2072a481f7ce15402",
+      "archive_sha256": "18883c350558eadf91218ae5ce9a8f8f85099c2f036c1c8579fb639092e928c5",
+      "archive_size_bytes": 1998368,
+      "archive_root": "asio-asio-1-16-0",
+      "source_path": "third_party/asio",
+      "source_tree_sha256": "fca43792e30173c894fb1633b2c1afae7b6e359f6579e469b8d4761a0684e423",
+      "licenses": [
+        {
+          "spdx": "BSL-1.0",
+          "path": "LICENSES/asio/COPYING",
+          "sha256": "3b50d6b2605a7b83c76223c483502ae4b46b1b432f13be6b00f8a91de061f188"
+        },
+        {
+          "spdx": "BSL-1.0",
+          "path": "LICENSES/asio/LICENSE_1_0.txt",
+          "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+        }
+      ],
+      "locally_staged": true
+    },
+    {
+      "name": "exe4cpp",
+      "version": "fb878a4de598ba9d6e4338afebf83f96e03af1b8",
+      "source_url": "https://github.com/automatak/exe4cpp/archive/fb878a4de598ba9d6e4338afebf83f96e03af1b8.zip",
+      "archive_path": "third_party/distfiles/exe4cpp-fb878a4de598ba9d6e4338afebf83f96e03af1b8.zip",
+      "archive_sha1": "18b141e8cf09dc8d28cc62dd5fa2920670d501bd",
+      "archive_sha256": "2a8a2c7d9982f54858b92c03cff91ef433907472039f8e61ff7c9f9b3d48db6c",
+      "archive_size_bytes": 117542,
+      "archive_root": "exe4cpp-fb878a4de598ba9d6e4338afebf83f96e03af1b8",
+      "source_path": "third_party/exe4cpp",
+      "source_tree_sha256": "bd56a04d40f430533e344944911f4033a07ab71f0c3391f1f4fda6599a645394",
+      "licenses": [
+        {
+          "spdx": "BSD-3-Clause",
+          "path": "LICENSES/exe4cpp/LICENSE",
+          "sha256": "6fabfd831cea733bf97b3e174c1af3b25e997236cf029fc00446c1e061ff4b88"
+        }
+      ],
+      "locally_staged": true
+    },
+    {
+      "name": "ser4cpp",
+      "version": "3c449734dc530a8f465eb0982de29165cc4e23d5",
+      "source_url": "https://github.com/automatak/ser4cpp/archive/3c449734dc530a8f465eb0982de29165cc4e23d5.zip",
+      "archive_path": "third_party/distfiles/ser4cpp-3c449734dc530a8f465eb0982de29165cc4e23d5.zip",
+      "archive_sha1": "937b759b7cc80180da26b47037e796b59798a672",
+      "archive_sha256": "5a78f83de2d70bdf4be2ab607bc4416c6866ce64a257a8f19948cf5746762f6e",
+      "archive_size_bytes": 136909,
+      "archive_root": "ser4cpp-3c449734dc530a8f465eb0982de29165cc4e23d5",
+      "source_path": "third_party/ser4cpp",
+      "source_tree_sha256": "864bce2ae1f489b9692ebbddff88072f86ac5630194b6bedf4e9755d8fd723bd",
+      "licenses": [
+        {
+          "spdx": "BSD-3-Clause",
+          "path": "LICENSES/ser4cpp/LICENSE",
+          "sha256": "6fabfd831cea733bf97b3e174c1af3b25e997236cf029fc00446c1e061ff4b88"
+        }
+      ],
+      "locally_staged": true
+    }
+  ]
+}

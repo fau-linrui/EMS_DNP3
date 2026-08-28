@@ -1,0 +1,27 @@
+Third-party software inventory
+==============================
+
+OpenDNP3 3.1.2
+  Revision: 26b4c01e4839bbbda8866655e086471c4917ee53
+  License: Apache-2.0
+  Texts: licenses/opendnp3/LICENSE, licenses/opendnp3/NOTICE
+
+Asio asio-1-16-0
+  License: BSL-1.0
+  Texts: licenses/asio/COPYING, licenses/asio/LICENSE_1_0.txt
+
+exe4cpp fb878a4de598ba9d6e4338afebf83f96e03af1b8
+  License: BSD-3-Clause
+  Text: licenses/exe4cpp/LICENSE
+
+ser4cpp 3c449734dc530a8f465eb0982de29165cc4e23d5
+  License: BSD-3-Clause
+  Text: licenses/ser4cpp/LICENSE
+
+nlohmann/json 3.12.0
+  Revision: 55f93686c01528224f448c19128836e7df245f72
+  License: MIT
+  Text: licenses/nlohmann_json/LICENSE.MIT
+
+The referenced files contain the complete upstream license and notice texts.
+Exact artifact and source-tree hashes are included in dependency-locks/.

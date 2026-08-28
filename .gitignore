@@ -1,0 +1,33 @@
+# Local Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+tmp/
+.coverage
+htmlcov/
+
+# Python packaging outputs
+*.egg-info/
+build/
+dist/
+
+# CMake and native build outputs
+out/
+CMakeUserPresets.json
+.vs/
+
+# Editors and operating-system files
+.idea/
+.vscode/
+*.user
+*.suo
+Thumbs.db
+.DS_Store
+
+# Environment-specific DUT configuration must not be committed
+config/ems.local.json
+config/points.local.csv
+
+# Licensed standards remain local and must never be published with the project
+docs/IEEESTD*.pdf

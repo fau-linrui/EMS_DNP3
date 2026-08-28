@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dnp3-master/response.schema.json",
+  "title": "DNP3 master host response v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "ok", "result"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "id": { "$ref": "#/$defs/id" },
+        "ok": { "const": true },
+        "result": {}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "ok", "error"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "id": {
+          "oneOf": [
+            { "$ref": "#/$defs/id" },
+            { "type": "null" }
+          ]
+        },
+        "ok": { "const": false },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message", "details"],
+          "properties": {
+            "code": {
+              "type": "string",
+              "enum": [
+                "INVALID_REQUEST",
+                "REQUEST_TOO_LARGE",
+                "SCHEMA_MISMATCH",
+                "INVALID_STATE",
+                "NOT_CONNECTED",
+                "ALREADY_CONNECTED",
+                "CONNECTION_TIMEOUT",
+                "RESPONSE_TIMEOUT",
+                "TASK_FAILED",
+                "COMMAND_FAILED",
+                "UNSUPPORTED_BY_BACKEND",
+                "UNSUPPORTED_BY_DEVICE_PROFILE",
+                "PROTOCOL_ERROR",
+                "QUEUE_OVERFLOW",
+                "PROCESS_SHUTTING_DOWN",
+                "INTERNAL_ERROR"
+              ]
+            },
+            "message": { "type": "string" },
+            "details": { "type": "object" }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    }
+  }
+}

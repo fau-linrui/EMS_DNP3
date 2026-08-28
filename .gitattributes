@@ -1,0 +1,11 @@
+# Keep source and lock-file bytes reproducible across Windows Git settings.
+* text=auto eol=lf
+
+# Fixed source archives and media are binary artifacts.
+*.zip binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary

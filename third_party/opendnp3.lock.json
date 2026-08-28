@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "name": "opendnp3",
+  "version": "3.1.2",
+  "upstream_repository": "https://github.com/dnp3/opendnp3.git",
+  "release_page": "https://github.com/dnp3/opendnp3/releases/tag/3.1.2",
+  "tag": "3.1.2",
+  "tag_object": "523f7d2d6c65aa671f594fc63c3adcd74e81407d",
+  "tag_signature": "not present; annotated tag is unsigned",
+  "commit": "26b4c01e4839bbbda8866655e086471c4917ee53",
+  "tree": "18fedf6a7cf5aa98f7556afafec848d7e61f8f24",
+  "retrieved_utc": "2026-08-28T13:55:52.2335671Z",
+  "checkout": {
+    "path": "third_party/opendnp3",
+    "mode": "shallow detached checkout of exact annotated tag",
+    "clean_at_verification": true
+  },
+  "source_archive": {
+    "url": "https://github.com/dnp3/opendnp3/archive/refs/tags/3.1.2.zip",
+    "path": "third_party/distfiles/opendnp3-3.1.2.zip",
+    "bytes": 2054607,
+    "entries": 1790,
+    "sha256": "7cb1a8a84f95c05b579a48543687a78c7dc9e3c394883419a92355a4aa6c1d5f"
+  },
+  "license": {
+    "spdx": "Apache-2.0",
+    "source_path": "third_party/opendnp3/LICENSE",
+    "copied_path": "LICENSES/opendnp3/LICENSE",
+    "sha256": "3ddf9be5c28fe27dad143a5dc76eea25222ad1dd68934a047064e56ed2fa40c5"
+  },
+  "notice": {
+    "source_path": "third_party/opendnp3/NOTICE",
+    "copied_path": "LICENSES/opendnp3/NOTICE",
+    "sha256": "24370f637690b9ae4fae185bfeb5b697683a7290d569afe9376be0f4edda7240"
+  },
+  "build_dependencies": [
+    {
+      "name": "Asio",
+      "upstream_version": "asio-1-16-0",
+      "upstream_url": "https://github.com/chriskohlhoff/asio/archive/asio-1-16-0.zip",
+      "upstream_hash": "SHA1=6BDD33522D5B95B36445ABB2072A481F7CE15402",
+      "local_archive": "third_party/distfiles/asio-1-16-0.zip",
+      "local_source": "third_party/asio",
+      "locally_staged": true
+    },
+    {
+      "name": "exe4cpp",
+      "upstream_commit": "fb878a4de598ba9d6e4338afebf83f96e03af1b8",
+      "upstream_url": "https://github.com/automatak/exe4cpp/archive/fb878a4de598ba9d6e4338afebf83f96e03af1b8.zip",
+      "upstream_hash": "SHA1=18B141E8CF09DC8D28CC62DD5FA2920670D501BD",
+      "local_archive": "third_party/distfiles/exe4cpp-fb878a4de598ba9d6e4338afebf83f96e03af1b8.zip",
+      "local_source": "third_party/exe4cpp",
+      "locally_staged": true
+    },
+    {
+      "name": "ser4cpp",
+      "upstream_commit": "3c449734dc530a8f465eb0982de29165cc4e23d5",
+      "upstream_url": "https://github.com/automatak/ser4cpp/archive/3c449734dc530a8f465eb0982de29165cc4e23d5.zip",
+      "upstream_hash": "SHA1=937B759B7CC80180DA26B47037E796B59798A672",
+      "local_archive": "third_party/distfiles/ser4cpp-3c449734dc530a8f465eb0982de29165cc4e23d5.zip",
+      "local_source": "third_party/ser4cpp",
+      "locally_staged": true
+    },
+    {
+      "name": "Catch2 single header",
+      "upstream_version": "2.11.3",
+      "scope": "OpenDNP3 upstream tests only",
+      "upstream_url": "https://github.com/catchorg/Catch2/releases/download/v2.11.3/catch.hpp",
+      "upstream_hash": "SHA1=C127EBB7A4F65C6CEFF7587C8EF18F84A74D6C15",
+      "locally_staged": false
+    },
+    {
+      "name": "OpenSSL",
+      "upstream_constraint": ">=1.1.1",
+      "scope": "only when DNP3_TLS is enabled",
+      "locally_staged": false
+    }
+  ],
+  "verification_notes": [
+    "The annotated tag peels to the recorded commit.",
+    "The downloaded archive has a single opendnp3-3.1.2 root and declares version 3.1.2 in CMakeLists.txt.",
+    "The upstream repository is archived and read-only.",
+    "OpenDNP3 dependency CMake files use FetchContent; dependencies must be staged and redirected before claiming an offline build."
+  ]
+}

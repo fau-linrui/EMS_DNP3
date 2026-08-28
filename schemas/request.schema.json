@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dnp3-master/request.schema.json",
+  "title": "DNP3 master host request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "cmd", "params"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "cmd": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "enum": [
+        "hello",
+        "get_status",
+        "shutdown",
+        "connect",
+        "disconnect",
+        "integrity_poll",
+        "class_poll",
+        "read",
+        "direct_operate",
+        "select_and_operate",
+        "wait_event",
+        "stats"
+      ]
+    },
+    "params": {
+      "type": "object"
+    }
+  }
+}
