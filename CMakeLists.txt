@@ -94,7 +94,10 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/.git")
             ERROR_QUIET
             OUTPUT_STRIP_TRAILING_WHITESPACE
         )
-        if(dnp3_git_result EQUAL 0 AND dnp3_git_output MATCHES "^[0-9a-fA-F]{40}$")
+        string(LENGTH "${dnp3_git_output}" dnp3_git_output_length)
+        if(dnp3_git_result EQUAL 0
+           AND dnp3_git_output_length EQUAL 40
+           AND dnp3_git_output MATCHES "^[0-9a-fA-F]+$")
             string(TOLOWER "${dnp3_git_output}" DNP3_GIT_COMMIT)
         endif()
         execute_process(

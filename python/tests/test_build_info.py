@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 
 
 OPENDNP3_COMMIT = "26b4c01e4839bbbda8866655e086471c4917ee53"
@@ -68,3 +69,19 @@ def test_build_info_dependency_lock_hash_matches_repository() -> None:
     actual = hashlib.sha256(lock_path.read_bytes()).hexdigest()
 
     assert build_info["dependency_lock_sha256"] == actual
+
+
+def test_build_info_commit_matches_git_checkout_when_available() -> None:
+    build_info, _ = load_build_info()
+    if not (REPOSITORY_ROOT / ".git").exists():
+        return
+
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert build_info["git_commit"] == completed.stdout.strip().lower()
