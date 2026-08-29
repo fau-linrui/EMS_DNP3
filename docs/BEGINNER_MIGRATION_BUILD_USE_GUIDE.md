@@ -374,6 +374,7 @@ pytest 默认把锁放在 `evidence/local/safety-incidents`。直接使用 `Dnp3
 | 找不到 Visual Studio/CMake | Build Tools 是否安装 C++ 工作负载、x64 MSVC 和 Windows SDK；重新打开 PowerShell |
 | `No module named dnp3_master` | 是否安装 `python` 子目录，或 `PYTHONPATH` 是否指向 `python\src` |
 | EXE 无法启动/缺 DLL | 路径是否为 x64 Release 包；安装 VC++ 2015–2022 Redistributable x64；检查杀毒软件隔离记录 |
+| 卡在 `native.host_smoke` 超过 15 秒 | 当前版本会自动发送 `hello`/`shutdown`，并有 10 秒进程超时和 15 秒 CTest 上限；若仍卡住，通常是旧提交或旧 CTest 配置，先拉取最新代码并重新执行 `build.ps1`，不要用关闭终端输入作为长期方案 |
 | `CONNECTION_TIMEOUT` | EMS 是否作为 TCP Server 监听、IP/端口/路由/防火墙是否正确；先不要尝试控制 |
 | `DNP3_RESPONSE_TIMEOUT` | TCP 可能已通，但链路地址、请求对象、EMS 状态或超时配置不匹配 |
 | `NOT_CONNECTED` | fixture 是否成功连接；是否已提前断开或 host 已退出 |

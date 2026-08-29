@@ -1,0 +1,2 @@
+{"schema_version":1,"id":"smoke-hello","cmd":"hello","params":{}}
+{"schema_version":1,"id":"smoke-shutdown","cmd":"shutdown","params":{}}

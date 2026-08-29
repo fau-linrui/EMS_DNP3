@@ -340,7 +340,17 @@ if(BUILD_TESTING)
 
     add_test(NAME native.project_info COMMAND dnp3host-unit-tests)
     add_test(NAME native.protocol COMMAND dnp3host-protocol-tests)
-    add_test(NAME native.host_smoke COMMAND dnp3-master-host)
+    add_test(
+        NAME native.host_smoke
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DHOST_EXECUTABLE=$<TARGET_FILE:dnp3-master-host>"
+            "-DHOST_INPUT_FILE=${PROJECT_SOURCE_DIR}/native/tests/host_smoke.ndjson"
+            -P "${PROJECT_SOURCE_DIR}/cmake/RunHostSmokeTest.cmake"
+    )
+    # The inner driver has its own timeout; this outer bound also covers a
+    # CMake-driver failure before or after the host process is launched.
+    set_tests_properties(native.host_smoke PROPERTIES TIMEOUT 15)
     add_test(NAME native.opendnp3_runtime COMMAND opendnp3-runtime-tests)
     add_test(NAME native.opendnp3_read_integration COMMAND opendnp3-read-integration-tests)
 
