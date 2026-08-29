@@ -58,7 +58,9 @@ def hello_result(mode: str = "normal") -> dict[str, Any]:
                 "class_poll",
                 "connect",
                 "direct_operate",
+                "disable_unsolicited",
                 "disconnect",
+                "enable_unsolicited",
                 "get_status",
                 "hello",
                 "integrity_poll",
@@ -67,6 +69,7 @@ def hello_result(mode: str = "normal") -> dict[str, Any]:
                 "shutdown",
                 "stats",
                 "wait_event",
+                "wait_unsolicited",
             ]
             if tcp_api
             else ["get_status", "hello", "shutdown"]
@@ -187,6 +190,66 @@ def command_result(command: str, params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def unsolicited_control_result(
+    action: str, params: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        "task_id": 1_000_001,
+        "task_status": "SUCCESS",
+        "task_started": True,
+        "task_destroyed": True,
+        "action": action,
+        "classes": params["classes"],
+        "timings": {"duration_ms": 1.0},
+    }
+
+
+def unsolicited_batch(enabled_classes: set[int]) -> dict[str, Any]:
+    classes = sorted(enabled_classes)
+    measurements = (
+        [
+            {
+                "receive_seq": 1,
+                "received_monotonic_ns": 200,
+                "session_id": 1,
+                "kind": "binary_input",
+                "group": 2,
+                "variation": 2,
+                "qualifier": "UINT16_CNT_UINT16_INDEX",
+                "qualifier_raw": 40,
+                "index": 7,
+                "value": True,
+                "flags_raw": 1,
+                "flags_valid": True,
+                "dnp3_timestamp_ms": 1_700_000_000_101,
+                "timestamp_quality": "SYNCHRONIZED",
+                "is_event": True,
+                "header_index": 0,
+                "source": "unsolicited",
+                "fragment_index": 1,
+            }
+        ]
+        if enabled_classes
+        else []
+    )
+    return {
+        "session_id": 1,
+        "enabled": bool(classes),
+        "classes": classes,
+        "measurements": measurements,
+        "timed_out": not measurements,
+        "summary": {
+            "returned": len(measurements),
+            "remaining": 0,
+            "received_total": len(measurements),
+            "dropped_total": 0,
+            "queue_capacity": 4096,
+            "last_receive_seq": len(measurements),
+            "fragments_total": int(bool(measurements)),
+        },
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", default="normal")
@@ -195,6 +258,7 @@ def main() -> int:
     first_request = True
     connected = False
     safety_token: str | None = None
+    unsolicited_classes: set[int] = set()
     for line in sys.stdin:
         request = json.loads(line)
         request_id = request["id"]
@@ -280,6 +344,7 @@ def main() -> int:
                 write_json(error(request_id, "ALREADY_CONNECTED"))
             else:
                 connected = True
+                unsolicited_classes.clear()
                 safety = request["params"].get("safety")
                 authorized = bool(
                     isinstance(safety, dict)
@@ -310,6 +375,7 @@ def main() -> int:
             else:
                 connected = False
                 safety_token = None
+                unsolicited_classes.clear()
                 write_json(
                     success(
                         request_id,
@@ -329,6 +395,27 @@ def main() -> int:
                     },
                 )
             )
+        elif command in {"enable_unsolicited", "disable_unsolicited"} and args.mode == "tcp_api":
+            if not connected:
+                write_json(error(request_id, "NOT_CONNECTED"))
+            else:
+                requested_classes = set(request["params"]["classes"])
+                action = "enable" if command == "enable_unsolicited" else "disable"
+                if action == "enable":
+                    unsolicited_classes.update(requested_classes)
+                else:
+                    unsolicited_classes.difference_update(requested_classes)
+                write_json(
+                    success(
+                        request_id,
+                        unsolicited_control_result(action, request["params"]),
+                    )
+                )
+        elif command == "wait_unsolicited" and args.mode == "tcp_api":
+            if not connected:
+                write_json(error(request_id, "NOT_CONNECTED"))
+            else:
+                write_json(success(request_id, unsolicited_batch(unsolicited_classes)))
         elif command in {"integrity_poll", "class_poll", "read"} and args.mode == "tcp_api":
             if not connected:
                 write_json(error(request_id, "NOT_CONNECTED"))
@@ -341,6 +428,16 @@ def main() -> int:
                 write_json(error(request_id, "SAFETY_INTERLOCK"))
             elif request["params"].get("response_mode") == "no_response":
                 write_json(error(request_id, "UNSUPPORTED_BY_BACKEND"))
+            elif request["params"]["commands"][0].get("index") == 65534:
+                time.sleep(60)
+            elif request["params"]["commands"][0].get("index") == 65533:
+                result = command_result(command, request["params"])
+                result["execution_uncertain"] = True
+                write_json(success(request_id, result))
+            elif request["params"]["commands"][0].get("index") == 65532:
+                result = command_result(command, request["params"])
+                result.pop("summary")
+                write_json(success(request_id, result))
             elif request["params"]["commands"][0].get("index") == 65535:
                 write_json(
                     error(

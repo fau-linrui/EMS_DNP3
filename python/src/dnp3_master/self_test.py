@@ -9,6 +9,7 @@ import queue
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 from typing import Sequence
 
@@ -101,9 +102,13 @@ def run_self_test(host_executable: Path, outstation_executable: Path) -> dict[st
 
     port = _unused_local_port()
     process = _start_outstation(outstation, port)
+    incident_directory = tempfile.TemporaryDirectory(
+        prefix="dnp3-self-test-safety-incidents-"
+    )
     client = Dnp3MasterClient(
         HostProcessConfig(
             executable=host,
+            safety_incident_directory=Path(incident_directory.name),
             startup_timeout=5.0,
             request_timeout=6.0,
             shutdown_timeout=3.0,
@@ -154,6 +159,7 @@ def run_self_test(host_executable: Path, outstation_executable: Path) -> dict[st
             _stop_outstation(process)
         except Exception as error:
             cleanup_error = cleanup_error or error
+        incident_directory.cleanup()
         if cleanup_error is not None and sys.exc_info()[0] is None:
             raise cleanup_error
 

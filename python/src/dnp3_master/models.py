@@ -309,6 +309,7 @@ class MeasurementRecord:
     header_index: int
     source: str
     fragment_index: int
+    session_id: int | None
     raw: Mapping[str, Any]
 
     @classmethod
@@ -363,6 +364,13 @@ class MeasurementRecord:
                 raise ValueError(
                     f"measurement field {field_name!r} must be null or non-negative"
                 )
+        session_id = value.get("session_id")
+        if session_id is not None and (
+            type(session_id) is not int or session_id <= 0
+        ):
+            raise ValueError(
+                "measurement field 'session_id' must be null or a positive integer"
+            )
 
         return cls(
             receive_seq=value["receive_seq"],
@@ -382,9 +390,9 @@ class MeasurementRecord:
             header_index=value["header_index"],
             source=value["source"],
             fragment_index=value["fragment_index"],
+            session_id=session_id,
             raw=deepcopy(dict(value)),
         )
-
 
 @dataclass(frozen=True, slots=True)
 class ReadTaskResult:
@@ -457,6 +465,155 @@ class ReadTaskResult:
             fragments=tuple(deepcopy(item) for item in value["fragments"]),
             iin=deepcopy(dict(value["iin"])),
             timings=deepcopy(dict(value["timings"])),
+            raw=deepcopy(dict(value)),
+        )
+
+    def measurements_of_kind(self, kind: str) -> tuple[MeasurementRecord, ...]:
+        """Return all detailed measurements matching one normalized kind."""
+
+        return tuple(item for item in self.measurements if item.kind == kind)
+
+
+@dataclass(frozen=True, slots=True)
+class UnsolicitedControlResult:
+    """Typed result for one explicit Enable/Disable Unsolicited task."""
+
+    task_id: int
+    task_status: str
+    task_started: bool
+    task_destroyed: bool
+    action: str
+    classes: tuple[int, ...]
+    timings: Mapping[str, Any]
+    raw: Mapping[str, Any]
+
+    @classmethod
+    def from_mapping(
+        cls, value: Mapping[str, Any]
+    ) -> UnsolicitedControlResult:
+        required = {
+            "task_id",
+            "task_status",
+            "task_started",
+            "task_destroyed",
+            "action",
+            "classes",
+            "timings",
+        }
+        missing = required.difference(value)
+        if missing:
+            raise ValueError(
+                "unsolicited control result is missing fields: "
+                + ", ".join(sorted(missing))
+            )
+        if type(value["task_id"]) is not int or value["task_id"] <= 0:
+            raise ValueError(
+                "unsolicited control result task_id must be a positive integer"
+            )
+        if not isinstance(value["task_status"], str) or not value["task_status"]:
+            raise ValueError(
+                "unsolicited control result task_status must be a string"
+            )
+        if (
+            type(value["task_started"]) is not bool
+            or type(value["task_destroyed"]) is not bool
+        ):
+            raise ValueError("unsolicited control result task flags must be boolean")
+        if value["action"] not in {"enable", "disable"}:
+            raise ValueError("unsolicited control result action is invalid")
+        classes = value["classes"]
+        if (
+            not isinstance(classes, list)
+            or not 1 <= len(classes) <= 3
+            or any(type(item) is not int or item not in {1, 2, 3} for item in classes)
+            or len(set(classes)) != len(classes)
+        ):
+            raise ValueError("unsolicited control result classes are invalid")
+        if not isinstance(value["timings"], Mapping):
+            raise ValueError("unsolicited control result timings must be an object")
+        return cls(
+            task_id=value["task_id"],
+            task_status=value["task_status"],
+            task_started=value["task_started"],
+            task_destroyed=value["task_destroyed"],
+            action=value["action"],
+            classes=tuple(classes),
+            timings=deepcopy(dict(value["timings"])),
+            raw=deepcopy(dict(value)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class UnsolicitedBatchResult:
+    """A bounded batch consumed from the persistent unsolicited SOE queue."""
+
+    session_id: int
+    enabled: bool
+    classes: tuple[int, ...]
+    measurements: tuple[MeasurementRecord, ...]
+    timed_out: bool
+    summary: Mapping[str, Any]
+    raw: Mapping[str, Any]
+
+    @classmethod
+    def from_mapping(
+        cls, value: Mapping[str, Any]
+    ) -> UnsolicitedBatchResult:
+        required = {
+            "session_id",
+            "enabled",
+            "classes",
+            "measurements",
+            "timed_out",
+            "summary",
+        }
+        missing = required.difference(value)
+        if missing:
+            raise ValueError(
+                "unsolicited batch result is missing fields: "
+                + ", ".join(sorted(missing))
+            )
+        if type(value["session_id"]) is not int or value["session_id"] <= 0:
+            raise ValueError("unsolicited batch session_id must be a positive integer")
+        if type(value["enabled"]) is not bool or type(value["timed_out"]) is not bool:
+            raise ValueError("unsolicited batch state flags must be boolean")
+        classes = value["classes"]
+        if (
+            not isinstance(classes, list)
+            or len(classes) > 3
+            or any(type(item) is not int or item not in {1, 2, 3} for item in classes)
+            or len(set(classes)) != len(classes)
+        ):
+            raise ValueError("unsolicited batch classes are invalid")
+        if value["enabled"] != bool(classes):
+            raise ValueError("unsolicited batch enabled/classes state is inconsistent")
+        raw_measurements = value["measurements"]
+        if not isinstance(raw_measurements, list):
+            raise ValueError("unsolicited batch measurements must be an array")
+        measurements = tuple(
+            MeasurementRecord.from_mapping(item)
+            for item in raw_measurements
+            if isinstance(item, Mapping)
+        )
+        if len(measurements) != len(raw_measurements):
+            raise ValueError("unsolicited batch contains a non-object measurement")
+        if any(
+            item.source != "unsolicited"
+            or item.session_id != value["session_id"]
+            for item in measurements
+        ):
+            raise ValueError(
+                "unsolicited batch measurement source/session is inconsistent"
+            )
+        if not isinstance(value["summary"], Mapping):
+            raise ValueError("unsolicited batch summary must be an object")
+        return cls(
+            session_id=value["session_id"],
+            enabled=value["enabled"],
+            classes=tuple(classes),
+            measurements=measurements,
+            timed_out=value["timed_out"],
+            summary=deepcopy(dict(value["summary"])),
             raw=deepcopy(dict(value)),
         )
 
@@ -717,6 +874,7 @@ class HostProcessConfig:
     arguments: tuple[str, ...] = ()
     working_directory: Path | None = None
     environment: Mapping[str, str] | None = None
+    safety_incident_directory: Path | None = None
     startup_timeout: float = 5.0
     request_timeout: float = 10.0
     shutdown_timeout: float = 2.0
@@ -741,6 +899,14 @@ class HostProcessConfig:
                 str(key): str(value) for key, value in self.environment.items()
             }
             object.__setattr__(self, "environment", normalized_environment)
+        if self.safety_incident_directory is not None:
+            object.__setattr__(
+                self,
+                "safety_incident_directory",
+                Path(self.safety_incident_directory)
+                .expanduser()
+                .resolve(strict=False),
+            )
 
         for field_name in (
             "startup_timeout",

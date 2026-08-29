@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
     dnp3_master_test_framework
-    VERSION 0.2.0
+    VERSION 0.3.0
     DESCRIPTION "Windows DNP3 master automation test framework"
     LANGUAGES CXX
 )
@@ -264,6 +264,7 @@ add_library(
         native/src/OpenDnp3Backend.cpp
         native/src/OpenDnp3CommandSupport.cpp
         native/src/OpenDnp3ReadSupport.cpp
+        native/src/OpenDnp3UnsolicitedSupport.cpp
         native/src/ReadConfig.cpp
 )
 target_link_libraries(
@@ -359,6 +360,7 @@ install(
     FILES
         "${PROJECT_SOURCE_DIR}/config/capability_matrix.csv"
         "${PROJECT_SOURCE_DIR}/config/ems_profile.example.json"
+        "${PROJECT_SOURCE_DIR}/config/points.example.csv"
     DESTINATION config
 )
 install(FILES NOTICE.txt THIRD_PARTY_LICENSES.txt DESTINATION .)

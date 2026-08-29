@@ -72,3 +72,59 @@ def test_ems_profile_schema_is_strict_and_uses_tri_state_capabilities() -> None:
         "NOT_SUPPORTED",
         "UNKNOWN",
     ]
+
+
+def test_point_table_schema_is_strict_and_versioned() -> None:
+    schema = load_schema("point-table.schema.json")
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["schema_version"]["const"] == 1
+    point = schema["$defs"]["point"]
+    assert point["additionalProperties"] is False
+    assert {
+        "point_id",
+        "point_type",
+        "index",
+        "static_group",
+        "static_variation",
+        "enabled",
+    }.issubset(point["required"])
+    assert len(point["allOf"]) == 9
+
+
+def test_evidence_manifest_schema_forbids_private_top_level_fields() -> None:
+    schema = load_schema("evidence-manifest.schema.json")
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["schema_version"]["const"] == 1
+    assert {
+        "run_id",
+        "state",
+        "inputs",
+        "results",
+        "redaction",
+    }.issubset(schema["required"])
+    redaction = schema["properties"]["redaction"]
+    assert redaction["additionalProperties"] is False
+    assert redaction["properties"]["arbitrary_test_output_requires_review"][
+        "const"
+    ] is True
+
+
+def test_safety_incident_schema_separates_open_and_acknowledged_records() -> None:
+    schema = load_schema("safety-incident.schema.json")
+    assert len(schema["oneOf"]) == 2
+    assert schema["$defs"]["openIncident"]["additionalProperties"] is False
+    assert schema["$defs"]["acknowledgedIncident"]["additionalProperties"] is False
+    assert schema["$defs"]["openIncident"]["properties"]["status"]["const"] == "OPEN"
+    assert (
+        schema["$defs"]["acknowledgedIncident"]["properties"]["status"]["const"]
+        == "ACKNOWLEDGED"
+    )
+
+
+def test_package_manifest_schema_is_strict_and_hashes_each_file() -> None:
+    schema = load_schema("package-manifest.schema.json")
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["schema_version"]["const"] == 1
+    item = schema["properties"]["files"]["items"]
+    assert item["additionalProperties"] is False
+    assert item["required"] == ["path", "size_bytes", "sha256"]

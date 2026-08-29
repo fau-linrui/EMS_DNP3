@@ -5,9 +5,15 @@
 #include <opendnp3/app/OctetString.h>
 #include <opendnp3/channel/IChannel.h>
 #include <opendnp3/channel/IPEndpoint.h>
-#include <opendnp3/gen/ServerAcceptMode.h>
 #include <opendnp3/gen/CommandStatus.h>
+#include <opendnp3/gen/EventAnalogVariation.h>
+#include <opendnp3/gen/EventBinaryVariation.h>
+#include <opendnp3/gen/PointClass.h>
+#include <opendnp3/gen/ServerAcceptMode.h>
+#include <opendnp3/gen/StaticAnalogOutputStatusVariation.h>
 #include <opendnp3/gen/StaticAnalogVariation.h>
+#include <opendnp3/gen/StaticBinaryOutputStatusVariation.h>
+#include <opendnp3/gen/StaticBinaryVariation.h>
 #include <opendnp3/logging/LogLevels.h>
 #include <opendnp3/outstation/DefaultOutstationApplication.h>
 #include <opendnp3/outstation/EventBufferConfig.h>
@@ -16,6 +22,7 @@
 #include <opendnp3/outstation/SimpleCommandHandler.h>
 #include <opendnp3/outstation/UpdateBuilder.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -44,6 +51,14 @@ constexpr const char* TC_APP_MEASUREMENT_OVERFLOW_LOCAL_001 =
     "TC_APP_MEASUREMENT_OVERFLOW_LOCAL_001";
 constexpr const char* TC_APP_CLASS_POLL_LOCAL_001 =
     "TC_APP_CLASS_POLL_LOCAL_001";
+constexpr const char* TC_APP_EMS_PROFILE_VARIATIONS_LOCAL_001 =
+    "TC_APP_EMS_PROFILE_VARIATIONS_LOCAL_001";
+constexpr const char* TC_APP_UNSOLICITED_LOCAL_001 =
+    "TC_APP_UNSOLICITED_LOCAL_001";
+constexpr const char* TC_APP_UNSOLICITED_DISABLE_LOCAL_001 =
+    "TC_APP_UNSOLICITED_DISABLE_LOCAL_001";
+constexpr const char* TC_APP_UNSOLICITED_OVERFLOW_LOCAL_001 =
+    "TC_APP_UNSOLICITED_OVERFLOW_LOCAL_001";
 constexpr const char* TC_APP_CROB_SBO_LOCAL_001 =
     "TC_APP_CROB_SBO_LOCAL_001";
 constexpr const char* TC_APP_DIRECT_OPERATE_LOCAL_001 =
@@ -99,11 +114,23 @@ public:
         }
 
         opendnp3::DatabaseConfig database(2);
+        database.binary_input[0].clazz = opendnp3::PointClass::Class1;
+        database.binary_input[0].svariation =
+            opendnp3::StaticBinaryVariation::Group1Var2;
+        database.binary_input[0].evariation =
+            opendnp3::EventBinaryVariation::Group2Var2;
+        database.analog_input[0].clazz = opendnp3::PointClass::Class2;
         database.analog_input[0].svariation =
             opendnp3::StaticAnalogVariation::Group30Var5;
+        database.analog_input[0].evariation =
+            opendnp3::EventAnalogVariation::Group32Var7;
+        database.binary_output_status[0].svariation =
+            opendnp3::StaticBinaryOutputStatusVariation::Group10Var2;
+        database.analog_output_status[0].svariation =
+            opendnp3::StaticAnalogOutputStatusVariation::Group40Var3;
         opendnp3::OutstationStackConfig config(database);
         config.outstation.eventBufferConfig = opendnp3::EventBufferConfig::AllTypes(32);
-        config.outstation.params.allowUnsolicited = false;
+        config.outstation.params.allowUnsolicited = true;
         config.link.LocalAddr = 1024;
         config.link.RemoteAddr = 1;
 
@@ -129,7 +156,11 @@ public:
                 opendnp3::DNPTime{1700000000002ULL}},
             0);
         updates.Update(
-            opendnp3::Analog{123.5, opendnp3::Flags{0x01}}, 0);
+            opendnp3::Analog{
+                123.5,
+                opendnp3::Flags{0x01},
+                opendnp3::DNPTime{1700000000004ULL}},
+            0);
         updates.Update(
             opendnp3::Counter{42, opendnp3::Flags{0x01}}, 0);
         updates.FreezeCounter(0, false);
@@ -170,6 +201,26 @@ public:
     std::uint16_t port() const noexcept
     {
         return port_;
+    }
+
+    void generate_profile_events()
+    {
+        opendnp3::UpdateBuilder updates;
+        updates.Update(
+            opendnp3::Binary{
+                false,
+                opendnp3::Flags{0x01},
+                opendnp3::DNPTime{1700000000101ULL}},
+            0,
+            opendnp3::EventMode::Force);
+        updates.Update(
+            opendnp3::Analog{
+                456.25,
+                opendnp3::Flags{0x01},
+                opendnp3::DNPTime{1700000000102ULL}},
+            0,
+            opendnp3::EventMode::Force);
+        outstation_->Apply(updates.Build());
     }
 
 private:
@@ -228,6 +279,15 @@ void run_read_integration()
     check(TC_APP_MEASUREMENT_TYPES_LOCAL_001 != nullptr, "stable test ID must exist");
     check(TC_APP_MEASUREMENT_OVERFLOW_LOCAL_001 != nullptr, "stable test ID must exist");
     check(TC_APP_CLASS_POLL_LOCAL_001 != nullptr, "stable class-poll test ID must exist");
+    check(
+        TC_APP_EMS_PROFILE_VARIATIONS_LOCAL_001 != nullptr,
+        "stable EMS-profile variation test ID must exist");
+    check(
+        TC_APP_UNSOLICITED_LOCAL_001 != nullptr,
+        "stable unsolicited test ID must exist");
+    check(
+        TC_APP_UNSOLICITED_DISABLE_LOCAL_001 != nullptr,
+        "stable unsolicited-disable test ID must exist");
 
     LocalOutstation outstation;
     auto backend = dnp3host::make_opendnp3_backend();
@@ -268,6 +328,39 @@ void run_read_integration()
                     || measurement.at("flags_raw").is_number_unsigned(),
                 "measurement flags must preserve their raw octet or be null");
         }
+        const auto has_profile_measurement = [&measurements](
+                                                 const std::string_view kind,
+                                                 const int group,
+                                                 const int variation,
+                                                 const bool is_event) {
+            return std::any_of(
+                measurements.begin(),
+                measurements.end(),
+                [kind, group, variation, is_event](const auto& measurement) {
+                    return measurement.at("kind").template get<std::string>() == kind
+                        && measurement.at("group") == group
+                        && measurement.at("variation") == variation
+                        && measurement.at("is_event") == is_event;
+                });
+        };
+        check(
+            has_profile_measurement("binary_input", 1, 2, false),
+            "integrity response must include EMS-profile G1V2");
+        check(
+            has_profile_measurement("analog_input", 30, 5, false),
+            "integrity response must include EMS-profile G30V5");
+        check(
+            has_profile_measurement("binary_output_status", 10, 2, false),
+            "integrity response must include EMS-profile G10V2");
+        check(
+            has_profile_measurement("analog_output_status", 40, 3, false),
+            "integrity response must include EMS-profile G40V3");
+        check(
+            has_profile_measurement("binary_input", 2, 2, true),
+            "all-classes integrity response must include buffered G2V2");
+        check(
+            has_profile_measurement("analog_input", 32, 7, true),
+            "all-classes integrity response must include buffered G32V7");
         for (const auto* expected : {
                  "binary_input",
                  "double_bit_binary_input",
@@ -324,12 +417,138 @@ void run_read_integration()
             "multi-header summary must count both object families");
     }
 
+    outstation.generate_profile_events();
     dnp3host::ClassPollConfig class_poll;
     class_poll.options.timeout_ms = kLocalTaskTimeoutMs;
-    class_poll.class_mask = 0x0E;
-    class_poll.options.return_mode = dnp3host::ReturnMode::Summary;
+    class_poll.class_mask = 0x06;
     const auto events = backend->class_poll(class_poll);
     check_successful_task(events);
+    if (!events.error) {
+        bool found_binary_event = false;
+        bool found_analog_event = false;
+        for (const auto& measurement : events.result.at("measurements")) {
+            check(
+                measurement.at("source") == "solicited",
+                "Class Read events must be identified as solicited");
+            if (measurement.at("group") == 2 && measurement.at("variation") == 2
+                && measurement.at("index") == 0) {
+                found_binary_event = true;
+                check(measurement.at("is_event") == true, "G2V2 must be an event");
+                check(
+                    measurement.at("dnp3_timestamp_ms") == 1700000000101ULL,
+                    "G2V2 must preserve absolute time");
+            }
+            if (measurement.at("group") == 32 && measurement.at("variation") == 7
+                && measurement.at("index") == 0) {
+                found_analog_event = true;
+                check(measurement.at("is_event") == true, "G32V7 must be an event");
+                check(
+                    measurement.at("dnp3_timestamp_ms") == 1700000000102ULL,
+                    "G32V7 must preserve absolute time");
+                check(
+                    measurement.at("value") == 456.25,
+                    "G32V7 must preserve the floating-point value");
+            }
+        }
+        check(found_binary_event, "Class 1 Read must return EMS-profile G2V2");
+        check(found_analog_event, "Class 2 Read must return EMS-profile G32V7");
+    }
+
+    dnp3host::ReadConfig class_headers;
+    class_headers.options.timeout_ms = kLocalTaskTimeoutMs;
+    class_headers.options.return_mode = dnp3host::ReturnMode::Summary;
+    class_headers.headers = {
+        dnp3host::ReadHeader{
+            60, 1, dnp3host::ReadQualifier::AllObjects, 0, 0, 0},
+        dnp3host::ReadHeader{
+            60, 2, dnp3host::ReadQualifier::AllObjects, 0, 0, 0},
+        dnp3host::ReadHeader{
+            60, 3, dnp3host::ReadQualifier::AllObjects, 0, 0, 0},
+        dnp3host::ReadHeader{
+            60, 4, dnp3host::ReadQualifier::AllObjects, 0, 0, 0}};
+    const auto class_header_result = backend->read(class_headers);
+    check_successful_task(class_header_result);
+
+    dnp3host::UnsolicitedControlConfig unsolicited_control;
+    unsolicited_control.timeout_ms = kLocalTaskTimeoutMs;
+    unsolicited_control.class_mask = 0x06;
+    const auto enabled_unsolicited =
+        backend->enable_unsolicited(unsolicited_control);
+    check_successful_task(enabled_unsolicited);
+    if (!enabled_unsolicited.error) {
+        check(
+            enabled_unsolicited.result.at("action") == "enable",
+            "unsolicited control must report enable action");
+        check(
+            enabled_unsolicited.result.at("classes")
+                == dnp3host::Json::array({1, 2}),
+            "unsolicited control must preserve selected classes");
+    }
+
+    outstation.generate_profile_events();
+    dnp3host::WaitUnsolicitedConfig wait_unsolicited;
+    wait_unsolicited.timeout_ms = kLocalTaskTimeoutMs;
+    wait_unsolicited.max_events = 16;
+    const auto unsolicited = backend->wait_unsolicited(wait_unsolicited);
+    check(!unsolicited.error.has_value(), "unsolicited event wait must succeed");
+    if (!unsolicited.error) {
+        bool found_binary_event = false;
+        bool found_analog_event = false;
+        for (const auto& measurement : unsolicited.result.at("measurements")) {
+            check(
+                measurement.at("source") == "unsolicited",
+                "persistent SOE records must identify unsolicited source");
+            check(
+                measurement.at("session_id") == connected.result.at("session_id"),
+                "unsolicited records must preserve the DNP3 session ID");
+            if (measurement.at("group") == 2
+                && measurement.at("variation") == 2
+                && measurement.at("index") == 0) {
+                found_binary_event = true;
+            }
+            if (measurement.at("group") == 32
+                && measurement.at("variation") == 7
+                && measurement.at("index") == 0) {
+                found_analog_event = true;
+                check(
+                    measurement.at("value") == 456.25,
+                    "unsolicited G32V7 must preserve its floating-point value");
+            }
+        }
+        check(found_binary_event, "unsolicited collector must receive G2V2");
+        check(found_analog_event, "unsolicited collector must receive G32V7");
+        check(
+            unsolicited.result.at("summary").at("queue_capacity") == 4096,
+            "unsolicited collector must expose its fixed bounded capacity");
+        check(
+            unsolicited.result.at("summary").at("fragments_total") >= 1,
+            "unsolicited collector must count response fragments");
+    }
+
+    const auto disabled_unsolicited =
+        backend->disable_unsolicited(unsolicited_control);
+    check_successful_task(disabled_unsolicited);
+    if (!disabled_unsolicited.error) {
+        check(
+            disabled_unsolicited.result.at("action") == "disable",
+            "unsolicited control must report disable action");
+    }
+    check(
+        !backend->status().unsolicited_enabled,
+        "successful disable must clear the advertised unsolicited state");
+
+    outstation.generate_profile_events();
+    wait_unsolicited.timeout_ms = 300;
+    const auto after_disable = backend->wait_unsolicited(wait_unsolicited);
+    check(!after_disable.error.has_value(), "disabled unsolicited wait must succeed");
+    if (!after_disable.error) {
+        check(
+            after_disable.result.at("measurements").empty(),
+            "events generated after disable must not enter the unsolicited queue");
+        check(
+            after_disable.result.at("timed_out") == true,
+            "empty disabled unsolicited wait must report timeout");
+    }
 
     dnp3host::ReadConfig unknown;
     unknown.options.timeout_ms = kLocalTaskTimeoutMs;
@@ -535,12 +754,65 @@ void run_command_integration()
     rejecting_backend->shutdown();
 }
 
+void run_unsolicited_overflow_integration()
+{
+    check(
+        TC_APP_UNSOLICITED_OVERFLOW_LOCAL_001 != nullptr,
+        "stable unsolicited-overflow test ID must exist");
+    LocalOutstation outstation;
+    auto backend = dnp3host::make_opendnp3_backend(1);
+    const auto connected = backend->connect(connection_config(outstation.port()));
+    check(!connected.error.has_value(), "overflow-test master must connect");
+    if (connected.error) {
+        return;
+    }
+
+    dnp3host::ReadOptions integrity_options;
+    integrity_options.timeout_ms = kLocalTaskTimeoutMs;
+    const auto integrity = backend->integrity_poll(integrity_options);
+    check_successful_task(integrity);
+
+    dnp3host::UnsolicitedControlConfig control;
+    control.timeout_ms = kLocalTaskTimeoutMs;
+    control.class_mask = 0x06;
+    const auto enabled = backend->enable_unsolicited(control);
+    check_successful_task(enabled);
+    if (enabled.error) {
+        backend->disconnect();
+        return;
+    }
+
+    outstation.generate_profile_events();
+    std::this_thread::sleep_for(std::chrono::milliseconds{250});
+    dnp3host::WaitUnsolicitedConfig wait;
+    wait.timeout_ms = 1000;
+    wait.max_events = 1;
+    const auto batch = backend->wait_unsolicited(wait);
+    check(!batch.error.has_value(), "overflow-test event wait must succeed");
+    if (!batch.error) {
+        const auto& summary = batch.result.at("summary");
+        check(summary.at("queue_capacity") == 1, "test queue capacity must be one");
+        check(
+            summary.at("received_total") >= 2,
+            "two unsolicited events must reach the bounded store");
+        check(
+            summary.at("dropped_total") >= 1,
+            "drop-oldest overflow must increment the loss counter");
+        check(
+            batch.result.at("measurements").size() == 1,
+            "bounded store must retain no more than its capacity");
+    }
+    backend->disconnect();
+    backend->shutdown();
+}
+
 }  // namespace
 
 int main()
 {
     try {
         run_read_integration();
+        run_unsolicited_overflow_integration();
         run_command_integration();
     }
     catch (const std::exception& error) {

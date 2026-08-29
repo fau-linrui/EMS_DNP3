@@ -12,6 +12,11 @@ from .errors import (
     HostProtocolError,
     HostStartError,
     HostTimeoutError,
+    SafetyIncidentAcknowledgmentError,
+    SafetyIncidentConfigurationError,
+    SafetyIncidentError,
+    SafetyIncidentPersistenceError,
+    UnresolvedSafetyIncidentError,
 )
 from .models import (
     AnalogOutputCommand,
@@ -25,9 +30,25 @@ from .models import (
     ReadHeader,
     ReadTaskResult,
     TcpConnectionConfig,
+    UnsolicitedBatchResult,
+    UnsolicitedControlResult,
+)
+from .point_table import (
+    POINT_TABLE_COLUMNS,
+    POINT_TABLE_SCHEMA_VERSION,
+    PointDefinition,
+    PointTable,
+    PointTableError,
+    load_point_table,
+)
+from .safety_incidents import (
+    SAFETY_INCIDENT_SCHEMA_VERSION,
+    IncidentRecordResult,
+    SafetyIncidentStore,
+    dut_identity_sha256,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 TARGET_STANDARD = "IEEE1815-2012"
 
 __all__ = [
@@ -48,9 +69,26 @@ __all__ = [
     "HostTimeoutError",
     "LabSafetyConfig",
     "MeasurementRecord",
+    "POINT_TABLE_COLUMNS",
+    "POINT_TABLE_SCHEMA_VERSION",
+    "PointDefinition",
+    "PointTable",
+    "PointTableError",
     "ReadHeader",
     "ReadTaskResult",
+    "SAFETY_INCIDENT_SCHEMA_VERSION",
+    "SafetyIncidentAcknowledgmentError",
+    "SafetyIncidentConfigurationError",
+    "SafetyIncidentError",
+    "SafetyIncidentPersistenceError",
+    "SafetyIncidentStore",
     "TARGET_STANDARD",
     "TcpConnectionConfig",
+    "UnsolicitedBatchResult",
+    "UnsolicitedControlResult",
+    "UnresolvedSafetyIncidentError",
+    "IncidentRecordResult",
+    "dut_identity_sha256",
+    "load_point_table",
     "__version__",
 ]

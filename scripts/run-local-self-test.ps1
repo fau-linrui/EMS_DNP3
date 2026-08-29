@@ -45,8 +45,20 @@ if (-not (Test-Path -LiteralPath $dnp3PythonSource -PathType Container)) {
     throw "Python package source was not found: $dnp3PythonSource"
 }
 $dnp3PreviousPythonPath = [Environment]::GetEnvironmentVariable('PYTHONPATH', 'Process')
+$dnp3PreviousNoBytecode = [Environment]::GetEnvironmentVariable(
+    'PYTHONDONTWRITEBYTECODE',
+    'Process'
+)
 [Environment]::SetEnvironmentVariable('PYTHONPATH', $dnp3PythonSource, 'Process')
+[Environment]::SetEnvironmentVariable('PYTHONDONTWRITEBYTECODE', '1', 'Process')
 try {
+    $dnp3PackageManifest = Join-Path $dnp3Root 'package-manifest.json'
+    if (Test-Path -LiteralPath $dnp3PackageManifest -PathType Leaf) {
+        & $dnp3Python -m dnp3_master.package_verify --root $dnp3Root
+        if ($LASTEXITCODE -ne 0) {
+            throw "Portable package integrity verification failed with exit code $LASTEXITCODE."
+        }
+    }
     & $dnp3Python -m dnp3_master.self_test `
         --host-exe $dnp3Host `
         --outstation-exe $dnp3Outstation
@@ -58,6 +70,11 @@ finally {
     [Environment]::SetEnvironmentVariable(
         'PYTHONPATH',
         $dnp3PreviousPythonPath,
+        'Process'
+    )
+    [Environment]::SetEnvironmentVariable(
+        'PYTHONDONTWRITEBYTECODE',
+        $dnp3PreviousNoBytecode,
         'Process'
     )
 }

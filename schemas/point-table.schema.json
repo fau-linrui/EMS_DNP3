@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dnp3-master/point-table.schema.json",
+  "title": "Normalized DNP3 point table v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "points"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "points": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100000,
+      "items": {"$ref": "#/$defs/point"}
+    }
+  },
+  "$defs": {
+    "nullableString": {
+      "oneOf": [
+        {"type": "string", "minLength": 1},
+        {"type": "null"}
+      ]
+    },
+    "nullableByte": {
+      "oneOf": [
+        {"type": "integer", "minimum": 1, "maximum": 255},
+        {"type": "null"}
+      ]
+    },
+    "nullableNumber": {
+      "oneOf": [
+        {"type": "number"},
+        {"type": "null"}
+      ]
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "point_id",
+        "point_name",
+        "point_type",
+        "index",
+        "static_group",
+        "static_variation",
+        "event_group",
+        "event_variation",
+        "event_class",
+        "read_qualifier",
+        "engineering_unit",
+        "expected_min",
+        "expected_max",
+        "enabled",
+        "notes"
+      ],
+      "properties": {
+        "point_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$"
+        },
+        "point_name": {"type": "string", "minLength": 1},
+        "point_type": {
+          "enum": [
+            "analog_input",
+            "analog_output_status",
+            "binary_input",
+            "binary_output_status",
+            "counter",
+            "double_bit_binary_input",
+            "frozen_counter",
+            "octet_string"
+          ]
+        },
+        "index": {"type": "integer", "minimum": 0, "maximum": 65535},
+        "static_group": {"type": "integer", "minimum": 1, "maximum": 255},
+        "static_variation": {"type": "integer", "minimum": 1, "maximum": 255},
+        "event_group": {"$ref": "#/$defs/nullableByte"},
+        "event_variation": {"$ref": "#/$defs/nullableByte"},
+        "event_class": {
+          "oneOf": [
+            {"type": "integer", "minimum": 1, "maximum": 3},
+            {"type": "null"}
+          ]
+        },
+        "read_qualifier": {"enum": ["range8", "range16"]},
+        "engineering_unit": {"$ref": "#/$defs/nullableString"},
+        "expected_min": {"$ref": "#/$defs/nullableNumber"},
+        "expected_max": {"$ref": "#/$defs/nullableNumber"},
+        "enabled": {"type": "boolean"},
+        "notes": {"$ref": "#/$defs/nullableString"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"point_type": {"const": "binary_input"}}},
+          "then": {"properties": {
+            "static_group": {"const": 1},
+            "static_variation": {"enum": [1, 2]},
+            "event_group": {"enum": [2, null]},
+            "event_variation": {"enum": [1, 2, 3, null]}
+          }}
+        },
+        {
+          "if": {"properties": {"point_type": {"const": "double_bit_binary_input"}}},
+          "then": {"properties": {
+            "static_group": {"const": 3},
+            "static_variation": {"enum": [1, 2]},
+            "event_group": {"enum": [4, null]},
+            "event_variation": {"enum": [1, 2, 3, null]}
+          }}
+        },
+        {
+          "if": {"properties": {"point_type": {"const": "binary_output_status"}}},
+          "then": {"properties": {
+            "static_group": {"const": 10},
+            "static_variation": {"enum": [1, 2]},
+            "event_group": {"enum": [11, null]},
+            "event_variation": {"enum": [1, 2, null]}
+          }}
+        },
+        {
+          "if": {"properties": {"point_type": {"const": "counter"}}},
+          "then": {"properties": {
+            "static_group": {"const": 20},
+            "static_variation": {"enum": [1, 2, 5, 6]},
+            "event_group": {"enum": [22, null]},
+            "event_variation": {"enum": [1, 2, 5, 6, null]}
+          }}
+        },
+        {
+          "if": {"properties": {"point_type": {"const": "frozen_counter"}}},
+          "then": {"properties": {
+            "static_group": {"const": 21},
+            "static_variation": {"enum": [1, 2, 5, 6, 9, 10]},
+            "event_group": {"enum": [23, null]},
+            "event_variation": {"enum": [1, 2, 5, 6, null]}
+          }}
+        },
+        {
+          "if": {"properties": {"point_type": {"const": "analog_input"}}},
+          "then": {"properties": {
+            "static_group": {"const": 30},
+            "static_variation": {"enum": [1, 2, 3, 4, 5, 6]},
+            "event_group": {"enum": [32, null]},
+            "event_variation": {"enum": [1, 2, 3, 4, 5, 6, 7, 8, null]}
+          }}
+        },
+        {
+          "if": {"properties": {"point_type": {"const": "analog_output_status"}}},
+          "then": {"properties": {
+            "static_group": {"const": 40},
+            "static_variation": {"enum": [1, 2, 3, 4]},
+            "event_group": {"enum": [42, null]},
+            "event_variation": {"enum": [1, 2, 3, 4, 5, 6, 7, 8, null]}
+          }}
+        },
+        {
+          "if": {"properties": {"point_type": {"const": "octet_string"}}},
+          "then": {"properties": {
+            "static_group": {"const": 110},
+            "event_group": {"enum": [111, null]}
+          }}
+        },
+        {
+          "oneOf": [
+            {"properties": {
+              "event_group": {"type": "null"},
+              "event_variation": {"type": "null"},
+              "event_class": {"type": "null"}
+            }},
+            {"properties": {
+              "event_group": {"type": "integer"},
+              "event_variation": {"type": "integer"},
+              "event_class": {"type": "integer"}
+            }}
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -25,6 +25,9 @@ from .errors import (
     HostProtocolError,
     HostStartError,
     HostTimeoutError,
+    SafetyIncidentConfigurationError,
+    SafetyIncidentError,
+    SafetyIncidentPersistenceError,
 )
 from .models import (
     AnalogOutputCommand,
@@ -35,7 +38,10 @@ from .models import (
     ReadHeader,
     ReadTaskResult,
     TcpConnectionConfig,
+    UnsolicitedBatchResult,
+    UnsolicitedControlResult,
 )
+from .safety_incidents import SafetyIncidentStore
 
 
 _TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9._:-]+$")
@@ -127,6 +133,12 @@ class Dnp3MasterClient:
         self._stderr_thread: threading.Thread | None = None
         self._hello_info: dict[str, Any] | None = None
         self._safety_token: str | None = None
+        self._active_dut_id: str | None = None
+        self._safety_incident_store = (
+            SafetyIncidentStore(config.safety_incident_directory)
+            if config.safety_incident_directory is not None
+            else None
+        )
         self._request_prefix = f"py-{os.getpid()}-{uuid.uuid4().hex[:12]}"
         self._request_counter = 0
         self._cleanup_error: str | None = None
@@ -293,13 +305,24 @@ class Dnp3MasterClient:
         if type(authorized) is not bool or (
             authorized
             and (not isinstance(token, str) or not _SAFETY_TOKEN_PATTERN.fullmatch(token))
-        ) or (not authorized and token is not None):
+        ) or (not authorized and token is not None) or (
+            authorized
+            and (
+                config.safety is None
+                or config.safety.allow_state_change is not True
+            )
+        ):
             self._abort_process("connect returned invalid safety metadata")
             raise HostProtocolError(
                 "connect result contains inconsistent safety authorization",
                 self.diagnostics,
             )
         self._safety_token = token if authorized else None
+        self._active_dut_id = (
+            config.safety.dut_id
+            if authorized and config.safety is not None
+            else None
+        )
         public_result = deepcopy(result)
         public_safety = dict(public_result["safety"])
         public_safety.pop("safety_token", None)
@@ -316,6 +339,38 @@ class Dnp3MasterClient:
         )
         self._safety_token = None
         return result
+
+    def active_safety_incident(
+        self, *, dut_id: str | None = None
+    ) -> Mapping[str, Any] | None:
+        """Return the active uncertain-control lock without requiring a live host."""
+
+        with self._request_lock:
+            store, resolved_dut_id = self._incident_context(dut_id)
+            return store.get_active(resolved_dut_id)
+
+    def acknowledge_safety_incident(
+        self,
+        incident_id: str,
+        *,
+        acknowledged_by: str,
+        readback_summary: str,
+        readback: object,
+        evidence_reference: str,
+        dut_id: str | None = None,
+    ) -> Mapping[str, Any]:
+        """Archive one lock after independent readback and explicit acknowledgment."""
+
+        with self._request_lock:
+            store, resolved_dut_id = self._incident_context(dut_id)
+            return store.acknowledge(
+                dut_id=resolved_dut_id,
+                incident_id=incident_id,
+                acknowledged_by=acknowledged_by,
+                readback_summary=readback_summary,
+                readback=readback,
+                evidence_reference=evidence_reference,
+            )
 
     def wait_event(
         self,
@@ -357,6 +412,88 @@ class Dnp3MasterClient:
                 timeout=exchange_timeout,
             ),
         )
+
+    def enable_unsolicited(
+        self,
+        classes: Sequence[int] = (1, 2, 3),
+        *,
+        timeout: float = 5.0,
+        request_timeout: float | None = None,
+    ) -> UnsolicitedControlResult:
+        """Explicitly enable Class 1/2/3 unsolicited responses."""
+
+        return self._unsolicited_control(
+            "enable_unsolicited",
+            classes,
+            timeout=timeout,
+            request_timeout=request_timeout,
+        )
+
+    def disable_unsolicited(
+        self,
+        classes: Sequence[int] = (1, 2, 3),
+        *,
+        timeout: float = 5.0,
+        request_timeout: float | None = None,
+    ) -> UnsolicitedControlResult:
+        """Explicitly disable Class 1/2/3 unsolicited responses."""
+
+        return self._unsolicited_control(
+            "disable_unsolicited",
+            classes,
+            timeout=timeout,
+            request_timeout=request_timeout,
+        )
+
+    def wait_unsolicited(
+        self,
+        *,
+        wait_timeout: float = 0.0,
+        max_events: int = 256,
+        request_timeout: float | None = None,
+    ) -> UnsolicitedBatchResult:
+        """Consume one bounded batch from the persistent unsolicited queue."""
+
+        try:
+            normalized_wait_timeout = float(wait_timeout)
+        except (TypeError, ValueError, OverflowError):
+            normalized_wait_timeout = math.nan
+        if (
+            isinstance(wait_timeout, bool)
+            or not isinstance(wait_timeout, (int, float))
+            or not math.isfinite(normalized_wait_timeout)
+            or not 0 <= normalized_wait_timeout <= 60
+        ):
+            raise ValueError("wait_timeout must be between 0 and 60 seconds")
+        if (
+            isinstance(max_events, bool)
+            or not isinstance(max_events, int)
+            or not 1 <= max_events <= 256
+        ):
+            raise ValueError("max_events must be an integer between 1 and 256")
+        exchange_timeout = (
+            max(self.config.request_timeout, normalized_wait_timeout + 1.0)
+            if request_timeout is None
+            else request_timeout
+        )
+        result = self._mapping_result(
+            "wait_unsolicited",
+            self.request(
+                "wait_unsolicited",
+                {
+                    "timeout_ms": round(normalized_wait_timeout * 1000),
+                    "max_events": max_events,
+                },
+                timeout=exchange_timeout,
+            ),
+        )
+        try:
+            return UnsolicitedBatchResult.from_mapping(result)
+        except (TypeError, ValueError, KeyError) as error:
+            self._abort_process("wait_unsolicited returned an invalid result")
+            raise HostProtocolError(
+                f"wait_unsolicited result is invalid: {error}", self.diagnostics
+            ) from error
 
     def integrity_poll(
         self,
@@ -527,30 +664,249 @@ class Dnp3MasterClient:
             if request_timeout is None
             else request_timeout
         )
-        params = {
-            "safety_token": self._safety_token,
+        command_payload = {
+            "operation": command,
             "timeout_ms": round(task_timeout * 1000),
             "response_mode": response_mode,
             "commands": [item.to_params() for item in normalized],
         }
+        store, dut_id = self._incident_context(self._active_dut_id)
+        store.assert_clear(dut_id)
+        params = {
+            "safety_token": self._safety_token,
+            "timeout_ms": command_payload["timeout_ms"],
+            "response_mode": command_payload["response_mode"],
+            "commands": command_payload["commands"],
+        }
         try:
             raw_result = self.request(command, params, timeout=exchange_timeout)
+            result = self._mapping_result(command, raw_result)
         except HostCommandError as error:
             if (
                 error.code == "RESPONSE_TIMEOUT"
                 or error.details.get("execution_uncertain") is True
                 or error.details.get("may_still_execute") is True
             ):
-                self._safety_token = None
-                self._abort_process(
-                    f"state-changing command '{command}' has an uncertain outcome"
+                self._handle_uncertain_command(
+                    operation=command,
+                    command_payload=command_payload,
+                    commands=normalized,
+                    request_id=error.request_id,
+                    error_code=error.code,
+                    execution_uncertain=bool(
+                        error.details.get("execution_uncertain", True)
+                    ),
+                    may_still_execute=bool(
+                        error.details.get("may_still_execute", True)
+                    ),
+                    original_error=error,
                 )
             raise
-        result = self._mapping_result(command, raw_result)
+        except (HostTimeoutError, HostExitedError, HostProtocolError) as error:
+            self._handle_uncertain_command(
+                operation=command,
+                command_payload=command_payload,
+                commands=normalized,
+                request_id="python-host-exchange",
+                error_code=type(error).__name__.upper(),
+                execution_uncertain=True,
+                may_still_execute=True,
+                original_error=error,
+            )
+            raise
         try:
-            return CommandTaskResult.from_mapping(result)
+            parsed = CommandTaskResult.from_mapping(result)
         except (TypeError, ValueError, KeyError) as error:
-            self._abort_process(f"{command} returned an invalid command result")
+            protocol_error = HostProtocolError(
+                f"{command} result is invalid: {error}", self.diagnostics
+            )
+            self._handle_uncertain_command(
+                operation=command,
+                command_payload=command_payload,
+                commands=normalized,
+                request_id="invalid-command-result",
+                error_code="INVALID_COMMAND_RESULT",
+                execution_uncertain=True,
+                may_still_execute=True,
+                original_error=protocol_error,
+            )
+            raise protocol_error from error
+        if parsed.execution_uncertain:
+            uncertain_error = HostCommandError(
+                request_id=f"command-task-{parsed.task_id}",
+                code="UNCERTAIN_COMMAND_RESULT",
+                message="command result reports execution_uncertain=true",
+                details={
+                    "execution_uncertain": True,
+                    "may_still_execute": True,
+                    "automatic_retry_safe": False,
+                },
+            )
+            self._handle_uncertain_command(
+                operation=command,
+                command_payload=command_payload,
+                commands=normalized,
+                request_id=uncertain_error.request_id,
+                error_code=uncertain_error.code,
+                execution_uncertain=True,
+                may_still_execute=True,
+                original_error=uncertain_error,
+            )
+            raise uncertain_error
+        return parsed
+
+    def _incident_context(
+        self, dut_id: str | None
+    ) -> tuple[SafetyIncidentStore, str]:
+        store = self._safety_incident_store
+        if store is None:
+            raise SafetyIncidentConfigurationError(
+                "state-changing operations require HostProcessConfig."
+                "safety_incident_directory so uncertain results remain locked "
+                "across Python processes"
+            )
+        resolved_dut_id = dut_id or self._active_dut_id
+        if resolved_dut_id is None:
+            raise SafetyIncidentConfigurationError(
+                "a DUT identity is required to inspect or update a safety incident"
+            )
+        return store, resolved_dut_id
+
+    def _handle_uncertain_command(
+        self,
+        *,
+        operation: str,
+        command_payload: object,
+        commands: Sequence[CrobCommand | AnalogOutputCommand],
+        request_id: str,
+        error_code: str,
+        execution_uncertain: bool,
+        may_still_execute: bool,
+        original_error: Exception,
+    ) -> None:
+        incident: Mapping[str, Any] | None = None
+        persistence_error: Exception | None = None
+        try:
+            store, dut_id = self._incident_context(self._active_dut_id)
+            recorded = store.record_uncertain(
+                dut_id=dut_id,
+                operation=operation,
+                command_payload=command_payload,
+                points=[
+                    {
+                        "type": (
+                            "crob"
+                            if isinstance(item, CrobCommand)
+                            else item.command_type
+                        ),
+                        "index": item.index,
+                    }
+                    for item in commands
+                ],
+                request_id=request_id,
+                error_code=error_code,
+                execution_uncertain=execution_uncertain,
+                may_still_execute=may_still_execute,
+            )
+            incident = recorded.incident
+            lock_created = recorded.created
+        except (SafetyIncidentError, OSError, TypeError, ValueError) as error:
+            persistence_error = error
+        finally:
+            self._safety_token = None
+            self._abort_process(
+                f"state-changing command '{operation}' has an uncertain outcome"
+            )
+
+        if persistence_error is not None:
+            raise SafetyIncidentPersistenceError(
+                "an uncertain command outcome invalidated the host, but the "
+                "persistent safety lock could not be verified; do not issue "
+                "another control until manual readback and incident-store repair",
+                original_error=(
+                    original_error
+                    if isinstance(original_error, HostCommandError)
+                    else None
+                ),
+                details={
+                    "operation": operation,
+                    "persistence_error": str(persistence_error),
+                    "required_action": "MANUAL_READBACK_AND_STORE_REPAIR",
+                },
+            ) from original_error
+
+        assert incident is not None
+        incident_id = str(incident["incident_id"])
+        incident_details = {
+            "incident_id": incident_id,
+            "persistent_safety_lock": True,
+            "incident_lock_created": lock_created,
+            "required_action": incident["required_action"],
+        }
+        if isinstance(original_error, HostCommandError):
+            original_error.details.update(incident_details)
+        else:
+            setattr(original_error, "incident_id", incident_id)
+            details = getattr(original_error, "details", None)
+            if isinstance(details, dict):
+                details.update(incident_details)
+
+    @staticmethod
+    def _event_classes(classes: Sequence[int]) -> tuple[int, ...]:
+        if isinstance(classes, (str, bytes)):
+            raise TypeError("classes must be a sequence containing 1, 2, and/or 3")
+        normalized = tuple(classes)
+        if not 1 <= len(normalized) <= 3:
+            raise ValueError("classes must contain between one and three items")
+        if any(
+            type(value) is not int or value not in {1, 2, 3}
+            for value in normalized
+        ):
+            raise ValueError("classes may contain only the integers 1, 2, and 3")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("classes must not contain duplicate values")
+        return normalized
+
+    def _unsolicited_control(
+        self,
+        command: str,
+        classes: Sequence[int],
+        *,
+        timeout: float,
+        request_timeout: float | None,
+    ) -> UnsolicitedControlResult:
+        normalized_classes = self._event_classes(classes)
+        try:
+            normalized_timeout = float(timeout)
+        except (TypeError, ValueError, OverflowError):
+            normalized_timeout = math.nan
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(normalized_timeout)
+            or not 0.05 <= normalized_timeout <= 300
+        ):
+            raise ValueError("timeout must be between 0.05 and 300 seconds")
+        exchange_timeout = (
+            max(self.config.request_timeout, normalized_timeout + 1.0)
+            if request_timeout is None
+            else request_timeout
+        )
+        result = self._mapping_result(
+            command,
+            self.request(
+                command,
+                {
+                    "timeout_ms": round(normalized_timeout * 1000),
+                    "classes": list(normalized_classes),
+                },
+                timeout=exchange_timeout,
+            ),
+        )
+        try:
+            return UnsolicitedControlResult.from_mapping(result)
+        except (TypeError, ValueError, KeyError) as error:
+            self._abort_process(f"{command} returned an invalid result")
             raise HostProtocolError(
                 f"{command} result is invalid: {error}", self.diagnostics
             ) from error

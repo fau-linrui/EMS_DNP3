@@ -30,8 +30,11 @@
         "class_poll",
         "read",
         "direct_operate",
+        "disable_unsolicited",
+        "enable_unsolicited",
         "select_and_operate",
         "wait_event",
+        "wait_unsolicited",
         "stats",
         "capture.begin"
       ]

@@ -15,7 +15,7 @@
 | EMS 点表 | MISSING | 未提供测点类型、索引、Class、量程及可写属性 | DUT_OWNER | 真实 EMS 功能与性能用例 |
 | EMS 连接参数 | MISSING | 未提供承载、地址、端口、链路地址、超时、最大分片 | DUT_OWNER | 连接与互操作测试 |
 | EMS 主动上送和启动策略 | REVIEW_REQUIRED | 操作约定声明事件依靠 unsolicited，但未提供 FC20/FC21、启动空响应、Confirm、重发、序号、缓存和溢出参数，并与 Class/Event Read 规则存在歧义 | DUT_OWNER | unsolicited 与启动时序测试 |
-| EMS 安全能力与授权边界 | MISSING | 框架已实现本地 fail-closed 控制联锁，但未提供真实实验环境标识、书面操作授权或 SAv5 声明 | SECURITY_OWNER | 真实控制、重启、时间、文件、配置及 SAv5 测试 |
+| EMS 安全能力与授权边界 | MISSING | 框架已实现会话令牌和跨进程不确定结果事故锁，但未提供真实实验环境标识、书面操作授权或 SAv5 声明 | SECURITY_OWNER | 真实控制、重启、时间、文件、配置及 SAv5 测试 |
 | OpenDNP3 3.1.2 固定源码 | PRESENT | 官方 tag `3.1.2` 已下载到 `third_party/opendnp3`；commit `26b4c01e4839bbbda8866655e086471c4917ee53`；官方 ZIP SHA-256 `7cb1a8a84f95c05b579a48543687a78c7dc9e3c394883419a92355a4aa6c1d5f` | DEPENDENCY_OWNER | 主源码不再阻塞 |
 | OpenDNP3 离线构建依赖 | PRESENT | Asio `asio-1-16-0`、exe4cpp `fb878a4...`、ser4cpp `3c449734...` 的原始归档、SHA-1/SHA-256、源码树 SHA-256 和许可证由 `third_party/opendnp3-dependencies.lock.json` 固定；CMake 配置时强制复核且禁止网络回退 | DEPENDENCY_OWNER | 不阻塞 OpenDNP3 构建；功能/API 结论仍需逐项复核 |
 | OpenDNP3 许可证副本 | PRESENT | Apache-2.0 `LICENSE` 与 `NOTICE` 已复制到 `LICENSES/opendnp3/` 并记录 SHA-256 | DEPENDENCY_OWNER | 不阻塞源码审查；发布时仍需统一 NOTICE |
@@ -31,7 +31,7 @@
 
 ## 当前结论
 
-- T00～T11 的通用工程、TCP、核心 Read/IIN 和有响应控制路径已实现；本机回环与同栈集成测试通过。
+- T00～T12 的通用工程、TCP、核心 Read/IIN、有响应控制和显式 unsolicited 基线路径已实现；本机回环与同栈集成测试通过，原始 Confirm/重发故障时序仍未验证。
 - 本机标准 PDF 的版本与结构已确认，T05～T11 所需条款和对象表已建立单次本地技术索引；来源/授权、勘误和全目录双人复核仍未完成，因此不能据此形成对外合规声明。
 - OpenDNP3 3.1.2 主源码及传递构建依赖已经固定；已对当前 TCP/Read/Control 公共 API 做定向复核。其余能力仍需按 PICS 逐项复核，不能把同栈本机测试提升为独立互操作。
 - 已取得部分 EMS 操作约定，但它不是与固件绑定的正式 PICS，且存在 D01～D09 待确认项；`dut_pics_status` 继续保持 `UNKNOWN`。

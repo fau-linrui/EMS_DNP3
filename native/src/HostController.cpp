@@ -157,6 +157,21 @@ DispatchResult HostController::dispatch(const Request& request)
         }
         return backend_result(request.id, backend_->read(config));
     }
+    if (request.command == "enable_unsolicited"
+        || request.command == "disable_unsolicited") {
+        UnsolicitedControlConfig config;
+        if (const auto error = parse_unsolicited_control_config(
+                request.params, config)) {
+            ++requests_failed_;
+            return DispatchResult{
+                JsonLineProtocol::error_response(ProtocolError{
+                    request.id, error->code, error->message, error->details}),
+                false};
+        }
+        return request.command == "enable_unsolicited"
+            ? backend_result(request.id, backend_->enable_unsolicited(config))
+            : backend_result(request.id, backend_->disable_unsolicited(config));
+    }
     if (request.command == "select_and_operate"
         || request.command == "direct_operate") {
         CommandConfig config;
@@ -181,6 +196,18 @@ DispatchResult HostController::dispatch(const Request& request)
                 false};
         }
         return backend_result(request.id, backend_->wait_event(config));
+    }
+    if (request.command == "wait_unsolicited") {
+        WaitUnsolicitedConfig config;
+        if (const auto error = parse_wait_unsolicited_config(
+                request.params, config)) {
+            ++requests_failed_;
+            return DispatchResult{
+                JsonLineProtocol::error_response(ProtocolError{
+                    request.id, error->code, error->message, error->details}),
+                false};
+        }
+        return backend_result(request.id, backend_->wait_unsolicited(config));
     }
     if (is_known_backend_command(request.command)) {
         ++requests_failed_;
@@ -273,6 +300,16 @@ Json HostController::status_result() const
         {"safety",
          Json{{"state_change_authorized", backend_status.state_change_authorized},
               {"token_exposed", false}}},
+        {"unsolicited",
+         Json{{"enabled", backend_status.unsolicited_enabled},
+              {"class_mask", backend_status.unsolicited_class_mask},
+              {"last_receive_sequence",
+               backend_status.unsolicited_last_sequence},
+              {"queued_measurements",
+               backend_status.queued_unsolicited_events},
+              {"dropped_measurements",
+               backend_status.dropped_unsolicited_events},
+              {"fragments", backend_status.unsolicited_fragments}}},
         {"metrics",
          Json{
              {"requests_received", requests_received_},
@@ -294,16 +331,19 @@ const char* HostController::state_name(const BackendStatus& backend_status) cons
 
 bool HostController::is_known_backend_command(const std::string& command)
 {
-    static constexpr std::array<const char*, 10> commands{
+    static constexpr std::array<const char*, 13> commands{
         "capture.begin",
         "connect",
         "disconnect",
+        "enable_unsolicited",
+        "disable_unsolicited",
         "integrity_poll",
         "class_poll",
         "read",
         "direct_operate",
         "select_and_operate",
         "wait_event",
+        "wait_unsolicited",
         "stats",
     };
     return std::any_of(

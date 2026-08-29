@@ -12,8 +12,10 @@ from typing import Iterator, Mapping
 import pytest
 
 from .client import Dnp3MasterClient
+from .evidence import EvidenceRecorder
 from .errors import HostCommandError
 from .models import HostProcessConfig, LabSafetyConfig, TcpConnectionConfig
+from .point_table import PointTable, PointTableError, load_point_table
 
 
 _VALID_PICS_STATUSES = frozenset({"SUPPORTED", "NOT_SUPPORTED", "UNKNOWN"})
@@ -81,6 +83,31 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help=(
             "Capability matrix used to reject unknown/typoed PICS IDs; normally "
             "auto-detected from config/capability_matrix.csv"
+        ),
+    )
+    group.addoption(
+        "--dnp3-points-file",
+        action="store",
+        default=None,
+        help="Private strict point-table CSV (or set DNP3_POINTS_FILE)",
+    )
+    group.addoption(
+        "--dnp3-evidence-dir",
+        action="store",
+        default=None,
+        help=(
+            "Create a redacted run manifest below this directory "
+            "(or set DNP3_EVIDENCE_DIR)"
+        ),
+    )
+    group.addoption(
+        "--dnp3-safety-incident-dir",
+        action="store",
+        default=None,
+        help=(
+            "Persistent uncertain-control lock directory (or set "
+            "DNP3_SAFETY_INCIDENT_DIR); defaults to "
+            "evidence/local/safety-incidents"
         ),
     )
     group.addoption(
@@ -333,6 +360,121 @@ def pytest_configure(config: pytest.Config) -> None:
     setattr(config, "_dnp3_capability_ids", capability_ids)
     setattr(config, "_dnp3_capability_matrix_path", matrix_path)
 
+    configured_points = config.getoption("--dnp3-points-file") or os.environ.get(
+        "DNP3_POINTS_FILE"
+    )
+    point_table: PointTable | None = None
+    points_path: Path | None = None
+    if configured_points:
+        points_path = Path(configured_points).expanduser().resolve(strict=False)
+        try:
+            point_table = load_point_table(points_path)
+        except PointTableError as error:
+            raise pytest.UsageError(f"invalid DNP3 point table: {error}") from error
+    setattr(config, "_dnp3_point_table", point_table)
+    setattr(config, "_dnp3_points_path", points_path)
+
+    evidence_recorder: EvidenceRecorder | None = None
+    configured_evidence = config.getoption("--dnp3-evidence-dir") or os.environ.get(
+        "DNP3_EVIDENCE_DIR"
+    )
+    if configured_evidence:
+        evidence_matrix = matrix_path
+        if evidence_matrix is None:
+            evidence_matrix = (
+                Path(configured_matrix).expanduser().resolve(strict=False)
+                if configured_matrix
+                else _auto_capability_matrix_path()
+            )
+        repository_root = (
+            evidence_matrix.parent.parent
+            if evidence_matrix is not None
+            else Path.cwd() if (Path.cwd() / ".git").exists() else None
+        )
+        configured_host = config.getoption("--dnp3-host-exe") or os.environ.get(
+            "DNP3_MASTER_HOST_EXE"
+        )
+        try:
+            evidence_recorder = EvidenceRecorder(
+                Path(configured_evidence),
+                repository_root=repository_root,
+                execution_root=Path(config.rootpath),
+                host_executable=(
+                    Path(configured_host) if configured_host else None
+                ),
+                inputs={
+                    "capability_matrix": evidence_matrix,
+                    "pics": pics_path,
+                    "point_table": points_path,
+                },
+                runner={"pytest_version": pytest.__version__},
+            )
+        except (OSError, ValueError) as error:
+            raise pytest.UsageError(
+                f"cannot initialize DNP3 evidence directory: {error}"
+            ) from error
+    setattr(config, "_dnp3_evidence_recorder", evidence_recorder)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[object]
+):
+    outcome = yield
+    report = outcome.get_result()
+    recorder: EvidenceRecorder | None = getattr(
+        item.config, "_dnp3_evidence_recorder", None
+    )
+    if recorder is None:
+        return
+    markers = tuple(marker.name for marker in item.iter_markers())
+    capabilities = tuple(
+        str(marker.args[0])
+        for marker in item.iter_markers(name="dnp3_capability")
+        if marker.args
+    )
+    captured = "\n".join(
+        value
+        for value in (
+            getattr(report, "capstdout", ""),
+            getattr(report, "capstderr", ""),
+            getattr(report, "caplog", ""),
+        )
+        if value
+    )
+    recorder.record_phase(
+        nodeid=report.nodeid,
+        phase=report.when,
+        outcome=report.outcome,
+        duration_seconds=report.duration,
+        markers=markers,
+        capabilities=capabilities,
+        was_xfail=(
+            str(report.wasxfail) if hasattr(report, "wasxfail") else None
+        ),
+        failure=report.longreprtext if report.failed else "",
+        captured_output=captured,
+    )
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    recorder: EvidenceRecorder | None = getattr(
+        session.config, "_dnp3_evidence_recorder", None
+    )
+    if recorder is not None:
+        recorder.finalize(int(exitstatus))
+
+
+def pytest_terminal_summary(terminalreporter: object) -> None:
+    config = getattr(terminalreporter, "config", None)
+    recorder: EvidenceRecorder | None = getattr(
+        config, "_dnp3_evidence_recorder", None
+    )
+    if recorder is not None:
+        terminalreporter.write_line(
+            f"DNP3 evidence: {recorder.run_directory / 'manifest.json'}"
+        )
+
 
 def _unknown_policy(config: pytest.Config) -> str:
     configured = config.getoption("--dnp3-unknown-policy") or os.environ.get(
@@ -495,6 +637,13 @@ def dnp3_pics(pytestconfig: pytest.Config) -> Mapping[str, str]:
 
 
 @pytest.fixture(scope="session")
+def dnp3_point_table(pytestconfig: pytest.Config) -> PointTable | None:
+    """Return the validated private point table, if one was configured."""
+
+    return getattr(pytestconfig, "_dnp3_point_table", None)
+
+
+@pytest.fixture(scope="session")
 def dnp3_host_config(pytestconfig: pytest.Config) -> HostProcessConfig:
     configured = pytestconfig.getoption("--dnp3-host-exe") or os.environ.get(
         "DNP3_MASTER_HOST_EXE"
@@ -503,9 +652,15 @@ def dnp3_host_config(pytestconfig: pytest.Config) -> HostProcessConfig:
         raise pytest.UsageError(
             "set DNP3_MASTER_HOST_EXE or pass --dnp3-host-exe before using DNP3 fixtures"
         )
+    incident_directory = pytestconfig.getoption(
+        "--dnp3-safety-incident-dir"
+    ) or os.environ.get("DNP3_SAFETY_INCIDENT_DIR")
+    if not incident_directory:
+        incident_directory = Path.cwd() / "evidence" / "local" / "safety-incidents"
     return HostProcessConfig(
         executable=Path(configured),
         arguments=tuple(pytestconfig.getoption("--dnp3-host-arg")),
+        safety_incident_directory=Path(incident_directory),
         startup_timeout=pytestconfig.getoption("--dnp3-startup-timeout"),
         request_timeout=pytestconfig.getoption("--dnp3-request-timeout"),
         shutdown_timeout=pytestconfig.getoption("--dnp3-shutdown-timeout"),

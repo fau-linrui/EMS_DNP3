@@ -30,12 +30,17 @@ TC_APP_SUMMARY_PYTHON_LOCAL_001 = "TC_APP_SUMMARY_PYTHON_LOCAL_001"
 TC_APP_CLASS_POLL_PYTHON_LOCAL_001 = "TC_APP_CLASS_POLL_PYTHON_LOCAL_001"
 TC_APP_CONTROL_PYTHON_LOCAL_001 = "TC_APP_CONTROL_PYTHON_LOCAL_001"
 TC_APP_CONTROL_SAFETY_PYTHON_LOCAL_001 = "TC_APP_CONTROL_SAFETY_PYTHON_LOCAL_001"
+TC_APP_UNSOLICITED_PYTHON_LOCAL_001 = "TC_APP_UNSOLICITED_PYTHON_LOCAL_001"
 
 pytestmark = [
     pytest.mark.dnp3_capability("APP.FC.01.READ"),
     pytest.mark.dnp3_capability("APP.TASK.LIFECYCLE"),
     pytest.mark.dnp3_capability("APP.TASK.OBSERVABILITY"),
     pytest.mark.dnp3_capability("APP.CLASS.EVENTS"),
+    pytest.mark.dnp3_capability("APP.UNSOLICITED"),
+    pytest.mark.dnp3_capability("APP.FC.14.ENABLE_UNSOLICITED"),
+    pytest.mark.dnp3_capability("APP.FC.15.DISABLE_UNSOLICITED"),
+    pytest.mark.dnp3_capability("APP.FC.82.UNSOLICITED_RESPONSE"),
     pytest.mark.dnp3_capability("APP.COMMAND_STATUS.CATALOG"),
     pytest.mark.dnp3_capability("IIN.IIN2.1.OBJECT_UNKNOWN"),
     pytest.mark.dnp3_capability("APP.FC.03.SELECT"),
@@ -119,12 +124,13 @@ def local_outstation() -> Iterator[int]:
 
 
 @pytest.fixture
-def real_client() -> Iterator[Dnp3MasterClient]:
+def real_client(tmp_path: Path) -> Iterator[Dnp3MasterClient]:
     configured = os.environ.get("DNP3_MASTER_HOST_EXE")
     assert configured, "DNP3_MASTER_HOST_EXE must identify the built native host"
     client = Dnp3MasterClient(
         HostProcessConfig(
             executable=Path(configured),
+            safety_incident_directory=tmp_path / "safety-incidents",
             startup_timeout=3.0,
             request_timeout=5.0,
             shutdown_timeout=3.0,
@@ -149,6 +155,7 @@ def test_python_read_api_against_local_opendnp3_outstation(
     assert TC_APP_CLASS_POLL_PYTHON_LOCAL_001
     assert TC_APP_CONTROL_PYTHON_LOCAL_001
     assert TC_APP_CONTROL_SAFETY_PYTHON_LOCAL_001
+    assert TC_APP_UNSOLICITED_PYTHON_LOCAL_001
 
     real_client.connect(
         TcpConnectionConfig(
@@ -167,6 +174,26 @@ def test_python_read_api_against_local_opendnp3_outstation(
         )
     )
     assert real_client.state_change_authorized is True
+
+    enabled_unsolicited = real_client.enable_unsolicited((1, 2), timeout=3.0)
+    assert enabled_unsolicited.task_status == "SUCCESS"
+    unsolicited = real_client.wait_unsolicited(
+        wait_timeout=3.0, max_events=16
+    )
+    assert unsolicited.enabled is True
+    assert unsolicited.classes == (1, 2)
+    assert unsolicited.measurements
+    assert {
+        (measurement.group, measurement.variation)
+        for measurement in unsolicited.measurements
+    }.issuperset({(2, 2), (32, 7)})
+    assert all(
+        measurement.source == "unsolicited"
+        and measurement.session_id == unsolicited.session_id
+        for measurement in unsolicited.measurements
+    )
+    disabled_unsolicited = real_client.disable_unsolicited((1, 2), timeout=3.0)
+    assert disabled_unsolicited.task_status == "SUCCESS"
 
     integrity = real_client.integrity_poll(timeout=3.0)
     assert integrity.task_status == "SUCCESS"

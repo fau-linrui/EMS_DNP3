@@ -1,4 +1,4 @@
-# 工程架构基线（0.2.0）
+# 工程架构基线（0.3.0）
 
 ## 可移植边界
 
@@ -13,16 +13,17 @@ pytest/业务断言
   -> OpenDnp3Backend
        -> TCP Channel + Master
        -> OpenDnp3ReadSupport
+       -> OpenDnp3UnsolicitedSupport
        -> OpenDnp3CommandSupport
   -> EMS Outstation
 ```
 
 ## 目录职责
 
-| 目录 | 职责 | 0.2.0 状态 |
+| 目录 | 职责 | 0.3.0 状态 |
 |---|---|---|
-| `native/` | C++17 host、后端和原生测试 | TCP、Read/IIN、控制、安全联锁、stats 已接入 |
-| `python/` | 可嵌入 pytest 的包与测试 | 类型模型、进程所有权、PICS/风险门禁和 fixtures |
+| `native/` | C++17 host、后端和原生测试 | TCP、Read/IIN、unsolicited、控制、安全联锁、stats 已接入 |
+| `python/` | 可嵌入 pytest 的包与测试 | 类型模型、进程所有权、PICS/点表/证据/风险门禁和 fixtures |
 | `config/` | 能力台账和 EMS Profile 示例 | 389 条能力；真实 EMS 私有配置不提交 |
 | `schemas/` | NDJSON 和 EMS Profile 格式 | v1 严格 Schema |
 | `scripts/` | 工具链发现、构建、测试、自检、打包 | Debug/Release/ASan 和离线校验 |
@@ -44,7 +45,7 @@ pytest/业务断言
 
 detail 模式保留并返回逐点结果；summary 模式只累计计数，不保留或返回逐点记录。超过 `max_measurements` 时返回 `QUEUE_OVERFLOW`，不会静默丢数据。任务结果同时包含原始/解析 IIN、OpenDNP3 task completion、开始/完成时间和分片摘要。
 
-当前 master 的自动启动完整性、event scan 和 unsolicited class mask 均关闭，避免建立连接时产生不可控后台任务；调用方必须显式发起 Read。持久 unsolicited 收集属于后续 T12。
+当前 master 的自动启动完整性、event scan 和 unsolicited class mask 均关闭，避免建立连接时产生不可控后台任务；调用方必须显式发起 Read 或 `enable_unsolicited`。`OpenDnp3UnsolicitedSupport` 是跨请求存活的 ISOE handler，只收集 unsolicited 回调，使用默认 4096 条的 drop-oldest 队列，并记录会话、分片和接收顺序；disable/断开后的事件不得继续进入队列。原始 Confirm 丢失、序号回绕和重发故障注入仍属于后续互操作任务。
 
 ## 控制数据路径与安全门
 
@@ -55,16 +56,20 @@ Python 仅公开 `CrobCommand` 和四种严格类型的 `AnalogOutputCommand`。
 1. pytest 收集阶段要求用例同时带 `dnp3_dut`、能力 ID 和 `dnp3_state_changing`，并得到显式命令行/环境授权及 operator/DUT ID；未标记用例即使整次运行带了解锁参数也只能得到只读连接。
 2. `connect` 只有在 `environment=LAB`、`allow_state_change=true` 和两个 ID 均有效时才生成 128-bit 会话令牌；后续每条命令必须携带正确令牌。
 
-Python 客户端不公开令牌属性，只在内存中自动附加；高层连接结果和诊断会移除/过滤令牌，断开或进程退出后销毁。该机制只防误操作，不是认证/授权/SAv5。控制任务超时返回“执行可能不确定”，不会自动重试。
+Python 客户端不公开令牌属性，只在内存中自动附加；高层连接结果和诊断会移除/过滤令牌，断开或进程退出后销毁。该机制只防误操作，不是认证/授权/SAv5。
+
+状态改变还要求持久 `SafetyIncidentStore`。控制响应超时、host 交换失败、非法结果或结果自报不确定时，客户端把不含控制值/DUT 明文的事故锁写入 `active/<dut-sha256>.json`，再销毁 host。后续进程先查锁，锁存在或损坏均 fail-closed；只读路径不受影响。独立读回和明确确认后，记录转入 `archive/`。该层解决同一持久目录上的跨进程误重试，不提供多机分布式锁或身份认证。
 
 ## 能力与证据模型
 
 `config/capability_matrix.csv` 是能力状态唯一台账。`hello.capabilities` 只暴露当前实现的子集，并带实现 revision 和本机验证范围。当前本机端到端从站也使用 OpenDNP3 3.1.2，因此相关能力保持 `IMPLEMENTED_UNVERIFIED`；独立端/真实 EMS 证据齐全后才能升级。
 
-构建时 `build-info.json` 固定 host 版本、Git commit、工作区 clean/dirty/unavailable 状态、OpenDNP3 commit、构建配置、目标架构、依赖锁哈希和能力矩阵哈希。正式证据应使用 `git_worktree_state=clean` 的构建并保存该文件，不应只记录 EXE 文件名。
+构建时 `build-info.json` 固定 host 版本、Git commit、工作区 clean/dirty/unavailable 状态、OpenDNP3 commit、构建配置、目标架构、依赖锁哈希和能力矩阵哈希。pytest `EvidenceRecorder` 为每次运行原子生成脱敏 manifest/结果，私有 PICS 和点表只记文件名、大小和 SHA-256，已知项目/测试/host/输入/证据路径会替换为占位符。正式证据应使用 `git_worktree_state=clean` 的构建并保存这些文件，不应只记录 EXE 文件名；任意测试输出仍需人工审查后才能外发。
+
+发布脚本把安装树写入 `package-manifest.json`，再用固定时间戳、排序条目和固定压缩参数生成 ZIP/SHA-256；验证阶段在新目录解包、逐文件校验并执行真实本机回环。它保证相同安装树的 ZIP 字节稳定，但不声称 MSVC 输出本身已达到跨机器可复现。
 
 ## 后续扩展顺序
 
-T12 以后按独立任务增加 unsolicited、时间同步、Restart/Freeze/Assign Class、持续 capture/性能、其他承载、经典对象缺口、高级事务和安全功能。不得扩大单会话/单在途 RPC 边界，除非有独立设计与迁移任务。
+T12 的受控 unsolicited 基线已完成；后续按独立任务增加真实 EMS/原始故障时序、时间同步、Restart/Freeze/Assign Class、持续 capture/性能、其他承载、经典对象缺口、高级事务和安全功能。不得扩大单会话/单在途 RPC 边界，除非有独立设计与迁移任务。
 
 具体阻塞、输入和验收见 `docs/INTRANET_HANDOFF_REMAINING_TASKS.md`。

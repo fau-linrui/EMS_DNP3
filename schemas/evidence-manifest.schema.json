@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dnp3-master/evidence-manifest.schema.json",
+  "title": "DNP3 pytest evidence manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "state",
+    "started_at_utc",
+    "completed_at_utc",
+    "pytest_exit_status",
+    "runner",
+    "source_control",
+    "build_info",
+    "inputs",
+    "results",
+    "redaction"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "state": {"enum": ["RUNNING", "COMPLETED"]},
+    "started_at_utc": {"type": "string", "minLength": 1},
+    "completed_at_utc": {"type": ["string", "null"]},
+    "pytest_exit_status": {"type": ["integer", "null"]},
+    "runner": {"type": "object"},
+    "source_control": {"type": "object"},
+    "build_info": {"type": ["object", "null"]},
+    "inputs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["present", "file_name"],
+        "properties": {
+          "present": {"type": "boolean"},
+          "file_name": {"type": "string"},
+          "size_bytes": {"type": "integer", "minimum": 0},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "results": {"type": ["object", "null"]},
+    "redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "private_input_contents_stored",
+        "absolute_input_paths_in_metadata_stored",
+        "known_absolute_paths_redacted",
+        "arbitrary_test_output_requires_review",
+        "report_text_limit_chars",
+        "sensitive_fields_redacted"
+      ],
+      "properties": {
+        "private_input_contents_stored": {"const": false},
+        "absolute_input_paths_in_metadata_stored": {"const": false},
+        "known_absolute_paths_redacted": {"const": true},
+        "arbitrary_test_output_requires_review": {"const": true},
+        "report_text_limit_chars": {"type": "integer", "minimum": 1},
+        "sensitive_fields_redacted": {"const": true}
+      }
+    }
+  }
+}

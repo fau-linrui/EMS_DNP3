@@ -1,0 +1,6 @@
+point_id,point_name,point_type,index,static_group,static_variation,event_group,event_variation,event_class,read_qualifier,engineering_unit,expected_min,expected_max,enabled,notes
+BI_DEMO_0001,示例遥信,binary_input,0,1,2,2,2,1,range16,,,,true,复制为 points.local.csv 后替换为真实索引和名称
+AI_DEMO_0001,示例遥测,analog_input,0,30,5,32,7,2,range16,kV,,,true,如已知合理范围可填写 expected_min 和 expected_max
+BO_DEMO_0001,示例遥控状态,binary_output_status,0,10,2,,,,range16,,,,true,此表只用于只读状态验证不会发控制
+AO_DEMO_0001,示例遥调状态,analog_output_status,0,40,3,,,,range16,,,,true,此表只用于只读状态验证不会发控制
+PULSE_DEMO_0001,示例遥脉,analog_input,1,30,5,32,7,2,range16,count,,,false,确认真实索引后再把 enabled 改为 true

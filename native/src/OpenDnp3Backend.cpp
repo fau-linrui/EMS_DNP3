@@ -1,6 +1,7 @@
 #include "dnp3host/OpenDnp3Backend.h"
 #include "dnp3host/OpenDnp3CommandSupport.h"
 #include "dnp3host/OpenDnp3ReadSupport.h"
+#include "dnp3host/OpenDnp3UnsolicitedSupport.h"
 
 #include <opendnp3/DNP3Manager.h>
 #include <opendnp3/app/ClassField.h>
@@ -306,10 +307,12 @@ std::optional<std::string> shutdown_resources(BackendResources resources) noexce
 
 class OpenDnp3Backend final : public IMasterBackend {
 public:
-    OpenDnp3Backend()
+    explicit OpenDnp3Backend(const std::size_t unsolicited_queue_capacity)
         : events_(std::make_shared<ChannelEventStore>()),
           command_support_(std::make_unique<OpenDnp3CommandSupport>()),
-          read_support_(std::make_unique<OpenDnp3ReadSupport>())
+          read_support_(std::make_unique<OpenDnp3ReadSupport>()),
+          unsolicited_support_(std::make_unique<OpenDnp3UnsolicitedSupport>(
+              unsolicited_queue_capacity))
     {
     }
 
@@ -334,7 +337,9 @@ public:
             "class_poll",
             "connect",
             "direct_operate",
+            "disable_unsolicited",
             "disconnect",
+            "enable_unsolicited",
             "get_status",
             "hello",
             "integrity_poll",
@@ -342,7 +347,8 @@ public:
             "select_and_operate",
             "shutdown",
             "stats",
-            "wait_event"};
+            "wait_event",
+            "wait_unsolicited"};
     }
 
     Json capabilities() const override
@@ -359,6 +365,11 @@ public:
             {"implementation_revision", "t09-t11-opendnp3-3.1.2"},
             {"verification_scope", "local_opendnp3_outstation"},
             {"requires_safety_interlock", true}};
+        const auto unsolicited_entry = Json{
+            {"status", "IMPLEMENTED_UNVERIFIED"},
+            {"implementation_revision", "t12-opendnp3-3.1.2"},
+            {"verification_scope", "local_opendnp3_outstation"},
+            {"queue_capacity", unsolicited_support_->capacity()}};
         return Json{
             {"CHANNEL.TCP.CLIENT", channel_entry},
             {"CHANNEL.RECONNECT", channel_entry},
@@ -366,6 +377,10 @@ public:
             {"APP.TASK.LIFECYCLE", read_entry},
             {"APP.TASK.OBSERVABILITY", read_entry},
             {"APP.CLASS.EVENTS", read_entry},
+            {"APP.UNSOLICITED", unsolicited_entry},
+            {"APP.FC.14.ENABLE_UNSOLICITED", unsolicited_entry},
+            {"APP.FC.15.DISABLE_UNSOLICITED", unsolicited_entry},
+            {"APP.FC.82.UNSOLICITED_RESPONSE", unsolicited_entry},
             {"APP.FC.03.SELECT", command_entry},
             {"APP.FC.04.OPERATE", command_entry},
             {"APP.FC.05.DIRECT_OPERATE", command_entry},
@@ -373,17 +388,24 @@ public:
             {"IIN.IIN2.1.OBJECT_UNKNOWN", read_entry},
             {"OBJ.G12.V1", command_entry},
             {"OBJ.G1.V2", read_entry},
+            {"OBJ.G2.V2", read_entry},
             {"OBJ.G3.V2", read_entry},
             {"OBJ.G10.V2", read_entry},
             {"OBJ.G20.V1", read_entry},
             {"OBJ.G21.V1", read_entry},
             {"OBJ.G30.V5", read_entry},
+            {"OBJ.G32.V7", read_entry},
             {"OBJ.G40.V1", read_entry},
+            {"OBJ.G40.V3", read_entry},
             {"OBJ.G41.V1", command_entry},
             {"OBJ.G41.V2", command_entry},
             {"OBJ.G41.V3", command_entry},
             {"OBJ.G41.V4", command_entry},
             {"OBJ.G50.V4", read_entry},
+            {"OBJ.G60.V1", read_entry},
+            {"OBJ.G60.V2", read_entry},
+            {"OBJ.G60.V3", read_entry},
+            {"OBJ.G60.V4", read_entry},
             {"OBJ.G110.LENGTH_VARIANTS", read_entry}};
     }
 
@@ -395,6 +417,7 @@ public:
             active = session_active_;
         }
         const auto snapshot = events_->snapshot();
+        const auto unsolicited = unsolicited_support_->snapshot();
         bool state_change_authorized = false;
         {
             std::lock_guard<std::mutex> lock(resources_mutex_);
@@ -407,7 +430,13 @@ public:
             snapshot.last_sequence,
             snapshot.queued_events,
             snapshot.dropped_events,
-            state_change_authorized};
+            state_change_authorized,
+            unsolicited.enabled,
+            unsolicited.class_mask,
+            unsolicited.last_sequence,
+            unsolicited.queued_events,
+            unsolicited.dropped_events,
+            unsolicited.fragments};
     }
 
     BackendOperationResult connect(const ConnectionConfig& config) override
@@ -429,6 +458,7 @@ public:
             session_id = ++next_session_id_;
         }
         events_->begin_session(session_id);
+        unsolicited_support_->begin_session(session_id);
 
         BackendResources created;
         std::string safety_token;
@@ -464,12 +494,13 @@ public:
 
             created.master = created.channel->AddMaster(
                 "pytest-master",
-                std::make_shared<NoOpSoeHandler>(),
+                unsolicited_support_->handler(),
                 read_support_->master_application(),
                 stack_config);
         }
         catch (const std::exception& error) {
             shutdown_resources(std::move(created));
+            unsolicited_support_->end_session();
             return BackendOperationResult::failure(
                 ErrorCode::InternalError,
                 "failed to create the OpenDNP3 TCP channel",
@@ -560,6 +591,7 @@ public:
         const auto session_id = status().session_id;
         command_support_->cancel_active();
         read_support_->cancel_active();
+        unsolicited_support_->cancel_active();
         if (const auto cleanup_error = shutdown_resources(detach_resources())) {
             return BackendOperationResult::failure(
                 ErrorCode::InternalError,
@@ -600,6 +632,32 @@ public:
         return read_support_->read(master, config);
     }
 
+    BackendOperationResult enable_unsolicited(
+        const UnsolicitedControlConfig& config) override
+    {
+        const auto master = master_for_read();
+        if (!master) {
+            return unsolicited_unavailable("enable");
+        }
+        return unsolicited_support_->enable(master, config);
+    }
+
+    BackendOperationResult disable_unsolicited(
+        const UnsolicitedControlConfig& config) override
+    {
+        const auto master = master_for_read();
+        if (!master) {
+            return unsolicited_unavailable("disable");
+        }
+        return unsolicited_support_->disable(master, config);
+    }
+
+    BackendOperationResult wait_unsolicited(
+        const WaitUnsolicitedConfig& config) override
+    {
+        return unsolicited_support_->wait(config);
+    }
+
     BackendOperationResult select_and_operate(const CommandConfig& config) override
     {
         std::shared_ptr<opendnp3::IMaster> master;
@@ -636,6 +694,7 @@ public:
         }
         command_support_->cancel_active();
         read_support_->cancel_active();
+        unsolicited_support_->cancel_active();
         shutdown_resources(detach_resources());
     }
 
@@ -699,19 +758,35 @@ private:
                  {"session_id", snapshot.session_id}});
     }
 
+    BackendOperationResult unsolicited_unavailable(const char* action) const
+    {
+        const auto snapshot = events_->snapshot();
+        return BackendOperationResult::failure(
+            ErrorCode::NotConnected,
+            "no active DNP3 master session is available for unsolicited control",
+            Json{{"action", action},
+                 {"channel_state", snapshot.state},
+                 {"session_id", snapshot.session_id}});
+    }
+
     BackendResources detach_resources() noexcept
     {
-        std::lock_guard<std::mutex> lock(resources_mutex_);
-        BackendResources detached{
-            std::move(manager_), std::move(channel_), std::move(master_)};
-        session_active_ = false;
-        safety_token_.clear();
+        BackendResources detached;
+        {
+            std::lock_guard<std::mutex> lock(resources_mutex_);
+            detached = BackendResources{
+                std::move(manager_), std::move(channel_), std::move(master_)};
+            session_active_ = false;
+            safety_token_.clear();
+        }
+        unsolicited_support_->end_session();
         return detached;
     }
 
     std::shared_ptr<ChannelEventStore> events_;
     std::unique_ptr<OpenDnp3CommandSupport> command_support_;
     std::unique_ptr<OpenDnp3ReadSupport> read_support_;
+    std::unique_ptr<OpenDnp3UnsolicitedSupport> unsolicited_support_;
     mutable std::mutex resources_mutex_;
     std::unique_ptr<opendnp3::DNP3Manager> manager_;
     std::shared_ptr<opendnp3::IChannel> channel_;
@@ -725,9 +800,10 @@ private:
 
 }  // namespace
 
-std::unique_ptr<IMasterBackend> make_opendnp3_backend()
+std::unique_ptr<IMasterBackend> make_opendnp3_backend(
+    const std::size_t unsolicited_queue_capacity)
 {
-    return std::make_unique<OpenDnp3Backend>();
+    return std::make_unique<OpenDnp3Backend>(unsolicited_queue_capacity);
 }
 
 }  // namespace dnp3host

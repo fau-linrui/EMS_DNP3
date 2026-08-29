@@ -15,6 +15,47 @@ class ClientStateError(Dnp3ClientError):
     """The requested operation is invalid for the client lifecycle state."""
 
 
+class SafetyIncidentError(Dnp3ClientError):
+    """Base class for persistent uncertain-control safety incidents."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        incident_id: str | None = None,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.incident_id = incident_id
+        self.details = dict(details or {})
+
+
+class SafetyIncidentConfigurationError(SafetyIncidentError):
+    """Persistent incident storage was not configured for a control request."""
+
+
+class UnresolvedSafetyIncidentError(SafetyIncidentError):
+    """A state-changing request was blocked by an active incident lock."""
+
+
+class SafetyIncidentAcknowledgmentError(SafetyIncidentError):
+    """An incident acknowledgment was incomplete or did not match the lock."""
+
+
+class SafetyIncidentPersistenceError(SafetyIncidentError):
+    """An uncertain result occurred but its persistent lock could not be written."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        original_error: HostCommandError | None = None,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message, details=details)
+        self.original_error = original_error
+
+
 class HostProcessError(Dnp3ClientError):
     """Base class for failures involving the native child process."""
 
@@ -25,6 +66,8 @@ class HostProcessError(Dnp3ClientError):
     ) -> None:
         super().__init__(message)
         self.diagnostics = diagnostics
+        self.incident_id: str | None = None
+        self.details: dict[str, Any] = {}
 
 
 class HostStartError(HostProcessError):

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dnp3-master/package-manifest.schema.json",
+  "title": "DNP3 portable package manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "package_version", "manifest_scope", "files"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "package_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "manifest_scope": {
+      "const": "all packaged files except package-manifest.json"
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "size_bytes", "sha256"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "size_bytes": {"type": "integer", "minimum": 0},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    }
+  }
+}

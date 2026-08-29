@@ -1,4 +1,4 @@
-# Python 子进程客户端与 pytest 集成（0.2.0）
+# Python 子进程客户端与 pytest 集成（0.3.0）
 
 `dnp3_master` 核心只依赖 Python 标准库。它启动 `dnp3-master-host.exe`、自动完成 hello、串行化单个在途请求、持续排空 stdout/stderr、验证严格响应、处理超时/异常退出，并在 Windows Job Object 中拥有整个子进程树。
 
@@ -16,6 +16,7 @@ from dnp3_master import (
 
 process = HostProcessConfig(
     executable=Path("bin/dnp3-master-host.exe"),
+    safety_incident_directory=Path("evidence/local/safety-incidents"),
     startup_timeout=5.0,
     request_timeout=10.0,
     shutdown_timeout=2.0,
@@ -48,6 +49,18 @@ with Dnp3MasterClient(process) as master:
 `ReadHeader` 提供 `all_objects`、`range8/range16`、`count8/count16` 工厂。一次 `read` 接受 1～64 个 Header。结果为不可变 `ReadTaskResult`，含 `measurements`、`summary`、`fragments`、`iin`、`timings` 和原始映射；`measurements_of_kind()` 可按统一 kind 过滤。
 
 `return_mode="summary"` 不在结果中保留或返回逐点对象，适合大响应；`max_measurements` 仍是完整性上限，超过时 host 返回 `QUEUE_OVERFLOW`。
+
+## 主动上送 API
+
+主动上送只由调用方显式控制：
+
+```python
+enabled = master.enable_unsolicited((1, 2), timeout=5.0)
+batch = master.wait_unsolicited(wait_timeout=10.0, max_events=256)
+master.disable_unsolicited((1, 2), timeout=5.0)
+```
+
+每条 `MeasurementRecord` 包含 `source="unsolicited"`、`session_id`、分片和接收顺序。持久队列默认上限 4096，满时 drop-oldest 并增加 `dropped_total`；调用方不能忽略丢弃计数。断开会结束收集并清队列。本机已覆盖启停、G2V2/G32V7、禁用后无新事件和队列溢出；Confirm 丢失、重发/重复、序号回绕等原始时序仍保持未验证。
 
 ## 控制 API
 
@@ -87,7 +100,9 @@ assert all(point.status == "SUCCESS" for point in result.point_results)
 
 还提供 `AnalogOutputCommand.int32/float32/double64` 和 `direct_operate()`。每点结果保留原始/解析 CommandPointState、CommandStatus 和请求关联。调用方不能只检查 `all_success` 而忽略每点状态。
 
-Python 客户端只在内存保存 host 返回的一次性令牌，不提供公开 token 属性；高层 `connect()` 返回值会移除令牌并标记 `token_exposed=False`，诊断尾部也会过滤令牌。disconnect/close 后清除。令牌不是认证或 SAv5。控制 timeout 后 host 可能仍执行，客户端将会话视为未知状态并终止进程；业务层不得自动重试。Direct Operate 的 `response_mode="no_response"` 当前稳定返回 `UNSUPPORTED_BY_BACKEND`。
+Python 客户端只在内存保存 host 返回的一次性令牌，不提供公开 token 属性；高层 `connect()` 返回值会移除令牌并标记 `token_exposed=False`，诊断尾部也会过滤令牌。disconnect/close 后清除。令牌不是认证或 SAv5。
+
+状态改变 API 还要求 `HostProcessConfig.safety_incident_directory`。控制 timeout、host 通信失败、非法控制结果或 `execution_uncertain=true` 后，客户端先按 DUT 哈希持久化事故锁，再清令牌并终止 host。新进程可继续只读，但控制会抛出 `UnresolvedSafetyIncidentError`；完成独立读回后用 `active_safety_incident()` 和 `acknowledge_safety_incident()` 显式归档。不能删除锁或自动重试，详见 `docs/SAFETY_INCIDENT_RUNBOOK.md`。Direct Operate 的 `response_mode="no_response"` 当前稳定返回 `UNSUPPORTED_BY_BACKEND`。
 
 ## 嵌入现有 pytest
 
@@ -102,6 +117,7 @@ pytest_plugins = ("dnp3_master.pytest_plugin",)
 | Fixture | Scope/内容 |
 |---|---|
 | `dnp3_pics` | session；已校验的 capability -> 三态映射 |
+| `dnp3_point_table` | session；严格加载的只读点表，未配置时为 `None` |
 | `dnp3_host_config` | session；可覆盖的 `HostProcessConfig` |
 | `host_process` | session；已完成 hello 的客户端，teardown 幂等清理 |
 | `master_client` | session；`host_process` 的别名边界 |
@@ -154,6 +170,9 @@ def test_real_ems_read(connected_master):
 | `--dnp3-host-exe` | `DNP3_MASTER_HOST_EXE` | 必填（使用 fixture 时） |
 | `--dnp3-pics-file` | `DNP3_PICS_FILE` | 无 |
 | `--dnp3-capability-matrix` | `DNP3_CAPABILITY_MATRIX` | 自动查找 `config/capability_matrix.csv` |
+| `--dnp3-points-file` | `DNP3_POINTS_FILE` | 无；提供时在收集前严格校验 |
+| `--dnp3-evidence-dir` | `DNP3_EVIDENCE_DIR` | 无；提供时生成脱敏运行清单 |
+| `--dnp3-safety-incident-dir` | `DNP3_SAFETY_INCIDENT_DIR` | `evidence/local/safety-incidents` |
 | `--dnp3-unknown-policy` | `DNP3_UNKNOWN_POLICY` | `xfail` |
 | `--dnp3-outstation-host` | `DNP3_OUTSTATION_HOST` | 使用 connected fixture 时必填 |
 | `--dnp3-outstation-port` | `DNP3_OUTSTATION_PORT` | 20000 |
@@ -176,6 +195,10 @@ host 启动/请求/关闭 timeout 也可通过 `--dnp3-startup-timeout`、`--dnp
 | `HostProtocolError` | stdout 非协议文本、非法 UTF-8/JSON、重复键、错误 Schema/ID/结果类型 |
 | `HostCommandError` | host 返回合法错误；读取 `.code` 和 `.details` |
 | `ClientStateError` | 对未启动、失败、关闭或未安全解锁的客户端操作 |
+| `SafetyIncidentConfigurationError` | 状态改变 API 没有可持久化的事故目录/DUT 身份 |
+| `UnresolvedSafetyIncidentError` | 同一 DUT 有未确认的不确定控制结果，控制在发包前被阻止 |
+| `SafetyIncidentAcknowledgmentError` | 事故 ID、确认字段或独立读回数据不完整/不匹配 |
+| `SafetyIncidentPersistenceError` | 事故锁无法可靠写入、读取、归档；必须人工停止控制 |
 
 `client.diagnostics` 提供 PID、退出码、stdout/stderr 有界尾部、Job Object 状态和清理错误。默认每流最多保留最后 64 KiB，响应队列有界；正常 stdout 协议响应不会进入诊断，只有畸形 stdout 会保留有界尾部，且令牌字段会再次过滤。
 
@@ -198,6 +221,8 @@ python/src/dnp3_master/
 bin/dnp3-master-host.exe
 bin/build-info.json
 schemas/
+config/capability_matrix.csv
+package-manifest.json
 ```
 
 完整迁移、构建、首次 EMS 连接和排错步骤见 `docs/BEGINNER_MIGRATION_BUILD_USE_GUIDE.md`。

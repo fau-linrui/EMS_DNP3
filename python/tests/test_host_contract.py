@@ -73,7 +73,9 @@ def test_hello_status_and_shutdown(host_executable: Path) -> None:
         "class_poll",
         "connect",
         "direct_operate",
+        "disable_unsolicited",
         "disconnect",
+        "enable_unsolicited",
         "get_status",
         "hello",
         "integrity_poll",
@@ -82,6 +84,7 @@ def test_hello_status_and_shutdown(host_executable: Path) -> None:
         "shutdown",
         "stats",
         "wait_event",
+        "wait_unsolicited",
     ]
     assert set(result["capabilities"]) == {
         "APP.CLASS.EVENTS",
@@ -90,24 +93,35 @@ def test_hello_status_and_shutdown(host_executable: Path) -> None:
         "APP.FC.03.SELECT",
         "APP.FC.04.OPERATE",
         "APP.FC.05.DIRECT_OPERATE",
+        "APP.FC.14.ENABLE_UNSOLICITED",
+        "APP.FC.15.DISABLE_UNSOLICITED",
+        "APP.FC.82.UNSOLICITED_RESPONSE",
         "APP.TASK.LIFECYCLE",
         "APP.TASK.OBSERVABILITY",
+        "APP.UNSOLICITED",
         "CHANNEL.TCP.CLIENT",
         "CHANNEL.RECONNECT",
         "IIN.IIN2.1.OBJECT_UNKNOWN",
         "OBJ.G1.V2",
+        "OBJ.G2.V2",
         "OBJ.G3.V2",
         "OBJ.G10.V2",
         "OBJ.G12.V1",
         "OBJ.G20.V1",
         "OBJ.G21.V1",
         "OBJ.G30.V5",
+        "OBJ.G32.V7",
         "OBJ.G40.V1",
+        "OBJ.G40.V3",
         "OBJ.G41.V1",
         "OBJ.G41.V2",
         "OBJ.G41.V3",
         "OBJ.G41.V4",
         "OBJ.G50.V4",
+        "OBJ.G60.V1",
+        "OBJ.G60.V2",
+        "OBJ.G60.V3",
+        "OBJ.G60.V4",
         "OBJ.G110.LENGTH_VARIANTS",
     }
     assert len(result["capability_matrix_sha256"]) == 64
@@ -117,6 +131,14 @@ def test_hello_status_and_shutdown(host_executable: Path) -> None:
     assert status["result"]["state"] == "READY"
     assert status["result"]["channel"]["session_active"] is False
     assert status["result"]["channel"]["state"] == "CLOSED"
+    assert status["result"]["unsolicited"] == {
+        "enabled": False,
+        "class_mask": 0,
+        "last_receive_sequence": 0,
+        "queued_measurements": 0,
+        "dropped_measurements": 0,
+        "fragments": 0,
+    }
     assert status["result"]["metrics"]["requests_received"] == 2
 
     shutdown = responses[2]

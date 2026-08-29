@@ -2,7 +2,7 @@
 
 本文面向不熟悉 C++ 的测试开发人员。正常使用时，你只需要写 Python/pytest；C++ 已封装在 `dnp3-master-host.exe` 中，不需要在测试代码里调用 OpenDNP3，也不需要理解 C++ 指针或编译器细节。
 
-> 当前版本：0.2.0，目标平台 Windows x64，固定协议栈 OpenDNP3 3.1.2。当前实现已完成本机 TCP、Read/Class Poll、测量值/IIN、CROB 和四种 Analog Output 控制的同栈回归，但尚未代表真实 EMS 互操作或 IEEE 一致性认证。
+> 当前版本：0.3.0，目标平台 Windows x64，固定协议栈 OpenDNP3 3.1.2。当前实现已完成本机 TCP、Read/Class Poll、主动上报、测量值/IIN、CROB 和四种 Analog Output 控制的同栈回归，但尚未代表真实 EMS 互操作或 IEEE 一致性认证。
 
 ## 1. 先理解四个目录
 
@@ -39,10 +39,12 @@ cd D:\Work\Code\EMS_DNP3
 产物位于：
 
 ```text
-out\package\ems-dnp3-pytest-0.2.0\
+out\package\ems-dnp3-pytest-0.3.0\
+out\package\ems-dnp3-pytest-0.3.0.zip
+out\package\ems-dnp3-pytest-0.3.0.zip.sha256
 ```
 
-将这个目录整体复制到内网。包中包含主程序、只用于本机自检的测试从站、Python 源码、Schema、能力矩阵、依赖锁、许可证和本文档，不包含 IEEE 标准 PDF、EMS 本地配置、抓包或密钥。
+打包过程会在临时目录解开 ZIP、逐文件验证 `package-manifest.json`，再执行一次 DNP3 读写回环自检。将 ZIP 和 `.sha256` 一起传入内网；传输后先用 `Get-FileHash -Algorithm SHA256` 与旁车文件第一列比对，再解压。包中包含主程序、只用于本机自检的测试从站、Python 源码、Schema、能力矩阵、严格点表示例、只读 pytest 示例、依赖锁、许可证和本文档，不包含 IEEE 标准 PDF、EMS 本地配置、抓包或密钥。
 
 内网目标机器若不安装 Build Tools，通常仍需安装 Microsoft Visual C++ 2015–2022 Redistributable x64 和 Python 3.10 或更高版本。
 
@@ -96,11 +98,20 @@ python -m venv .venv
 
 完全离线时，核心 `dnp3_master` 包没有第三方运行时依赖，但 pytest/setuptools 仍需由内网软件源或本地 wheel 提供。如果内网已有 pytest，也可以暂不执行 pip 安装，运行脚本前把 `python\src` 加到 `PYTHONPATH`。
 
+安装后先执行环境体检。它会检查 VS/CMake/Python/pytest、全部离线源码摘要和能力矩阵，不连接互联网或 EMS：
+
+```powershell
+.\scripts\doctor.ps1
+```
+
+只有最后显示 `READY` 才继续构建。需要机器可读结果时使用 `.\scripts\doctor.ps1 -Json`。
+
 ## 4. 一键构建、测试和本机自检
 
 在仓库根目录执行：
 
 ```powershell
+.\scripts\doctor.ps1
 .\scripts\build.ps1 -Preset windows-msvc-release
 .\scripts\test.ps1 -Preset windows-msvc-release
 .\scripts\run-local-self-test.ps1 -Preset windows-msvc-release
@@ -140,6 +151,8 @@ out\build\windows-msvc-release\bin\dnp3-local-test-outstation.exe
     python\src\dnp3_master\
     config\
     schemas\
+    examples\pytest_ems\
+    package-manifest.json
     ...
 ```
 
@@ -173,6 +186,7 @@ bin\dnp3-master-host.exe
 bin\build-info.json
 config\capability_matrix.csv
 config\ems_profile.example.json
+config\points.example.csv
 schemas\
 dependency-locks\
 licenses\
@@ -200,7 +214,10 @@ THIRD_PARTY_LICENSES.txt
 
 ```powershell
 Copy-Item .\config\ems_profile.example.json .\config\ems.local.json
+Copy-Item .\config\points.example.csv .\config\points.local.csv
 ```
+
+`points.local.csv` 必须保持示例中的精确列名。加载器会拒绝未知/缺失列、重复 point ID、重复“点类型+索引”、非法对象变体、非法 Class、非有限量程和错误布尔值。该表只驱动只读断言；控制点危险等级、反馈关系和批准值应留在内部受控控制清单中，不能擅自在 CSV 中添加列。
 
 只根据正式 Device Profile/PICS 或经批准的项目决定，把每项填写为：
 
@@ -237,6 +254,8 @@ def test_ems_integrity_read(connected_master):
 .\.venv\Scripts\python.exe -m pytest .\tests\test_ems_read.py -v `
   --dnp3-host-exe ".\third_party\ems_dnp3\bin\dnp3-master-host.exe" `
   --dnp3-pics-file ".\config\ems.local.json" `
+  --dnp3-points-file ".\config\points.local.csv" `
+  --dnp3-evidence-dir ".\evidence\local" `
   --dnp3-unknown-policy error `
   --dnp3-outstation-host "192.0.2.10" `
   --dnp3-outstation-port 20000 `
@@ -245,6 +264,10 @@ def test_ems_integrity_read(connected_master):
 ```
 
 将示例 IP 和地址换成实验 EMS 的真实参数。`--dnp3-unknown-policy error` 适合正式执行，可防止因 PICS 漏填而悄悄跳过。
+
+如不想从零写用例，可把包内 `examples\pytest_ems` 复制进既有框架。未提供点表时示例会安全跳过；提供严格点表后，它只执行 Static Read 和范围断言，不包含控制。点表会同时校验点类型、Group、合法 Variation、索引位宽和事件字段组合；每个参数化用例还会自动附加精确的对象能力 ID，以便 PICS 在连接 DUT 前完成门控。
+
+`--dnp3-evidence-dir` 会为每次运行创建独立目录，生成脱敏 `manifest.json` 和 `pytest-results.json`，只记录 PICS/点表/矩阵的文件名、大小和 SHA-256，不复制私有原文。记录器会替换已知的项目、测试、host、输入和证据绝对路径，并遮盖常见密钥字段；但任意第三方库输出可能包含记录器不了解的业务数据，因此证据对外传递前仍必须人工复核。
 
 范围读取示例：
 
@@ -263,6 +286,17 @@ def test_one_analog_point(connected_master):
 ```
 
 还可调用 `class_poll((1, 2, 3))`，或一次向 `read([...])` 传入最多 64 个严格校验的 Header。大量点优先使用 `return_mode="summary"`，避免在结果中保留和传输巨大的逐点 JSON。当前 EMS 约定声称事件/Class 1～3 Read 恒为空，这与标准事件轮询存在差异；只有在“确认无事件”和“人工产生已知事件”两个场景都保存证据后，才能形成 DUT 结论。
+
+主动上送必须显式启停，不会在连接时偷偷开启：
+
+```python
+connected_master.enable_unsolicited((1, 2), timeout=5.0)
+batch = connected_master.wait_unsolicited(wait_timeout=10.0, max_events=256)
+assert all(item.source == "unsolicited" for item in batch.measurements)
+connected_master.disable_unsolicited((1, 2), timeout=5.0)
+```
+
+队列默认最多保留 4096 条并采用 drop-oldest；`dropped_total > 0` 必须判失败并保存证据。当前已完成 FC20/FC21、G60V2/V3/V4 和 G2V2/G32V7 的本机同栈验证；Confirm 丢失、序号回绕、重发/重复等原始时序仍需独立故障注入和真实 EMS 验证。
 
 ## 7. 控制用例：默认永久锁住，只有实验室可解锁
 
@@ -307,7 +341,9 @@ def test_authorized_crob_sbo(connected_master):
 
 连接成功时 C++ host 生成一次性会话令牌，Python 客户端只在内存中保存，断开或进程退出即失效。它是防误操作联锁，不是身份认证、访问控制或 Secure Authentication 的替代品。
 
-控制超时后执行状态可能不确定；框架不会自动重试。必须先查 EMS 状态和点位读回，再由负责人决定是否发起一个新的操作。当前 OpenDNP3 后端不支持 `DIRECT_OPERATE_NR`，请求会明确返回 `UNSUPPORTED_BY_BACKEND`，不会伪造成功。
+控制超时或 host 通信异常后执行状态可能不确定；框架不会自动重试，并会按 DUT 身份哈希写入跨进程事故锁、销毁 host 和清除令牌。新进程仍可做只读查询，但所有控制会在发包前被拦截。必须独立读回、记录证据，并用准确事故 ID、确认人和读回摘要显式归档后才能解除；绝对不要删除 `active/*.json`。完整流程和代码见 `docs/SAFETY_INCIDENT_RUNBOOK.md`。
+
+pytest 默认把锁放在 `evidence/local/safety-incidents`。直接使用 `Dnp3MasterClient` 时，必须给 `HostProcessConfig` 配置 `safety_incident_directory`，否则控制会 fail-closed。当前 OpenDNP3 后端不支持 `DIRECT_OPERATE_NR`，请求会明确返回 `UNSUPPORTED_BY_BACKEND`，不会伪造成功。
 
 ## 8. 常用环境变量
 
@@ -318,6 +354,9 @@ def test_authorized_crob_sbo(connected_master):
 | `DNP3_MASTER_HOST_EXE` | host EXE 路径 |
 | `DNP3_PICS_FILE` | 本地 EMS PICS JSON |
 | `DNP3_CAPABILITY_MATRIX` | 能力矩阵路径（无法自动找到时使用） |
+| `DNP3_POINTS_FILE` | 严格只读点表 CSV |
+| `DNP3_EVIDENCE_DIR` | 脱敏 pytest 证据输出根目录 |
+| `DNP3_SAFETY_INCIDENT_DIR` | 不确定控制结果的持久事故锁目录 |
 | `DNP3_UNKNOWN_POLICY` | `xfail`、`skip` 或 `error` |
 | `DNP3_OUTSTATION_HOST` / `DNP3_OUTSTATION_PORT` | EMS TCP 地址/端口 |
 | `DNP3_MASTER_ADDRESS` / `DNP3_OUTSTATION_ADDRESS` | DNP3 链路地址 |
@@ -341,6 +380,9 @@ def test_authorized_crob_sbo(connected_master):
 | 用例显示 `xfailed` | PICS 未提供、能力缺失或为 `UNKNOWN`；查看 `-ra` 原因 |
 | 正向用例被跳过 | PICS 将能力声明为 `NOT_SUPPORTED` |
 | `SAFETY_INTERLOCK` | 未按第 7 节完成全部解锁条件，或令牌已因断开而过期 |
+| `SafetyIncidentConfigurationError` | 直接调用控制时未配置持久事故目录；配置后重试，原命令尚未发出 |
+| `UnresolvedSafetyIncidentError` | 该 DUT 有未关闭的不确定结果；只读核对并按事故手册显式确认，禁止删锁或重发 |
+| `SafetyIncidentPersistenceError` | 锁无法可靠落盘/读取；停止全部控制，保留现场并修复存储 |
 | 命令返回但 `all_success=False` | 检查每个 `point_results[i].status`，不能只看整个批次 |
 | `QUEUE_OVERFLOW` | 提高经评审的 `max_measurements`，或改用 `return_mode="summary"`；不要忽略数据丢失 |
 | `OBJECT_UNKNOWN` IIN | PICS/对象组/变体可能与 EMS 不一致；保存原始 IIN 并停止扩大测试范围 |
@@ -365,7 +407,7 @@ git status
 git pull --ff-only
 ```
 
-更新后重新构建、执行完整测试和本机自检。通过 `bin\build-info.json` 记录 host 版本、OpenDNP3 commit、Git commit、工作区状态、构建配置和能力矩阵哈希，运行报告应保存这份信息；正式证据只使用 `git_worktree_state` 为 `clean` 的构建。
+更新后先运行 `doctor.ps1`，再重新构建、执行完整测试和本机自检。通过 `bin\build-info.json` 记录 host 版本、OpenDNP3 commit、Git commit、工作区状态、构建配置和能力矩阵哈希，运行报告应保存这份信息；正式证据只使用 `git_worktree_state` 为 `clean` 的构建。复制可移植 ZIP 时同时保存 `.sha256` 和解包后的 `package-manifest.json`。
 
 严禁提交或上传：IEEE 标准 PDF、EMS IP/账号/密钥、本地点表、本地 PICS、PCAP、生产日志和未经脱敏的报告。项目自带 `.gitignore` 只是最后一道防线，提交前仍必须检查 `git status`。
 

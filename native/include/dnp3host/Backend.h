@@ -33,6 +33,16 @@ struct WaitEventConfig {
     std::size_t max_events{64};
 };
 
+struct UnsolicitedControlConfig {
+    std::uint32_t timeout_ms{5000};
+    std::uint8_t class_mask{0x0E};
+};
+
+struct WaitUnsolicitedConfig {
+    std::uint32_t timeout_ms{0};
+    std::size_t max_events{256};
+};
+
 enum class ReturnMode {
     Detail,
     Summary,
@@ -144,6 +154,12 @@ struct BackendStatus {
     std::size_t queued_events{0};
     std::uint64_t dropped_events{0};
     bool state_change_authorized{false};
+    bool unsolicited_enabled{false};
+    std::uint8_t unsolicited_class_mask{0};
+    std::uint64_t unsolicited_last_sequence{0};
+    std::size_t queued_unsolicited_events{0};
+    std::uint64_t dropped_unsolicited_events{0};
+    std::uint64_t unsolicited_fragments{0};
 };
 
 class IMasterBackend {
@@ -161,6 +177,12 @@ public:
     virtual BackendOperationResult integrity_poll(const ReadOptions& options) = 0;
     virtual BackendOperationResult class_poll(const ClassPollConfig& config) = 0;
     virtual BackendOperationResult read(const ReadConfig& config) = 0;
+    virtual BackendOperationResult enable_unsolicited(
+        const UnsolicitedControlConfig& config) = 0;
+    virtual BackendOperationResult disable_unsolicited(
+        const UnsolicitedControlConfig& config) = 0;
+    virtual BackendOperationResult wait_unsolicited(
+        const WaitUnsolicitedConfig& config) = 0;
     virtual BackendOperationResult select_and_operate(const CommandConfig& config) = 0;
     virtual BackendOperationResult direct_operate(const CommandConfig& config) = 0;
     virtual BackendOperationResult wait_event(const WaitEventConfig& config) = 0;

@@ -23,6 +23,11 @@ from dnp3_master import (
     ReadHeader,
     ReadTaskResult,
     TcpConnectionConfig,
+    UnsolicitedBatchResult,
+    UnsolicitedControlResult,
+    SafetyIncidentAcknowledgmentError,
+    SafetyIncidentConfigurationError,
+    UnresolvedSafetyIncidentError,
 )
 from dnp3_master.client import _TailBuffer
 
@@ -129,6 +134,27 @@ def test_tcp_helpers_use_validated_protocol_parameters() -> None:
         explicit = client.read([header], timeout=0.25)
         assert explicit.raw["received"]["headers"] == [header.to_params()]
 
+        enabled = client.enable_unsolicited((1, 2), timeout=0.25)
+        assert isinstance(enabled, UnsolicitedControlResult)
+        assert enabled.action == "enable"
+        assert enabled.classes == (1, 2)
+
+        unsolicited = client.wait_unsolicited(
+            wait_timeout=0.025, max_events=7
+        )
+        assert isinstance(unsolicited, UnsolicitedBatchResult)
+        assert unsolicited.enabled is True
+        assert unsolicited.classes == (1, 2)
+        assert unsolicited.measurements[0].source == "unsolicited"
+        assert unsolicited.measurements[0].session_id == 1
+
+        disabled = client.disable_unsolicited((1, 2), timeout=0.25)
+        assert disabled.action == "disable"
+        after_disable = client.wait_unsolicited()
+        assert after_disable.enabled is False
+        assert after_disable.measurements == ()
+        assert after_disable.timed_out is True
+
         disconnected = client.disconnect()
         assert disconnected["state"] == "READY"
         with pytest.raises(HostCommandError) as captured:
@@ -217,6 +243,11 @@ def test_read_header_factories_and_validation() -> None:
         ("class_poll", {"classes": (1, 1)}, "duplicate"),
         ("read", {"headers": ()}, "headers"),
         ("read", {"headers": ({"group": 1},)}, "ReadHeader"),
+        ("enable_unsolicited", {"classes": ()}, "classes"),
+        ("disable_unsolicited", {"classes": (1, 1)}, "duplicate"),
+        ("enable_unsolicited", {"timeout": 0.01}, "timeout"),
+        ("wait_unsolicited", {"max_events": 257}, "max_events"),
+        ("wait_unsolicited", {"wait_timeout": 61}, "wait_timeout"),
     ],
 )
 def test_read_helpers_reject_invalid_inputs(
@@ -261,9 +292,13 @@ def test_command_models_validate_ranges_and_serialize() -> None:
         AnalogOutputCommand.double64(0, 10**10_000)
 
 
-def test_command_helpers_require_lab_session_and_preserve_batch_results() -> None:
+def test_command_helpers_require_lab_session_and_preserve_batch_results(
+    tmp_path: Path,
+) -> None:
     locked_connection = TcpConnectionConfig(host="127.0.0.1")
-    with Dnp3MasterClient(fake_config("tcp_api")) as client:
+    with Dnp3MasterClient(
+        fake_config("tcp_api", safety_incident_directory=tmp_path / "incidents")
+    ) as client:
         client.connect(locked_connection)
         assert client.state_change_authorized is False
         with pytest.raises(ClientStateError, match="locked"):
@@ -278,7 +313,9 @@ def test_command_helpers_require_lab_session_and_preserve_batch_results() -> Non
             allow_state_change=True,
         ),
     )
-    with Dnp3MasterClient(fake_config("tcp_api")) as client:
+    with Dnp3MasterClient(
+        fake_config("tcp_api", safety_incident_directory=tmp_path / "incidents")
+    ) as client:
         connected = client.connect(authorized_connection)
         assert connected["safety"]["state_change_authorized"] is True
         assert connected["safety"]["token_exposed"] is False
@@ -320,7 +357,9 @@ def test_command_helpers_require_lab_session_and_preserve_batch_results() -> Non
     assert "simulated-dut" not in diagnostics.stdout_tail
 
 
-def test_command_helper_rejects_duplicate_points_and_invalid_options() -> None:
+def test_command_helper_rejects_duplicate_points_and_invalid_options(
+    tmp_path: Path,
+) -> None:
     connection = TcpConnectionConfig(
         host="127.0.0.1",
         safety=LabSafetyConfig(
@@ -329,7 +368,9 @@ def test_command_helper_rejects_duplicate_points_and_invalid_options() -> None:
             allow_state_change=True,
         ),
     )
-    with Dnp3MasterClient(fake_config("tcp_api")) as client:
+    with Dnp3MasterClient(
+        fake_config("tcp_api", safety_incident_directory=tmp_path / "incidents")
+    ) as client:
         client.connect(connection)
         duplicate = CrobCommand(index=1, operation="latch_on")
         with pytest.raises(ValueError, match="repeat"):
@@ -340,7 +381,9 @@ def test_command_helper_rejects_duplicate_points_and_invalid_options() -> None:
             client.direct_operate([duplicate], timeout=0.01)
 
 
-def test_uncertain_command_result_invalidates_the_session() -> None:
+def test_uncertain_command_result_creates_cross_process_lock_until_readback_ack(
+    tmp_path: Path,
+) -> None:
     connection = TcpConnectionConfig(
         host="127.0.0.1",
         safety=LabSafetyConfig(
@@ -349,7 +392,10 @@ def test_uncertain_command_result_invalidates_the_session() -> None:
             allow_state_change=True,
         ),
     )
-    client = Dnp3MasterClient(fake_config("tcp_api"))
+    incident_directory = tmp_path / "incidents"
+    client = Dnp3MasterClient(
+        fake_config("tcp_api", safety_incident_directory=incident_directory)
+    )
     client.start()
     client.connect(connection)
 
@@ -361,10 +407,148 @@ def test_uncertain_command_result_invalidates_the_session() -> None:
 
     assert captured.value.code == "RESPONSE_TIMEOUT"
     assert captured.value.details["execution_uncertain"] is True
+    assert captured.value.details["persistent_safety_lock"] is True
+    incident_id = captured.value.details["incident_id"]
     assert client.state_change_authorized is False
     assert not client.is_running
     with pytest.raises(ClientStateError, match="closed"):
         client.get_status()
+    client.close()
+
+    active_files = tuple((incident_directory / "active").glob("*.json"))
+    assert len(active_files) == 1
+    persisted = active_files[0].read_text(encoding="utf-8")
+    assert "simulated-dut" not in persisted
+    assert "latch_on" not in persisted
+    assert "0123456789abcdef0123456789abcdef" not in persisted
+
+    with Dnp3MasterClient(
+        fake_config("tcp_api", safety_incident_directory=incident_directory)
+    ) as fresh_client:
+        fresh_client.connect(connection)
+        assert fresh_client.integrity_poll(timeout=0.25).task_status == "SUCCESS"
+        with pytest.raises(UnresolvedSafetyIncidentError) as blocked:
+            fresh_client.direct_operate(
+                [CrobCommand(index=1, operation="latch_off")], timeout=0.25
+            )
+        assert blocked.value.incident_id == incident_id
+        assert fresh_client.is_running
+
+        with pytest.raises(SafetyIncidentAcknowledgmentError, match="does not match"):
+            fresh_client.acknowledge_safety_incident(
+                "INC-00000000-0000-0000-0000-000000000000",
+                acknowledged_by="pytest-reviewer",
+                readback_summary="Independent binary-output-status read completed",
+                readback={"group": 10, "variation": 2, "index": 65535, "value": False},
+                evidence_reference="pytest/readback-001",
+            )
+
+        acknowledged = fresh_client.acknowledge_safety_incident(
+            incident_id,
+            acknowledged_by="pytest-reviewer",
+            readback_summary="Independent binary-output-status read completed",
+            readback={"group": 10, "variation": 2, "index": 65535, "value": False},
+            evidence_reference="pytest/readback-001",
+        )
+        assert acknowledged["status"] == "ACKNOWLEDGED"
+        assert fresh_client.active_safety_incident() is None
+        assert fresh_client.direct_operate(
+            [CrobCommand(index=1, operation="latch_off")], timeout=0.25
+        ).all_success
+
+    assert not tuple((incident_directory / "active").glob("*.json"))
+    assert (incident_directory / "archive" / f"{incident_id}.json").is_file()
+
+
+def test_state_change_fails_closed_without_persistent_incident_directory() -> None:
+    connection = TcpConnectionConfig(
+        host="127.0.0.1",
+        safety=LabSafetyConfig(
+            operator_id="pytest-operator",
+            dut_id="simulated-dut",
+            allow_state_change=True,
+        ),
+    )
+    with Dnp3MasterClient(fake_config("tcp_api")) as client:
+        client.connect(connection)
+        with pytest.raises(SafetyIncidentConfigurationError, match="across Python processes"):
+            client.direct_operate(
+                [CrobCommand(index=0, operation="latch_on")], timeout=0.25
+            )
+        assert client.is_running
+
+
+def test_python_host_timeout_also_creates_persistent_incident(tmp_path: Path) -> None:
+    connection = TcpConnectionConfig(
+        host="127.0.0.1",
+        safety=LabSafetyConfig(
+            operator_id="pytest-operator",
+            dut_id="timeout-dut",
+            allow_state_change=True,
+        ),
+    )
+    incident_directory = tmp_path / "timeout-incidents"
+    client = Dnp3MasterClient(
+        fake_config(
+            "tcp_api",
+            safety_incident_directory=incident_directory,
+            request_timeout=0.1,
+        )
+    )
+    client.start()
+    client.connect(connection)
+
+    with pytest.raises(HostTimeoutError) as captured:
+        client.direct_operate(
+            [CrobCommand(index=65534, operation="latch_on")],
+            timeout=0.25,
+            request_timeout=0.1,
+        )
+
+    assert captured.value.incident_id is not None
+    assert captured.value.details["persistent_safety_lock"] is True
+    assert not client.is_running
+    assert len(tuple((incident_directory / "active").glob("*.json"))) == 1
+    client.close()
+
+
+@pytest.mark.parametrize(
+    ("index", "expected_exception"),
+    [
+        (65533, HostCommandError),
+        (65532, HostProtocolError),
+    ],
+)
+def test_uncertain_or_invalid_success_result_creates_incident(
+    tmp_path: Path,
+    index: int,
+    expected_exception: type[Exception],
+) -> None:
+    connection = TcpConnectionConfig(
+        host="127.0.0.1",
+        safety=LabSafetyConfig(
+            operator_id="pytest-operator",
+            dut_id=f"result-dut-{index}",
+            allow_state_change=True,
+        ),
+    )
+    incident_directory = tmp_path / str(index)
+    client = Dnp3MasterClient(
+        fake_config("tcp_api", safety_incident_directory=incident_directory)
+    )
+    client.start()
+    client.connect(connection)
+
+    with pytest.raises(expected_exception) as captured:
+        client.direct_operate(
+            [CrobCommand(index=index, operation="latch_on")], timeout=0.25
+        )
+
+    assert getattr(captured.value, "incident_id", None) is not None or getattr(
+        captured.value, "details", {}
+    ).get("incident_id")
+    assert not client.is_running
+    assert len(tuple((incident_directory / "active").glob("*.json"))) == 1
     client.close()
 
 

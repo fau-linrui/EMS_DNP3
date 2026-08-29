@@ -45,7 +45,7 @@ def test_build_info_contains_auditable_fixed_identity() -> None:
 
     assert set(build_info) == EXPECTED_KEYS
     assert build_info["schema_version"] == 1
-    assert build_info["host_version"] == "0.2.0"
+    assert build_info["host_version"] == "0.3.0"
     assert GIT_IDENTITY_PATTERN.fullmatch(build_info["git_commit"])
     assert build_info["git_worktree_state"] in {"clean", "dirty", "unavailable"}
     assert build_info["opendnp3_version"] == "3.1.2"

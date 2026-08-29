@@ -37,7 +37,9 @@ public:
             "class_poll",
             "connect",
             "direct_operate",
+            "disable_unsolicited",
             "disconnect",
+            "enable_unsolicited",
             "get_status",
             "hello",
             "integrity_poll",
@@ -45,7 +47,8 @@ public:
             "select_and_operate",
             "shutdown",
             "stats",
-            "wait_event"};
+            "wait_event",
+            "wait_unsolicited"};
     }
 
     dnp3host::Json capabilities() const override
@@ -117,6 +120,35 @@ public:
         return read_result("read");
     }
 
+    dnp3host::BackendOperationResult enable_unsolicited(
+        const dnp3host::UnsolicitedControlConfig& config) override
+    {
+        ++enable_unsolicited_calls;
+        last_unsolicited_control_config = config;
+        return unsolicited_control_result("enable");
+    }
+
+    dnp3host::BackendOperationResult disable_unsolicited(
+        const dnp3host::UnsolicitedControlConfig& config) override
+    {
+        ++disable_unsolicited_calls;
+        last_unsolicited_control_config = config;
+        return unsolicited_control_result("disable");
+    }
+
+    dnp3host::BackendOperationResult wait_unsolicited(
+        const dnp3host::WaitUnsolicitedConfig& config) override
+    {
+        last_wait_unsolicited_config = config;
+        return dnp3host::BackendOperationResult::success(dnp3host::Json{
+            {"session_id", session_id},
+            {"enabled", true},
+            {"classes", dnp3host::Json::array({1, 2, 3})},
+            {"measurements", dnp3host::Json::array()},
+            {"timed_out", true},
+            {"summary", dnp3host::Json::object()}});
+    }
+
     dnp3host::BackendOperationResult select_and_operate(
         const dnp3host::CommandConfig& config) override
     {
@@ -159,12 +191,17 @@ public:
     int read_calls{0};
     int select_and_operate_calls{0};
     int direct_operate_calls{0};
+    int enable_unsolicited_calls{0};
+    int disable_unsolicited_calls{0};
     std::uint64_t session_id{0};
     std::optional<dnp3host::ConnectionConfig> last_config;
     std::optional<dnp3host::WaitEventConfig> last_wait_config;
     std::optional<dnp3host::ReadOptions> last_read_options;
     std::optional<dnp3host::ClassPollConfig> last_class_poll_config;
     std::optional<dnp3host::ReadConfig> last_read_config;
+    std::optional<dnp3host::UnsolicitedControlConfig>
+        last_unsolicited_control_config;
+    std::optional<dnp3host::WaitUnsolicitedConfig> last_wait_unsolicited_config;
     std::optional<dnp3host::CommandConfig> last_command_config;
 
 private:
@@ -194,6 +231,20 @@ private:
             {"task_status", "SUCCESS"},
             {"all_success", true},
             {"requested_points", points}});
+    }
+
+    dnp3host::BackendOperationResult unsolicited_control_result(
+        const char* action)
+    {
+        if (!connected) {
+            return dnp3host::BackendOperationResult::failure(
+                dnp3host::ErrorCode::NotConnected, "not connected");
+        }
+        return dnp3host::BackendOperationResult::success(dnp3host::Json{
+            {"action", action},
+            {"task_id", 3},
+            {"task_status", "SUCCESS"},
+            {"classes", dnp3host::Json::array({1, 2, 3})}});
     }
 };
 
@@ -592,6 +643,25 @@ void test_read_config_contract()
             duplicate_error->details.value("reason", "") == "duplicate_value",
             "duplicate event classes must expose a stable reason");
     }
+
+    dnp3host::UnsolicitedControlConfig unsolicited;
+    error = dnp3host::parse_unsolicited_control_config(
+        dnp3host::Json{{"timeout_ms", 5000},
+                       {"classes", dnp3host::Json::array({1, 2})}},
+        unsolicited);
+    check(!error.has_value(), "unsolicited control bounds must be accepted");
+    check(
+        unsolicited.class_mask == 0x06,
+        "unsolicited classes must map to the OpenDNP3 bit mask");
+
+    dnp3host::WaitUnsolicitedConfig wait_unsolicited;
+    error = dnp3host::parse_wait_unsolicited_config(
+        dnp3host::Json{{"timeout_ms", 60000}, {"max_events", 256}},
+        wait_unsolicited);
+    check(!error.has_value(), "wait_unsolicited bounds must be accepted");
+    error = dnp3host::parse_wait_unsolicited_config(
+        dnp3host::Json{{"max_events", 257}}, wait_unsolicited);
+    check(error.has_value(), "wait_unsolicited must enforce its batch limit");
 }
 
 void test_controller()
@@ -617,7 +687,9 @@ void test_controller()
                 {"class_poll",
                  "connect",
                  "direct_operate",
+                 "disable_unsolicited",
                  "disconnect",
+                 "enable_unsolicited",
                  "get_status",
                  "hello",
                  "integrity_poll",
@@ -625,7 +697,8 @@ void test_controller()
                  "select_and_operate",
                  "shutdown",
                  "stats",
-                 "wait_event"}),
+                 "wait_event",
+                 "wait_unsolicited"}),
         "hello must advertise the injected backend command set");
 
     controller.record_request_received();
@@ -709,6 +782,42 @@ void test_controller()
     check(backend->last_read_config->headers.size() == 1, "read headers must reach backend");
 
     controller.record_request_received();
+    const auto enabled_unsolicited = controller.dispatch(dnp3host::Request{
+        "unsol-enable-1",
+        "enable_unsolicited",
+        dnp3host::Json{{"classes", dnp3host::Json::array({1, 2})}}});
+    check(
+        enabled_unsolicited.response.at("ok") == true,
+        "enable_unsolicited must reach the backend");
+    check(
+        backend->last_unsolicited_control_config->class_mask == 0x06,
+        "enable_unsolicited class mask must be preserved");
+
+    controller.record_request_received();
+    const auto waited_unsolicited = controller.dispatch(dnp3host::Request{
+        "unsol-wait-1",
+        "wait_unsolicited",
+        dnp3host::Json{{"timeout_ms", 25}, {"max_events", 7}}});
+    check(
+        waited_unsolicited.response.at("ok") == true,
+        "wait_unsolicited must reach the backend");
+    check(
+        backend->last_wait_unsolicited_config->max_events == 7,
+        "wait_unsolicited batch limit must be preserved");
+
+    controller.record_request_received();
+    const auto disabled_unsolicited = controller.dispatch(dnp3host::Request{
+        "unsol-disable-1",
+        "disable_unsolicited",
+        dnp3host::Json{{"classes", dnp3host::Json::array({1, 2})}}});
+    check(
+        disabled_unsolicited.response.at("ok") == true,
+        "disable_unsolicited must reach the backend");
+    check(
+        backend->disable_unsolicited_calls == 1,
+        "disable_unsolicited must be dispatched once");
+
+    controller.record_request_received();
     const auto control_params = dnp3host::Json{
         {"safety_token", "0123456789abcdef0123456789abcdef"},
         {"timeout_ms", 2000},
@@ -767,7 +876,7 @@ void test_controller()
         dnp3host::Request{"status-1", "get_status", dnp3host::Json::object()});
     check(status.response.at("result").at("state") == "READY", "host must be ready");
     check(
-        status.response.at("result").at("metrics").at("requests_received") == 17,
+        status.response.at("result").at("metrics").at("requests_received") == 20,
         "status must report received requests");
 
     controller.record_request_received();

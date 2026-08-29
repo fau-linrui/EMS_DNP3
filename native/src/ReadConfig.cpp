@@ -136,6 +136,54 @@ bool has_field(const Json& object, const char* key)
     return object.find(key) != object.end();
 }
 
+std::optional<BackendError> parse_event_classes(
+    const Json& params, std::uint8_t& output)
+{
+    const auto classes = params.find("classes");
+    if (classes == params.end()) {
+        return std::nullopt;
+    }
+    if (!classes->is_array()) {
+        return invalid_parameter("classes", "invalid_type", Json{{"expected", "array"}});
+    }
+    if (classes->empty() || classes->size() > 3) {
+        return invalid_parameter(
+            "classes",
+            "invalid_length",
+            Json{{"minimum_items", 1},
+                 {"maximum_items", 3},
+                 {"received_items", classes->size()}});
+    }
+
+    std::uint8_t mask = 0;
+    for (std::size_t index = 0; index < classes->size(); ++index) {
+        const auto& item = (*classes)[index];
+        if (!item.is_number_integer() && !item.is_number_unsigned()) {
+            return invalid_parameter(
+                "classes[" + std::to_string(index) + "]",
+                "invalid_type",
+                Json{{"expected", "integer"}});
+        }
+        const auto value = item.get<int>();
+        if (value < 1 || value > 3) {
+            return invalid_parameter(
+                "classes[" + std::to_string(index) + "]",
+                "out_of_range",
+                Json{{"minimum", 1}, {"maximum", 3}, {"received", value}});
+        }
+        const auto bit = static_cast<std::uint8_t>(1U << value);
+        if ((mask & bit) != 0U) {
+            return invalid_parameter(
+                "classes[" + std::to_string(index) + "]",
+                "duplicate_value",
+                Json{{"received", value}});
+        }
+        mask = static_cast<std::uint8_t>(mask | bit);
+    }
+    output = mask;
+    return std::nullopt;
+}
+
 std::optional<BackendError> reject_field_for_qualifier(
     const Json& object,
     const char* key,
@@ -293,49 +341,7 @@ std::optional<BackendError> parse_class_poll_config(
         return error;
     }
 
-    const auto classes = params.find("classes");
-    if (classes == params.end()) {
-        return std::nullopt;
-    }
-    if (!classes->is_array()) {
-        return invalid_parameter("classes", "invalid_type", Json{{"expected", "array"}});
-    }
-    if (classes->empty() || classes->size() > 3) {
-        return invalid_parameter(
-            "classes",
-            "invalid_length",
-            Json{{"minimum_items", 1},
-                 {"maximum_items", 3},
-                 {"received_items", classes->size()}});
-    }
-
-    std::uint8_t mask = 0;
-    for (std::size_t index = 0; index < classes->size(); ++index) {
-        const auto& item = (*classes)[index];
-        if (!item.is_number_integer() && !item.is_number_unsigned()) {
-            return invalid_parameter(
-                "classes[" + std::to_string(index) + "]",
-                "invalid_type",
-                Json{{"expected", "integer"}});
-        }
-        const auto value = item.get<int>();
-        if (value < 1 || value > 3) {
-            return invalid_parameter(
-                "classes[" + std::to_string(index) + "]",
-                "out_of_range",
-                Json{{"minimum", 1}, {"maximum", 3}, {"received", value}});
-        }
-        const auto bit = static_cast<std::uint8_t>(1U << value);
-        if ((mask & bit) != 0U) {
-            return invalid_parameter(
-                "classes[" + std::to_string(index) + "]",
-                "duplicate_value",
-                Json{{"received", value}});
-        }
-        mask = static_cast<std::uint8_t>(mask | bit);
-    }
-    output.class_mask = mask;
-    return std::nullopt;
+    return parse_event_classes(params, output.class_mask);
 }
 
 std::optional<BackendError> parse_read_config(
@@ -376,6 +382,48 @@ std::optional<BackendError> parse_read_config(
         }
         output.headers.push_back(header);
     }
+    return std::nullopt;
+}
+
+std::optional<BackendError> parse_unsolicited_control_config(
+    const Json& params, UnsolicitedControlConfig& output)
+{
+    static constexpr std::array<std::string_view, 2> fields{
+        "timeout_ms", "classes"};
+    if (const auto error = reject_unknown_fields(params, fields, "")) {
+        return error;
+    }
+
+    std::uint64_t timeout = output.timeout_ms;
+    if (const auto error = read_unsigned(
+            params, "timeout_ms", "timeout_ms", 50, 300000, timeout)) {
+        return error;
+    }
+    output.timeout_ms = static_cast<std::uint32_t>(timeout);
+    return parse_event_classes(params, output.class_mask);
+}
+
+std::optional<BackendError> parse_wait_unsolicited_config(
+    const Json& params, WaitUnsolicitedConfig& output)
+{
+    static constexpr std::array<std::string_view, 2> fields{
+        "timeout_ms", "max_events"};
+    if (const auto error = reject_unknown_fields(params, fields, "")) {
+        return error;
+    }
+
+    std::uint64_t timeout = output.timeout_ms;
+    std::uint64_t maximum = output.max_events;
+    if (const auto error = read_unsigned(
+            params, "timeout_ms", "timeout_ms", 0, 60000, timeout)) {
+        return error;
+    }
+    if (const auto error = read_unsigned(
+            params, "max_events", "max_events", 1, 256, maximum)) {
+        return error;
+    }
+    output.timeout_ms = static_cast<std::uint32_t>(timeout);
+    output.max_events = static_cast<std::size_t>(maximum);
     return std::nullopt;
 }
 

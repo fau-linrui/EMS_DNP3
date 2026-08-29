@@ -3,8 +3,14 @@
 #include <opendnp3/app/OctetString.h>
 #include <opendnp3/channel/IChannel.h>
 #include <opendnp3/channel/IPEndpoint.h>
+#include <opendnp3/gen/EventAnalogVariation.h>
+#include <opendnp3/gen/EventBinaryVariation.h>
+#include <opendnp3/gen/PointClass.h>
 #include <opendnp3/gen/ServerAcceptMode.h>
+#include <opendnp3/gen/StaticAnalogOutputStatusVariation.h>
 #include <opendnp3/gen/StaticAnalogVariation.h>
+#include <opendnp3/gen/StaticBinaryOutputStatusVariation.h>
+#include <opendnp3/gen/StaticBinaryVariation.h>
 #include <opendnp3/logging/LogLevels.h>
 #include <opendnp3/outstation/DefaultOutstationApplication.h>
 #include <opendnp3/outstation/EventBufferConfig.h>
@@ -49,11 +55,23 @@ int main(const int argc, char* argv[])
             nullptr);
 
         opendnp3::DatabaseConfig database(2);
+        database.binary_input[0].clazz = opendnp3::PointClass::Class1;
+        database.binary_input[0].svariation =
+            opendnp3::StaticBinaryVariation::Group1Var2;
+        database.binary_input[0].evariation =
+            opendnp3::EventBinaryVariation::Group2Var2;
+        database.analog_input[0].clazz = opendnp3::PointClass::Class2;
         database.analog_input[0].svariation =
             opendnp3::StaticAnalogVariation::Group30Var5;
+        database.analog_input[0].evariation =
+            opendnp3::EventAnalogVariation::Group32Var7;
+        database.binary_output_status[0].svariation =
+            opendnp3::StaticBinaryOutputStatusVariation::Group10Var2;
+        database.analog_output_status[0].svariation =
+            opendnp3::StaticAnalogOutputStatusVariation::Group40Var3;
         opendnp3::OutstationStackConfig config(database);
         config.outstation.eventBufferConfig = opendnp3::EventBufferConfig::AllTypes(32);
-        config.outstation.params.allowUnsolicited = false;
+        config.outstation.params.allowUnsolicited = true;
         config.link.LocalAddr = 1024;
         config.link.RemoteAddr = 1;
 
@@ -78,7 +96,12 @@ int main(const int argc, char* argv[])
                 opendnp3::Flags{0x01},
                 opendnp3::DNPTime{1700000000002ULL}},
             0);
-        updates.Update(opendnp3::Analog{123.5, opendnp3::Flags{0x01}}, 0);
+        updates.Update(
+            opendnp3::Analog{
+                123.5,
+                opendnp3::Flags{0x01},
+                opendnp3::DNPTime{1700000000004ULL}},
+            0);
         updates.Update(opendnp3::Counter{42, opendnp3::Flags{0x01}}, 0);
         updates.FreezeCounter(0, false);
         updates.Update(
