@@ -42,6 +42,8 @@
                 "NOT_CONNECTED",
                 "ALREADY_CONNECTED",
                 "CONNECTION_TIMEOUT",
+                "SAFETY_INTERLOCK",
+                "ALREADY_EXECUTING",
                 "RESPONSE_TIMEOUT",
                 "TASK_FAILED",
                 "COMMAND_FAILED",

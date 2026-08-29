@@ -23,7 +23,14 @@ def success(request_id: str, result: Any) -> dict[str, Any]:
     }
 
 
-def error(request_id: str, code: str) -> dict[str, Any]:
+def error(
+    request_id: str,
+    code: str,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    error_details = {"source": "fake_host"}
+    if details is not None:
+        error_details.update(details)
     return {
         "schema_version": 1,
         "id": request_id,
@@ -31,7 +38,7 @@ def error(request_id: str, code: str) -> dict[str, Any]:
         "error": {
             "code": code,
             "message": "controlled fake-host error",
-            "details": {"source": "fake_host"},
+            "details": error_details,
         },
     }
 
@@ -47,7 +54,20 @@ def hello_result(mode: str = "normal") -> dict[str, Any]:
         "capability_matrix_version": "test",
         "capability_matrix_sha256": "0" * 64,
         "supported_commands": (
-            ["connect", "disconnect", "get_status", "hello", "shutdown", "wait_event"]
+            [
+                "class_poll",
+                "connect",
+                "direct_operate",
+                "disconnect",
+                "get_status",
+                "hello",
+                "integrity_poll",
+                "read",
+                "select_and_operate",
+                "shutdown",
+                "stats",
+                "wait_event",
+            ]
             if tcp_api
             else ["get_status", "hello", "shutdown"]
         ),
@@ -65,6 +85,108 @@ def hello_result(mode: str = "normal") -> dict[str, Any]:
     }
 
 
+def read_result(params: dict[str, Any]) -> dict[str, Any]:
+    detail = params.get("return_mode", "detail") == "detail"
+    measurements = (
+        [
+            {
+                "receive_seq": 1,
+                "received_monotonic_ns": 100,
+                "kind": "analog_input",
+                "group": 30,
+                "variation": 5,
+                "qualifier": "UINT16_START_STOP",
+                "qualifier_raw": 1,
+                "index": 7,
+                "value": 220.5,
+                "flags_raw": 1,
+                "flags_valid": True,
+                "dnp3_timestamp_ms": None,
+                "timestamp_quality": "INVALID",
+                "is_event": False,
+                "header_index": 0,
+                "source": "solicited",
+                "fragment_index": 0,
+            }
+        ]
+        if detail
+        else []
+    )
+    return {
+        "task_id": 1,
+        "task_status": "SUCCESS",
+        "task_started": True,
+        "task_destroyed": True,
+        "return_mode": params.get("return_mode", "detail"),
+        "measurements": measurements,
+        "summary": {
+            "received_total": 1,
+            "stored_detail": len(measurements),
+            "overflow": 0,
+            "max_measurements": params.get("max_measurements", 10_000),
+            "by_kind": {"analog_input": 1},
+        },
+        "fragments": [
+            {
+                "fragment_index": 0,
+                "source": "solicited",
+                "fir": True,
+                "fin": True,
+                "ended": True,
+            }
+        ],
+        "iin": {
+            "lsb": 0,
+            "msb": 0,
+            "raw_hex": "0000",
+            "bits": [],
+            "observations": [],
+        },
+        "timings": {"duration_ms": 1.0},
+        "received": params,
+    }
+
+
+def command_result(command: str, params: dict[str, Any]) -> dict[str, Any]:
+    point_results = []
+    for ordinal, requested in enumerate(params["commands"]):
+        point_results.append(
+            {
+                "header_index": ordinal,
+                "index": requested["index"],
+                "state": "SUCCESS",
+                "state_raw": 5,
+                "status": "SUCCESS",
+                "status_raw": 0,
+                "requested": {
+                    "request_ordinal": ordinal,
+                    **requested,
+                },
+            }
+        )
+    return {
+        "task_id": 2,
+        "mode": command,
+        "response_mode": "response",
+        "task_status": "SUCCESS",
+        "task_callback_status": "SUCCESS",
+        "task_started": True,
+        "task_destroyed": True,
+        "all_success": True,
+        "execution_uncertain": False,
+        "point_results": point_results,
+        "summary": {
+            "requested_points": len(point_results),
+            "returned_points": len(point_results),
+            "successful_points": len(point_results),
+            "failed_points": 0,
+            "by_status": {"SUCCESS": len(point_results)},
+            "by_state": {"SUCCESS": len(point_results)},
+        },
+        "timings": {"duration_ms": 1.0},
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", default="normal")
@@ -72,6 +194,7 @@ def main() -> int:
 
     first_request = True
     connected = False
+    safety_token: str | None = None
     for line in sys.stdin:
         request = json.loads(line)
         request_id = request["id"]
@@ -132,6 +255,19 @@ def main() -> int:
                     },
                 )
             )
+        elif command == "stats":
+            write_json(
+                success(
+                    request_id,
+                    {
+                        "scope": "host_channel_and_local_queues",
+                        "host": {"requests_received": 1},
+                        "channel": {"session_active": connected},
+                        "safety": {"state_change_authorized": safety_token is not None},
+                        "limitations": [],
+                    },
+                )
+            )
         elif command == "shutdown":
             if args.mode == "ignore_shutdown":
                 time.sleep(60)
@@ -144,6 +280,13 @@ def main() -> int:
                 write_json(error(request_id, "ALREADY_CONNECTED"))
             else:
                 connected = True
+                safety = request["params"].get("safety")
+                authorized = bool(
+                    isinstance(safety, dict)
+                    and safety.get("environment") == "LAB"
+                    and safety.get("allow_state_change") is True
+                )
+                safety_token = "0123456789abcdef0123456789abcdef" if authorized else None
                 write_json(
                     success(
                         request_id,
@@ -152,6 +295,12 @@ def main() -> int:
                             "channel_state": "OPEN",
                             "session_id": 1,
                             "received": request["params"],
+                            "safety": {
+                                "environment": "LAB" if authorized else "UNSPECIFIED",
+                                "state_change_authorized": authorized,
+                                "safety_token": safety_token,
+                                "expires_on": "disconnect_or_process_exit",
+                            },
                         },
                     )
                 )
@@ -160,6 +309,7 @@ def main() -> int:
                 write_json(error(request_id, "NOT_CONNECTED"))
             else:
                 connected = False
+                safety_token = None
                 write_json(
                     success(
                         request_id,
@@ -179,6 +329,32 @@ def main() -> int:
                     },
                 )
             )
+        elif command in {"integrity_poll", "class_poll", "read"} and args.mode == "tcp_api":
+            if not connected:
+                write_json(error(request_id, "NOT_CONNECTED"))
+            else:
+                write_json(success(request_id, read_result(request["params"])))
+        elif command in {"select_and_operate", "direct_operate"} and args.mode == "tcp_api":
+            if not connected:
+                write_json(error(request_id, "NOT_CONNECTED"))
+            elif request["params"].get("safety_token") != safety_token:
+                write_json(error(request_id, "SAFETY_INTERLOCK"))
+            elif request["params"].get("response_mode") == "no_response":
+                write_json(error(request_id, "UNSUPPORTED_BY_BACKEND"))
+            elif request["params"]["commands"][0].get("index") == 65535:
+                write_json(
+                    error(
+                        request_id,
+                        "RESPONSE_TIMEOUT",
+                        {
+                            "execution_uncertain": True,
+                            "may_still_execute": True,
+                            "automatic_retry_safe": False,
+                        },
+                    )
+                )
+            else:
+                write_json(success(request_id, command_result(command, request["params"])))
         else:
             write_json(error(request_id, "INVALID_REQUEST"))
     return 0

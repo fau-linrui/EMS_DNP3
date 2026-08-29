@@ -70,16 +70,45 @@ def test_hello_status_and_shutdown(host_executable: Path) -> None:
     assert result["platform"] == "windows-x64"
     assert result["capability_matrix_version"] == "1"
     assert result["supported_commands"] == [
+        "class_poll",
         "connect",
+        "direct_operate",
         "disconnect",
         "get_status",
         "hello",
+        "integrity_poll",
+        "read",
+        "select_and_operate",
         "shutdown",
+        "stats",
         "wait_event",
     ]
     assert set(result["capabilities"]) == {
+        "APP.CLASS.EVENTS",
+        "APP.COMMAND_STATUS.CATALOG",
+        "APP.FC.01.READ",
+        "APP.FC.03.SELECT",
+        "APP.FC.04.OPERATE",
+        "APP.FC.05.DIRECT_OPERATE",
+        "APP.TASK.LIFECYCLE",
+        "APP.TASK.OBSERVABILITY",
         "CHANNEL.TCP.CLIENT",
         "CHANNEL.RECONNECT",
+        "IIN.IIN2.1.OBJECT_UNKNOWN",
+        "OBJ.G1.V2",
+        "OBJ.G3.V2",
+        "OBJ.G10.V2",
+        "OBJ.G12.V1",
+        "OBJ.G20.V1",
+        "OBJ.G21.V1",
+        "OBJ.G30.V5",
+        "OBJ.G40.V1",
+        "OBJ.G41.V1",
+        "OBJ.G41.V2",
+        "OBJ.G41.V3",
+        "OBJ.G41.V4",
+        "OBJ.G50.V4",
+        "OBJ.G110.LENGTH_VARIANTS",
     }
     assert len(result["capability_matrix_sha256"]) == 64
 
@@ -149,7 +178,7 @@ def test_invalid_unavailable_and_unknown_commands_are_distinct(
     responses = run_host(
         host_executable,
         request("connect-1", "connect")
-        + request("read-1", "read")
+        + request("capture-1", "capture.begin")
         + request("unknown-1", "no_such_command"),
     )
     assert responses[0]["error"]["code"] == "INVALID_REQUEST"

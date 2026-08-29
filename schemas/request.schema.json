@@ -32,7 +32,8 @@
         "direct_operate",
         "select_and_operate",
         "wait_event",
-        "stats"
+        "stats",
+        "capture.begin"
       ]
     },
     "params": {

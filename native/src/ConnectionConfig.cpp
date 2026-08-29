@@ -134,16 +134,39 @@ std::optional<BackendError> require_object(
     return std::nullopt;
 }
 
+std::optional<BackendError> read_boolean(
+    const Json& object,
+    const char* key,
+    const std::string& field,
+    bool& output,
+    const bool required)
+{
+    const auto iterator = object.find(key);
+    if (iterator == object.end()) {
+        if (required) {
+            return invalid_parameter(field, "missing_field");
+        }
+        return std::nullopt;
+    }
+    if (!iterator->is_boolean()) {
+        return invalid_parameter(field, "invalid_type", Json{{"expected", "boolean"}});
+    }
+    output = iterator->get<bool>();
+    return std::nullopt;
+}
+
 }  // namespace
 
 std::optional<BackendError> parse_connection_config(
     const Json& params, ConnectionConfig& output)
 {
-    static constexpr std::array<std::string_view, 6> root_fields{
-        "host", "port", "local_adapter", "connect_timeout_ms", "retry", "link"};
+    static constexpr std::array<std::string_view, 7> root_fields{
+        "host", "port", "local_adapter", "connect_timeout_ms", "retry", "link", "safety"};
     static constexpr std::array<std::string_view, 2> retry_fields{"min_ms", "max_ms"};
     static constexpr std::array<std::string_view, 3> link_fields{
         "master_address", "outstation_address", "keep_alive_timeout_ms"};
+    static constexpr std::array<std::string_view, 4> safety_fields{
+        "environment", "allow_state_change", "operator_id", "dut_id"};
 
     if (const auto error = reject_unknown_fields(params, root_fields, "")) {
         return error;
@@ -252,6 +275,57 @@ std::optional<BackendError> parse_connection_config(
         output.master_address = static_cast<std::uint16_t>(master_address);
         output.outstation_address = static_cast<std::uint16_t>(outstation_address);
         output.keep_alive_timeout_ms = static_cast<std::uint32_t>(keep_alive);
+    }
+
+    const Json* safety = nullptr;
+    if (const auto error = require_object(params, "safety", "safety", safety)) {
+        return error;
+    }
+    if (safety != nullptr) {
+        if (const auto error = reject_unknown_fields(*safety, safety_fields, "safety")) {
+            return error;
+        }
+        if (const auto error = read_string(
+                *safety,
+                "environment",
+                "safety.environment",
+                output.safety_environment,
+                true,
+                16)) {
+            return error;
+        }
+        if (output.safety_environment != "LAB") {
+            return invalid_parameter(
+                "safety.environment",
+                "state_change_requires_lab",
+                Json{{"received", output.safety_environment}});
+        }
+        if (const auto error = read_boolean(
+                *safety,
+                "allow_state_change",
+                "safety.allow_state_change",
+                output.allow_state_change,
+                true)) {
+            return error;
+        }
+        if (const auto error = read_string(
+                *safety,
+                "operator_id",
+                "safety.operator_id",
+                output.operator_id,
+                true,
+                128)) {
+            return error;
+        }
+        if (const auto error = read_string(
+                *safety,
+                "dut_id",
+                "safety.dut_id",
+                output.dut_id,
+                true,
+                128)) {
+            return error;
+        }
     }
 
     return std::nullopt;

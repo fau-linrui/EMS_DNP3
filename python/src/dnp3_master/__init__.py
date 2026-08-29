@@ -13,13 +13,29 @@ from .errors import (
     HostStartError,
     HostTimeoutError,
 )
-from .models import HostProcessConfig, HostProcessDiagnostics, TcpConnectionConfig
+from .models import (
+    AnalogOutputCommand,
+    CommandPointResult,
+    CommandTaskResult,
+    CrobCommand,
+    HostProcessConfig,
+    HostProcessDiagnostics,
+    LabSafetyConfig,
+    MeasurementRecord,
+    ReadHeader,
+    ReadTaskResult,
+    TcpConnectionConfig,
+)
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 TARGET_STANDARD = "IEEE1815-2012"
 
 __all__ = [
+    "AnalogOutputCommand",
     "ClientStateError",
+    "CommandPointResult",
+    "CommandTaskResult",
+    "CrobCommand",
     "Dnp3ClientError",
     "Dnp3MasterClient",
     "HostCommandError",
@@ -30,6 +46,10 @@ __all__ = [
     "HostProtocolError",
     "HostStartError",
     "HostTimeoutError",
+    "LabSafetyConfig",
+    "MeasurementRecord",
+    "ReadHeader",
+    "ReadTaskResult",
     "TARGET_STANDARD",
     "TcpConnectionConfig",
     "__version__",

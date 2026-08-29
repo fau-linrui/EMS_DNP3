@@ -14,6 +14,10 @@ $dnp3HostExecutable = Join-Path $dnp3RepoRoot "out\build\$Preset\bin\dnp3-master
 if (-not (Test-Path -LiteralPath $dnp3HostExecutable -PathType Leaf)) {
     throw "Host executable was not found at '$dnp3HostExecutable'. Run build.ps1 first."
 }
+$dnp3TestOutstationExecutable = Join-Path $dnp3RepoRoot "out\build\$Preset\bin\dnp3-local-test-outstation.exe"
+if (-not (Test-Path -LiteralPath $dnp3TestOutstationExecutable -PathType Leaf)) {
+    throw "Local test outstation was not found at '$dnp3TestOutstationExecutable'. Run build.ps1 first."
+}
 $dnp3PreviousHostExecutable = [Environment]::GetEnvironmentVariable(
     'DNP3_MASTER_HOST_EXE',
     'Process'
@@ -21,6 +25,15 @@ $dnp3PreviousHostExecutable = [Environment]::GetEnvironmentVariable(
 [Environment]::SetEnvironmentVariable(
     'DNP3_MASTER_HOST_EXE',
     $dnp3HostExecutable,
+    'Process'
+)
+$dnp3PreviousTestOutstationExecutable = [Environment]::GetEnvironmentVariable(
+    'DNP3_TEST_OUTSTATION_EXE',
+    'Process'
+)
+[Environment]::SetEnvironmentVariable(
+    'DNP3_TEST_OUTSTATION_EXE',
+    $dnp3TestOutstationExecutable,
     'Process'
 )
 
@@ -73,6 +86,11 @@ finally {
     [Environment]::SetEnvironmentVariable(
         'DNP3_MASTER_HOST_EXE',
         $dnp3PreviousHostExecutable,
+        'Process'
+    )
+    [Environment]::SetEnvironmentVariable(
+        'DNP3_TEST_OUTSTATION_EXE',
+        $dnp3PreviousTestOutstationExecutable,
         'Process'
     )
     Pop-Location

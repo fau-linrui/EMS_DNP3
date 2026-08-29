@@ -16,6 +16,7 @@ file(
     "  \"schema_version\": 1,\n"
     "  \"host_version\": \"@PROJECT_VERSION@\",\n"
     "  \"git_commit\": \"@DNP3_GIT_COMMIT@\",\n"
+    "  \"git_worktree_state\": \"@DNP3_GIT_WORKTREE_STATE@\",\n"
     "  \"opendnp3_version\": \"@DNP3_OPENDNP3_VERSION@\",\n"
     "  \"opendnp3_commit\": \"@DNP3_OPENDNP3_COMMIT@\",\n"
     "  \"compiler_id\": \"@CMAKE_CXX_COMPILER_ID@\",\n"

@@ -8,6 +8,7 @@
     "schema_version",
     "host_version",
     "git_commit",
+    "git_worktree_state",
     "opendnp3_version",
     "opendnp3_commit",
     "compiler_id",
@@ -31,6 +32,9 @@
         { "const": "unversioned" },
         { "pattern": "^[0-9a-f]{40}$" }
       ]
+    },
+    "git_worktree_state": {
+      "enum": ["clean", "dirty", "unavailable"]
     },
     "opendnp3_version": { "const": "3.1.2" },
     "opendnp3_commit": {

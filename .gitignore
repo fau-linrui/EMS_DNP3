@@ -28,6 +28,14 @@ Thumbs.db
 # Environment-specific DUT configuration must not be committed
 config/ems.local.json
 config/points.local.csv
+config/*.local.json
+config/*.local.csv
+secrets/
+evidence/local/
+*.pcap
+*.pcapng
+*.key
+*.pem
 
 # Licensed standards remain local and must never be published with the project
 docs/IEEESTD*.pdf

@@ -1,9 +1,11 @@
 #include "dnp3host/HostController.h"
 
 #include "dnp3host/ConnectionConfig.h"
+#include "dnp3host/CommandConfig.h"
 #include "dnp3host/JsonLineProtocol.h"
 #include "dnp3host/OpenDnp3Backend.h"
 #include "dnp3host/ProjectInfo.h"
+#include "dnp3host/ReadConfig.h"
 
 #include <algorithm>
 #include <array>
@@ -61,7 +63,8 @@ DispatchResult HostController::dispatch(const Request& request)
 
     if (!request.params.empty()
         && (request.command == "hello" || request.command == "get_status"
-            || request.command == "shutdown" || request.command == "disconnect")) {
+            || request.command == "stats" || request.command == "shutdown"
+            || request.command == "disconnect")) {
         ++requests_failed_;
         return DispatchResult{
             JsonLineProtocol::error_response(ProtocolError{
@@ -81,6 +84,22 @@ DispatchResult HostController::dispatch(const Request& request)
         ++requests_succeeded_;
         return DispatchResult{
             JsonLineProtocol::success_response(request.id, status_result()), false};
+    }
+    if (request.command == "stats") {
+        const auto status = status_result();
+        ++requests_succeeded_;
+        return DispatchResult{
+            JsonLineProtocol::success_response(
+                request.id,
+                Json{{"scope", "host_channel_and_local_queues"},
+                     {"host", status.at("metrics")},
+                     {"channel", status.at("channel")},
+                     {"safety", status.at("safety")},
+                     {"limitations",
+                      Json::array(
+                          {"network byte counters are not exposed by OpenDNP3 3.1.2",
+                           "per-object performance capture is a later milestone"})}}),
+            false};
     }
     if (request.command == "shutdown") {
         state_ = HostState::ShuttingDown;
@@ -104,6 +123,53 @@ DispatchResult HostController::dispatch(const Request& request)
     }
     if (request.command == "disconnect") {
         return backend_result(request.id, backend_->disconnect());
+    }
+    if (request.command == "integrity_poll") {
+        ReadOptions options;
+        if (const auto error = parse_read_options(request.params, options)) {
+            ++requests_failed_;
+            return DispatchResult{
+                JsonLineProtocol::error_response(ProtocolError{
+                    request.id, error->code, error->message, error->details}),
+                false};
+        }
+        return backend_result(request.id, backend_->integrity_poll(options));
+    }
+    if (request.command == "class_poll") {
+        ClassPollConfig config;
+        if (const auto error = parse_class_poll_config(request.params, config)) {
+            ++requests_failed_;
+            return DispatchResult{
+                JsonLineProtocol::error_response(ProtocolError{
+                    request.id, error->code, error->message, error->details}),
+                false};
+        }
+        return backend_result(request.id, backend_->class_poll(config));
+    }
+    if (request.command == "read") {
+        ReadConfig config;
+        if (const auto error = parse_read_config(request.params, config)) {
+            ++requests_failed_;
+            return DispatchResult{
+                JsonLineProtocol::error_response(ProtocolError{
+                    request.id, error->code, error->message, error->details}),
+                false};
+        }
+        return backend_result(request.id, backend_->read(config));
+    }
+    if (request.command == "select_and_operate"
+        || request.command == "direct_operate") {
+        CommandConfig config;
+        if (const auto error = parse_command_config(request.params, config)) {
+            ++requests_failed_;
+            return DispatchResult{
+                JsonLineProtocol::error_response(ProtocolError{
+                    request.id, error->code, error->message, error->details}),
+                false};
+        }
+        return request.command == "select_and_operate"
+            ? backend_result(request.id, backend_->select_and_operate(config))
+            : backend_result(request.id, backend_->direct_operate(config));
     }
     if (request.command == "wait_event") {
         WaitEventConfig config;
@@ -204,6 +270,9 @@ Json HostController::status_result() const
               {"last_event_sequence", backend_status.last_event_sequence},
               {"queued_events", backend_status.queued_events},
               {"dropped_events", backend_status.dropped_events}}},
+        {"safety",
+         Json{{"state_change_authorized", backend_status.state_change_authorized},
+              {"token_exposed", false}}},
         {"metrics",
          Json{
              {"requests_received", requests_received_},
@@ -225,7 +294,8 @@ const char* HostController::state_name(const BackendStatus& backend_status) cons
 
 bool HostController::is_known_backend_command(const std::string& command)
 {
-    static constexpr std::array<const char*, 9> commands{
+    static constexpr std::array<const char*, 10> commands{
+        "capture.begin",
         "connect",
         "disconnect",
         "integrity_poll",

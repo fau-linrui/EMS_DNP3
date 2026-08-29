@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
     dnp3_master_test_framework
-    VERSION 0.1.0
+    VERSION 0.2.0
     DESCRIPTION "Windows DNP3 master automation test framework"
     LANGUAGES CXX
 )
@@ -82,6 +82,7 @@ endif()
 message(STATUS "${dnp3_dependency_validation_output}")
 
 set(DNP3_GIT_COMMIT "unversioned")
+set(DNP3_GIT_WORKTREE_STATE "unavailable")
 if(EXISTS "${PROJECT_SOURCE_DIR}/.git")
     find_package(Git QUIET)
     if(Git_FOUND)
@@ -95,6 +96,21 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/.git")
         )
         if(dnp3_git_result EQUAL 0 AND dnp3_git_output MATCHES "^[0-9a-fA-F]{40}$")
             string(TOLOWER "${dnp3_git_output}" DNP3_GIT_COMMIT)
+        endif()
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" status --porcelain --untracked-files=normal
+            WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+            RESULT_VARIABLE dnp3_git_status_result
+            OUTPUT_VARIABLE dnp3_git_status_output
+            ERROR_QUIET
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if(dnp3_git_status_result EQUAL 0)
+            if(dnp3_git_status_output STREQUAL "")
+                set(DNP3_GIT_WORKTREE_STATE "clean")
+            else()
+                set(DNP3_GIT_WORKTREE_STATE "dirty")
+            endif()
         endif()
     endif()
 endif()
@@ -238,10 +254,14 @@ endif()
 add_library(
     dnp3host_core
     STATIC
+        native/src/CommandConfig.cpp
         native/src/ConnectionConfig.cpp
         native/src/HostController.cpp
         native/src/JsonLineProtocol.cpp
         native/src/OpenDnp3Backend.cpp
+        native/src/OpenDnp3CommandSupport.cpp
+        native/src/OpenDnp3ReadSupport.cpp
+        native/src/ReadConfig.cpp
 )
 target_link_libraries(
     dnp3host_core
@@ -292,10 +312,38 @@ if(BUILD_TESTING)
             opendnp3
     )
 
+    add_executable(
+        opendnp3-read-integration-tests
+        native/tests/opendnp3_read_integration_tests.cpp
+    )
+
+    add_executable(
+        dnp3-local-test-outstation
+        native/tests/local_outstation_main.cpp
+    )
+    target_link_libraries(
+        dnp3-local-test-outstation
+        PRIVATE
+            dnp3host_build_options
+            opendnp3
+    )
+    target_link_libraries(
+        opendnp3-read-integration-tests
+        PRIVATE
+            dnp3host_core
+            opendnp3
+    )
+
     add_test(NAME native.project_info COMMAND dnp3host-unit-tests)
     add_test(NAME native.protocol COMMAND dnp3host-protocol-tests)
     add_test(NAME native.host_smoke COMMAND dnp3-master-host)
     add_test(NAME native.opendnp3_runtime COMMAND opendnp3-runtime-tests)
+    add_test(NAME native.opendnp3_read_integration COMMAND opendnp3-read-integration-tests)
+
+    install(
+        TARGETS dnp3-local-test-outstation
+        RUNTIME DESTINATION tools
+    )
 endif()
 
 install(TARGETS dnp3-master-host RUNTIME DESTINATION bin)
@@ -305,7 +353,9 @@ install(
 )
 install(DIRECTORY "${PROJECT_SOURCE_DIR}/schemas/" DESTINATION schemas)
 install(
-    FILES "${PROJECT_SOURCE_DIR}/config/capability_matrix.csv"
+    FILES
+        "${PROJECT_SOURCE_DIR}/config/capability_matrix.csv"
+        "${PROJECT_SOURCE_DIR}/config/ems_profile.example.json"
     DESTINATION config
 )
 install(FILES NOTICE.txt THIRD_PARTY_LICENSES.txt DESTINATION .)

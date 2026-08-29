@@ -22,11 +22,95 @@ struct ConnectionConfig {
     std::uint16_t master_address{1};
     std::uint16_t outstation_address{1024};
     std::uint32_t keep_alive_timeout_ms{60000};
+    bool allow_state_change{false};
+    std::string safety_environment{"UNSPECIFIED"};
+    std::string operator_id;
+    std::string dut_id;
 };
 
 struct WaitEventConfig {
     std::uint32_t timeout_ms{0};
     std::size_t max_events{64};
+};
+
+enum class ReturnMode {
+    Detail,
+    Summary,
+};
+
+enum class ReadQualifier {
+    AllObjects,
+    Range8,
+    Range16,
+    Count8,
+    Count16,
+};
+
+struct ReadOptions {
+    std::uint32_t timeout_ms{5000};
+    std::size_t max_measurements{10000};
+    ReturnMode return_mode{ReturnMode::Detail};
+};
+
+struct ReadHeader {
+    std::uint8_t group{0};
+    std::uint8_t variation{0};
+    ReadQualifier qualifier{ReadQualifier::AllObjects};
+    std::uint16_t start{0};
+    std::uint16_t stop{0};
+    std::uint16_t count{0};
+};
+
+struct ClassPollConfig {
+    ReadOptions options;
+    std::uint8_t class_mask{0x0E};
+};
+
+struct ReadConfig {
+    ReadOptions options;
+    std::vector<ReadHeader> headers;
+};
+
+enum class CommandKind {
+    Crob,
+    AnalogOutputInt16,
+    AnalogOutputInt32,
+    AnalogOutputFloat32,
+    AnalogOutputDouble64,
+};
+
+enum class CrobOperation {
+    Null,
+    PulseOn,
+    PulseOff,
+    LatchOn,
+    LatchOff,
+};
+
+enum class TripCloseSelection {
+    Null,
+    Close,
+    Trip,
+};
+
+struct CommandPoint {
+    CommandKind kind{CommandKind::Crob};
+    std::uint16_t index{0};
+    CrobOperation crob_operation{CrobOperation::LatchOn};
+    TripCloseSelection trip_close{TripCloseSelection::Null};
+    bool clear{false};
+    std::uint8_t count{1};
+    std::uint32_t on_time_ms{100};
+    std::uint32_t off_time_ms{100};
+    std::int64_t integer_value{0};
+    double floating_value{0.0};
+};
+
+struct CommandConfig {
+    std::string safety_token;
+    std::uint32_t timeout_ms{10000};
+    bool no_response{false};
+    std::vector<CommandPoint> commands;
 };
 
 struct BackendError {
@@ -59,6 +143,7 @@ struct BackendStatus {
     std::uint64_t last_event_sequence{0};
     std::size_t queued_events{0};
     std::uint64_t dropped_events{0};
+    bool state_change_authorized{false};
 };
 
 class IMasterBackend {
@@ -73,6 +158,11 @@ public:
 
     virtual BackendOperationResult connect(const ConnectionConfig& config) = 0;
     virtual BackendOperationResult disconnect() = 0;
+    virtual BackendOperationResult integrity_poll(const ReadOptions& options) = 0;
+    virtual BackendOperationResult class_poll(const ClassPollConfig& config) = 0;
+    virtual BackendOperationResult read(const ReadConfig& config) = 0;
+    virtual BackendOperationResult select_and_operate(const CommandConfig& config) = 0;
+    virtual BackendOperationResult direct_operate(const CommandConfig& config) = 0;
     virtual BackendOperationResult wait_event(const WaitEventConfig& config) = 0;
     virtual void shutdown() noexcept = 0;
 };

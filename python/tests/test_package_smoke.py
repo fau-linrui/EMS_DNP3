@@ -12,7 +12,11 @@ def test_package_import_exposes_stable_metadata() -> None:
 
 def test_public_exports_are_explicit() -> None:
     assert set(dnp3_master.__all__) == {
+        "AnalogOutputCommand",
         "ClientStateError",
+        "CommandPointResult",
+        "CommandTaskResult",
+        "CrobCommand",
         "Dnp3ClientError",
         "Dnp3MasterClient",
         "HostCommandError",
@@ -23,6 +27,10 @@ def test_public_exports_are_explicit() -> None:
         "HostProtocolError",
         "HostStartError",
         "HostTimeoutError",
+        "LabSafetyConfig",
+        "MeasurementRecord",
+        "ReadHeader",
+        "ReadTaskResult",
         "TARGET_STANDARD",
         "TcpConnectionConfig",
         "__version__",

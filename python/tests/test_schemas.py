@@ -60,3 +60,15 @@ def test_build_info_schema_requires_fixed_build_identity() -> None:
         "protocol_schema_version",
         "dependency_lock_sha256",
     }.issubset(schema["required"])
+
+
+def test_ems_profile_schema_is_strict_and_uses_tri_state_capabilities() -> None:
+    schema = load_schema("ems-profile.schema.json")
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["schema_version"]["const"] == 1
+    assert schema["required"] == ["schema_version", "device", "capabilities"]
+    assert schema["properties"]["capabilities"]["additionalProperties"]["enum"] == [
+        "SUPPORTED",
+        "NOT_SUPPORTED",
+        "UNKNOWN",
+    ]

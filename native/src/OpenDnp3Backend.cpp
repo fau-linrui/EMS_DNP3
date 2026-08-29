@@ -1,4 +1,6 @@
 #include "dnp3host/OpenDnp3Backend.h"
+#include "dnp3host/OpenDnp3CommandSupport.h"
+#include "dnp3host/OpenDnp3ReadSupport.h"
 
 #include <opendnp3/DNP3Manager.h>
 #include <opendnp3/app/ClassField.h>
@@ -8,7 +10,6 @@
 #include <opendnp3/channel/IPEndpoint.h>
 #include <opendnp3/gen/ChannelState.h>
 #include <opendnp3/logging/LogLevels.h>
-#include <opendnp3/master/DefaultMasterApplication.h>
 #include <opendnp3/master/IMaster.h>
 #include <opendnp3/master/ISOEHandler.h>
 #include <opendnp3/master/MasterStackConfig.h>
@@ -23,6 +24,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -31,6 +33,19 @@ namespace dnp3host {
 namespace {
 
 constexpr std::size_t kEventQueueCapacity = 1024;
+
+std::string generate_safety_token()
+{
+    static constexpr char digits[] = "0123456789abcdef";
+    std::random_device source;
+    std::string token(32, '0');
+    for (std::size_t index = 0; index < token.size(); index += 2) {
+        const auto value = static_cast<std::uint8_t>(source() & 0xFFU);
+        token[index] = digits[(value >> 4U) & 0x0FU];
+        token[index + 1U] = digits[value & 0x0FU];
+    }
+    return token;
+}
 
 const char* channel_state_name(const opendnp3::ChannelState state) noexcept
 {
@@ -291,7 +306,12 @@ std::optional<std::string> shutdown_resources(BackendResources resources) noexce
 
 class OpenDnp3Backend final : public IMasterBackend {
 public:
-    OpenDnp3Backend() : events_(std::make_shared<ChannelEventStore>()) {}
+    OpenDnp3Backend()
+        : events_(std::make_shared<ChannelEventStore>()),
+          command_support_(std::make_unique<OpenDnp3CommandSupport>()),
+          read_support_(std::make_unique<OpenDnp3ReadSupport>())
+    {
+    }
 
     ~OpenDnp3Backend() override
     {
@@ -310,17 +330,61 @@ public:
 
     std::vector<std::string> supported_commands() const override
     {
-        return {"connect", "disconnect", "get_status", "hello", "shutdown", "wait_event"};
+        return {
+            "class_poll",
+            "connect",
+            "direct_operate",
+            "disconnect",
+            "get_status",
+            "hello",
+            "integrity_poll",
+            "read",
+            "select_and_operate",
+            "shutdown",
+            "stats",
+            "wait_event"};
     }
 
     Json capabilities() const override
     {
-        const auto entry = Json{
+        const auto channel_entry = Json{
             {"status", "IMPLEMENTED_UNVERIFIED"},
             {"implementation_revision", "t05-opendnp3-3.1.2"}};
+        const auto read_entry = Json{
+            {"status", "IMPLEMENTED_UNVERIFIED"},
+            {"implementation_revision", "t06-t08-opendnp3-3.1.2"},
+            {"verification_scope", "local_opendnp3_outstation"}};
+        const auto command_entry = Json{
+            {"status", "IMPLEMENTED_UNVERIFIED"},
+            {"implementation_revision", "t09-t11-opendnp3-3.1.2"},
+            {"verification_scope", "local_opendnp3_outstation"},
+            {"requires_safety_interlock", true}};
         return Json{
-            {"CHANNEL.TCP.CLIENT", entry},
-            {"CHANNEL.RECONNECT", entry}};
+            {"CHANNEL.TCP.CLIENT", channel_entry},
+            {"CHANNEL.RECONNECT", channel_entry},
+            {"APP.FC.01.READ", read_entry},
+            {"APP.TASK.LIFECYCLE", read_entry},
+            {"APP.TASK.OBSERVABILITY", read_entry},
+            {"APP.CLASS.EVENTS", read_entry},
+            {"APP.FC.03.SELECT", command_entry},
+            {"APP.FC.04.OPERATE", command_entry},
+            {"APP.FC.05.DIRECT_OPERATE", command_entry},
+            {"APP.COMMAND_STATUS.CATALOG", command_entry},
+            {"IIN.IIN2.1.OBJECT_UNKNOWN", read_entry},
+            {"OBJ.G12.V1", command_entry},
+            {"OBJ.G1.V2", read_entry},
+            {"OBJ.G3.V2", read_entry},
+            {"OBJ.G10.V2", read_entry},
+            {"OBJ.G20.V1", read_entry},
+            {"OBJ.G21.V1", read_entry},
+            {"OBJ.G30.V5", read_entry},
+            {"OBJ.G40.V1", read_entry},
+            {"OBJ.G41.V1", command_entry},
+            {"OBJ.G41.V2", command_entry},
+            {"OBJ.G41.V3", command_entry},
+            {"OBJ.G41.V4", command_entry},
+            {"OBJ.G50.V4", read_entry},
+            {"OBJ.G110.LENGTH_VARIANTS", read_entry}};
     }
 
     BackendStatus status() const override
@@ -331,13 +395,19 @@ public:
             active = session_active_;
         }
         const auto snapshot = events_->snapshot();
+        bool state_change_authorized = false;
+        {
+            std::lock_guard<std::mutex> lock(resources_mutex_);
+            state_change_authorized = !safety_token_.empty();
+        }
         return BackendStatus{
             active,
             snapshot.state,
             snapshot.session_id,
             snapshot.last_sequence,
             snapshot.queued_events,
-            snapshot.dropped_events};
+            snapshot.dropped_events,
+            state_change_authorized};
     }
 
     BackendOperationResult connect(const ConnectionConfig& config) override
@@ -361,7 +431,12 @@ public:
         events_->begin_session(session_id);
 
         BackendResources created;
+        std::string safety_token;
         try {
+            if (config.allow_state_change && config.safety_environment == "LAB"
+                && !config.operator_id.empty() && !config.dut_id.empty()) {
+                safety_token = generate_safety_token();
+            }
             created.manager = std::make_unique<opendnp3::DNP3Manager>(1);
             const auto listener = std::make_shared<QueueingChannelListener>(events_, session_id);
             const auto retry = opendnp3::ChannelRetry{
@@ -390,7 +465,7 @@ public:
             created.master = created.channel->AddMaster(
                 "pytest-master",
                 std::make_shared<NoOpSoeHandler>(),
-                opendnp3::DefaultMasterApplication::Create(),
+                read_support_->master_application(),
                 stack_config);
         }
         catch (const std::exception& error) {
@@ -409,6 +484,7 @@ public:
             master_ = std::move(created.master);
             session_active_ = true;
             current_session_id_ = session_id;
+            safety_token_ = safety_token;
         }
 
         bool enabled = false;
@@ -458,7 +534,16 @@ public:
             {"state", "CONNECTED"},
             {"channel_state", "OPEN"},
             {"session_id", session_id},
-            {"endpoint", Json{{"host", config.host}, {"port", config.port}}}});
+            {"endpoint", Json{{"host", config.host}, {"port", config.port}}},
+            {"safety",
+             Json{{"environment", config.safety_environment},
+                  {"state_change_authorized", !safety_token.empty()},
+                  {"safety_token",
+                   safety_token.empty() ? Json(nullptr) : Json(safety_token)},
+                  {"operator_id",
+                   config.operator_id.empty() ? Json(nullptr) : Json(config.operator_id)},
+                  {"dut_id", config.dut_id.empty() ? Json(nullptr) : Json(config.dut_id)},
+                  {"expires_on", "disconnect_or_process_exit"}}}});
     }
 
     BackendOperationResult disconnect() override
@@ -473,6 +558,8 @@ public:
         }
 
         const auto session_id = status().session_id;
+        command_support_->cancel_active();
+        read_support_->cancel_active();
         if (const auto cleanup_error = shutdown_resources(detach_resources())) {
             return BackendOperationResult::failure(
                 ErrorCode::InternalError,
@@ -484,6 +571,53 @@ public:
             {"state", "READY"},
             {"channel_state", snapshot.state},
             {"session_id", session_id}});
+    }
+
+    BackendOperationResult integrity_poll(const ReadOptions& options) override
+    {
+        const auto master = master_for_read();
+        if (!master) {
+            return read_unavailable();
+        }
+        return read_support_->integrity_poll(master, options);
+    }
+
+    BackendOperationResult class_poll(const ClassPollConfig& config) override
+    {
+        const auto master = master_for_read();
+        if (!master) {
+            return read_unavailable();
+        }
+        return read_support_->class_poll(master, config);
+    }
+
+    BackendOperationResult read(const ReadConfig& config) override
+    {
+        const auto master = master_for_read();
+        if (!master) {
+            return read_unavailable();
+        }
+        return read_support_->read(master, config);
+    }
+
+    BackendOperationResult select_and_operate(const CommandConfig& config) override
+    {
+        std::shared_ptr<opendnp3::IMaster> master;
+        if (const auto error = command_access(config.safety_token, master)) {
+            return BackendOperationResult::failure(
+                error->code, error->message, error->details);
+        }
+        return command_support_->select_and_operate(master, config);
+    }
+
+    BackendOperationResult direct_operate(const CommandConfig& config) override
+    {
+        std::shared_ptr<opendnp3::IMaster> master;
+        if (const auto error = command_access(config.safety_token, master)) {
+            return BackendOperationResult::failure(
+                error->code, error->message, error->details);
+        }
+        return command_support_->direct_operate(master, config);
     }
 
     BackendOperationResult wait_event(const WaitEventConfig& config) override
@@ -500,20 +634,84 @@ public:
             }
             shutting_down_ = true;
         }
+        command_support_->cancel_active();
+        read_support_->cancel_active();
         shutdown_resources(detach_resources());
     }
 
 private:
+    std::optional<BackendError> command_access(
+        const std::string& token,
+        std::shared_ptr<opendnp3::IMaster>& master) const
+    {
+        std::lock_guard<std::mutex> lock(resources_mutex_);
+        if (!session_active_ || !master_) {
+            return BackendError{
+                ErrorCode::NotConnected,
+                "no active DNP3 master session is available for a command task",
+                Json::object()};
+        }
+        if (safety_token_.empty()) {
+            return BackendError{
+                ErrorCode::SafetyInterlock,
+                "state-changing DNP3 commands are locked for this session",
+                Json{{"reason", "session_not_authorized"},
+                     {"required_environment", "LAB"},
+                     {"automatic_retry_safe", false}}};
+        }
+        if (token != safety_token_) {
+            return BackendError{
+                ErrorCode::SafetyInterlock,
+                "state-changing DNP3 command safety token is invalid or expired",
+                Json{{"reason", "invalid_or_expired_token"},
+                     {"automatic_retry_safe", false}}};
+        }
+        const auto channel = events_->snapshot();
+        if (channel.state != "OPEN") {
+            return BackendError{
+                ErrorCode::InvalidState,
+                "state-changing DNP3 commands require an open channel",
+                Json{{"reason", "channel_not_open"},
+                     {"channel_state", channel.state},
+                     {"session_id", channel.session_id},
+                     {"automatic_retry_safe", false}}};
+        }
+        master = master_;
+        return std::nullopt;
+    }
+
+    std::shared_ptr<opendnp3::IMaster> master_for_read() const
+    {
+        std::lock_guard<std::mutex> lock(resources_mutex_);
+        if (!session_active_) {
+            return nullptr;
+        }
+        return master_;
+    }
+
+    BackendOperationResult read_unavailable() const
+    {
+        const auto snapshot = events_->snapshot();
+        return BackendOperationResult::failure(
+            ErrorCode::NotConnected,
+            "no active DNP3 master session is available for a read task",
+            Json{{"channel_state", snapshot.state},
+                 {"session_id", snapshot.session_id}});
+    }
+
     BackendResources detach_resources() noexcept
     {
         std::lock_guard<std::mutex> lock(resources_mutex_);
         BackendResources detached{
             std::move(manager_), std::move(channel_), std::move(master_)};
         session_active_ = false;
+        safety_token_.clear();
         return detached;
     }
 
     std::shared_ptr<ChannelEventStore> events_;
+    std::unique_ptr<OpenDnp3CommandSupport> command_support_;
+    std::unique_ptr<OpenDnp3ReadSupport> read_support_;
     mutable std::mutex resources_mutex_;
     std::unique_ptr<opendnp3::DNP3Manager> manager_;
     std::shared_ptr<opendnp3::IChannel> channel_;
@@ -522,6 +720,7 @@ private:
     bool shutting_down_{false};
     std::uint64_t next_session_id_{0};
     std::uint64_t current_session_id_{0};
+    std::string safety_token_;
 };
 
 }  // namespace

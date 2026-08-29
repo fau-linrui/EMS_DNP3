@@ -71,6 +71,7 @@ MARKER_RE = re.compile(
     r"dnp3_capability\s*\(\s*[\"'](?P<id>[A-Za-z0-9_.-]+)[\"']\s*\)"
 )
 TEST_LITERAL_RE = re.compile(r"[\"'](?P<id>TC_[A-Z0-9]+(?:_[A-Z0-9]+)*)[\"']")
+TRACEABILITY_SOURCE_SUFFIXES = frozenset({".py", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp"})
 
 
 # Exact catalog entries that must exist even before licensed-standard review.
@@ -244,7 +245,15 @@ def _discover_test_traceability(test_roots: Iterable[Path]) -> tuple[set[str], s
     for root in test_roots:
         if not root.exists():
             continue
-        candidates = [root] if root.is_file() else root.rglob("*.py")
+        candidates = (
+            [root]
+            if root.is_file()
+            else (
+                path
+                for path in root.rglob("*")
+                if path.is_file() and path.suffix.lower() in TRACEABILITY_SOURCE_SUFFIXES
+            )
+        )
         for source_path in candidates:
             try:
                 text = source_path.read_text(encoding="utf-8")
@@ -481,6 +490,7 @@ def validate_matrix(
 def _default_test_roots(project_root: Path) -> tuple[Path, ...]:
     return (
         project_root / "tests",
+        project_root / "native" / "tests",
         project_root / "python" / "tests",
     )
 

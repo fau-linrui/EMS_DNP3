@@ -1,1 +1,1 @@
-pytest_plugins = ("dnp3_master.pytest_plugin",)
+pytest_plugins = ("dnp3_master.pytest_plugin", "pytester")

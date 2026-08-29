@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dnp3-master-test-framework"
-version = "0.1.0"
+version = "0.2.0"
 description = "Pytest-facing client package for the Windows DNP3 master test host"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -38,5 +38,8 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
   "lifecycle_stress: repeated native process lifecycle and handle-leak acceptance test",
-  "dnp3_capability(name): trace a test to one capability-matrix identifier"
+  "dnp3_capability(name): trace a test to one capability-matrix identifier",
+  "dnp3_dut: apply PICS capability gating before touching a real DUT",
+  "dnp3_unsupported_behavior: run only for a capability declared NOT_SUPPORTED",
+  "dnp3_state_changing: require explicit lab authorization before collection"
 ]

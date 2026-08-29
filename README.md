@@ -1,86 +1,103 @@
 # DNP3 Windows Master Automation Test Framework
 
-面向 Windows x64、IEEE 1815-2012 和 pytest 的 DNP3 主站自动化测试框架。
+面向 Windows x64、IEEE 1815-2012 和 pytest 的可移植 DNP3 主站自动化测试框架。当前版本 0.2.0，固定使用 OpenDNP3 3.1.2，并支持完全离线的 C++ 构建。
 
-当前已完成 T05：`dnp3-master-host.exe` 已通过可替换的 `IMasterBackend` 接入固定的 OpenDNP3 3.1.2，支持 TCP 主动连接、断开、连接超时清理、指数退避自动重连和有界通道状态事件。Python 包提供 `TcpConnectionConfig`、`connect()`、`disconnect()`、`wait_event()` 与 `connected_master` fixture。本阶段只验证本机 TCP 生命周期，并未实现 DNP3 Read/遥控，也不构成与独立从站或真实 EMS 的互操作结论。
-
-## 设计边界
+普通测试开发只使用 Python/pytest；C++ 协议栈封装在独立的 `dnp3-master-host.exe` 中：
 
 ```text
-pytest tests
-    -> Python dnp3_master package
-    -> stdin/stdout NDJSON
-    -> dnp3-master-host.exe
-    -> replaceable backend (OpenDNP3 3.1.2 first)
-    -> EMS outstation
+pytest -> dnp3_master Python package -> NDJSON -> dnp3-master-host.exe
+       -> OpenDNP3 3.1.2 TCP Client -> EMS Outstation
 ```
 
-- `python/` 是可复制到既有 pytest 框架的测试语义层。
-- `native/` 是 Windows 原生 host；协议栈实现不会泄漏到 pytest 用例。
-- `config/capability_matrix.csv` 是能力状态与证据的唯一台账。
-- OpenDNP3 缺失功能必须明确失败，不会以空实现或假成功代替。
-- 默认只允许只读实验；控制、重启、文件和配置操作将在后续加入安全门。
+## 当前能力
+
+- TCP Client 单会话连接、断开、连接超时、退避重连和有界状态事件。
+- 总召、Class 1/2/3 Poll、范围/计数/最多 64 Header 的 Read。
+- BI、DBBI、BOS、Counter、Frozen Counter、Analog、AOS、Octet String、Time-and-Interval 等公开测量回调的类型化交付。
+- 索引、原始 flags、时间、接收顺序、IIN 原始值/解析位、任务状态/耗时和 detail/summary 有界结果。
+- CROB Select-Before-Operate、有响应 Direct Operate、四种 Analog Output 和逐点 Command Status。
+- pytest PICS 三态选择和双层状态改变安全门。
+- 可移植包、本机回环自检、Debug/Release/ASan 预设和 1,000 次进程生命周期验收入口。
+
+控制默认锁住。只有获批实验室运行显式提供允许开关、operator ID、DUT ID，并连接时取得一次性会话令牌后才能调用。控制超时不会自动重试。当前 `DIRECT_OPERATE_NR` 明确返回 `UNSUPPORTED_BY_BACKEND`。
+
+> 重要：当前 DNP3 端到端回归的主站和测试从站都使用同一 OpenDNP3 版本，只是本机工程验证，不是与真实 EMS 的互操作结论，也不是 IEEE 一致性认证。能力矩阵中的对应状态因此保持 `IMPLEMENTED_UNVERIFIED`。
 
 ## 环境
 
 - Windows x64
-- Visual Studio 2022 Build Tools，含 MSVC x64 和 Windows SDK
-- CMake 3.25 或更高版本
-- Python 3.10 或更高版本
+- Visual Studio 2022 Build Tools（MSVC v143 x64、Windows SDK）
+- CMake 3.25+
+- Python 3.10+
 - pytest 8.x 或 9.x
 
-构建脚本通过 Visual Studio Installer 自动定位 Build Tools，不要求把 `cmake`、`cl` 或 `msbuild` 永久加入系统 PATH。
+构建脚本会自动定位 Visual Studio 工具链。OpenDNP3、Asio、exe4cpp、ser4cpp 和 nlohmann/json 均已固定版本、摘要和许可证；正常 CMake 构建不访问网络。
 
-## 构建与测试
-
-在仓库根目录执行：
+## 快速开始
 
 ```powershell
+git clone git@github.com:fau-linrui/EMS_DNP3.git
+cd EMS_DNP3
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".\python[test]"
 .\scripts\build.ps1 -Preset windows-msvc-release
 .\scripts\test.ps1 -Preset windows-msvc-release
+.\scripts\run-local-self-test.ps1 -Preset windows-msvc-release
 ```
 
-构建入口会先复核离线依赖锁、归档 SHA-1/SHA-256、源码树 SHA-256 和许可证副本；摘要不匹配时配置会直接失败。正常构建不会下载依赖。
-
-也提供以下预设：
-
-- `windows-msvc-debug`
-- `windows-msvc-release`
-- `windows-msvc-asan`
-
-Release 原生程序生成于：
+Release 主程序位于：
 
 ```text
-out/build/windows-msvc-release/bin/dnp3-master-host.exe
-out/build/windows-msvc-release/bin/build-info.json
+out\build\windows-msvc-release\bin\dnp3-master-host.exe
+out\build\windows-msvc-release\bin\build-info.json
 ```
 
-该程序等待 stdin 上的 NDJSON 请求，并保证 stdout 只输出协议 JSON。例如：
+生成可直接复制到内网/既有 pytest 项目的包：
 
 ```powershell
-'{"schema_version":1,"id":"demo-1","cmd":"hello","params":{}}' |
-    .\out\build\windows-msvc-release\bin\dnp3-master-host.exe
+.\scripts\package.ps1 -Preset windows-msvc-release -Force
 ```
 
-完整信封见 `docs/protocol.md`；客户端复制与 fixture 使用方式见 `docs/python_client.md`。
+产物位于 `out\package\ems-dnp3-pytest-0.2.0\`。包不会包含本地 IEEE 标准 PDF、EMS PICS、点表、PCAP 或密钥。
 
-生命周期压力验收：
+## 集成到现有 pytest
 
-```powershell
-.\scripts\test-lifecycle.ps1 -Preset windows-msvc-release -Iterations 1000
+推荐复制整个可移植包，然后在目标虚拟环境安装其中的 `python` 子目录。在目标框架根 `conftest.py` 启用插件：
+
+```python
+pytest_plugins = ("dnp3_master.pytest_plugin",)
 ```
 
-## 目录迁移
+只读用例示例：
 
-后续集成到现有 pytest 框架时，主要复制：
+```python
+import pytest
 
-```text
-python/src/dnp3_master/
-config/
-schemas/                 # T02 建立
-bin/dnp3-master-host.exe
-bin/build-info.json
-dependency-locks/
+
+@pytest.mark.dnp3_dut
+@pytest.mark.dnp3_capability("APP.FC.01.READ")
+def test_integrity(connected_master):
+    result = connected_master.integrity_poll(timeout=10.0)
+    assert result.task_status == "SUCCESS"
+    assert result.iin["raw_hex"]
 ```
 
-项目状态、缺失输入与标准依据见 `docs/standards/`。本地标准 PDF 的来源授权、EMS PICS/连接参数和独立参考从站仍待提供；这些缺口继续阻止正式互操作或一致性声明。
+真实 EMS 用例必须从未提交的本地 PICS、点表和连接参数驱动。当前已取得一份部分“DNP3 操作约定”，但因缺固件身份且事件、FC6、SBO、CROB 模型、广播和遥脉映射仍待澄清，不能直接解锁 DUT 测试。详细命令、控制安全示例和排错方法见下方文档。
+
+## 文档入口
+
+- [小白拉取、构建、移植与使用指南](docs/BEGINNER_MIGRATION_BUILD_USE_GUIDE.md)
+- [内网交接与剩余任务卡](docs/INTRANET_HANDOFF_REMAINING_TASKS.md)
+- [Python 客户端与 pytest 集成](docs/python_client.md)
+- [Host NDJSON 协议](docs/protocol.md)
+- [架构说明](docs/architecture.md)
+- [EMS 操作约定、PICS 状态与待确认偏差](docs/standards/ems_device_profile.md)
+- [IEEE/OpenDNP3 状态与输入缺口](docs/standards/inputs_checklist.md)
+- [能力矩阵](config/capability_matrix.csv)
+
+## 安全与发布边界
+
+- `config/ems.local.json`、`config/points.local.csv`、`secrets/`、`evidence/local/`、PCAP、密钥和本地标准 PDF 均被忽略，仍需在提交前人工检查 `git status`。
+- 本地会话令牌只是防误操作联锁，不替代认证、权限管理或 Secure Authentication v5。
+- 未实现能力必须返回稳定错误，禁止空实现或假成功。
+- 只有独立互操作/一致性证据齐全时，才能提升能力矩阵中的验证状态。

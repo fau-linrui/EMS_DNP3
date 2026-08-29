@@ -1,8 +1,10 @@
 #include "dnp3host/Backend.h"
+#include "dnp3host/CommandConfig.h"
 #include "dnp3host/ConnectionConfig.h"
 #include "dnp3host/HostController.h"
 #include "dnp3host/JsonLineProtocol.h"
 #include "dnp3host/Models.h"
+#include "dnp3host/ReadConfig.h"
 
 #include <iostream>
 #include <memory>
@@ -31,7 +33,19 @@ public:
 
     std::vector<std::string> supported_commands() const override
     {
-        return {"connect", "disconnect", "get_status", "hello", "shutdown", "wait_event"};
+        return {
+            "class_poll",
+            "connect",
+            "direct_operate",
+            "disconnect",
+            "get_status",
+            "hello",
+            "integrity_poll",
+            "read",
+            "select_and_operate",
+            "shutdown",
+            "stats",
+            "wait_event"};
     }
 
     dnp3host::Json capabilities() const override
@@ -79,6 +93,46 @@ public:
             dnp3host::Json{{"state", "READY"}, {"session_id", session_id}});
     }
 
+    dnp3host::BackendOperationResult integrity_poll(
+        const dnp3host::ReadOptions& options) override
+    {
+        ++integrity_poll_calls;
+        last_read_options = options;
+        return read_result("integrity_poll");
+    }
+
+    dnp3host::BackendOperationResult class_poll(
+        const dnp3host::ClassPollConfig& config) override
+    {
+        ++class_poll_calls;
+        last_class_poll_config = config;
+        return read_result("class_poll");
+    }
+
+    dnp3host::BackendOperationResult read(
+        const dnp3host::ReadConfig& config) override
+    {
+        ++read_calls;
+        last_read_config = config;
+        return read_result("read");
+    }
+
+    dnp3host::BackendOperationResult select_and_operate(
+        const dnp3host::CommandConfig& config) override
+    {
+        ++select_and_operate_calls;
+        last_command_config = config;
+        return command_result("select_and_operate", config.commands.size());
+    }
+
+    dnp3host::BackendOperationResult direct_operate(
+        const dnp3host::CommandConfig& config) override
+    {
+        ++direct_operate_calls;
+        last_command_config = config;
+        return command_result("direct_operate", config.commands.size());
+    }
+
     dnp3host::BackendOperationResult wait_event(
         const dnp3host::WaitEventConfig& config) override
     {
@@ -100,9 +154,47 @@ public:
     bool shutdown_called{false};
     int connect_calls{0};
     int disconnect_calls{0};
+    int integrity_poll_calls{0};
+    int class_poll_calls{0};
+    int read_calls{0};
+    int select_and_operate_calls{0};
+    int direct_operate_calls{0};
     std::uint64_t session_id{0};
     std::optional<dnp3host::ConnectionConfig> last_config;
     std::optional<dnp3host::WaitEventConfig> last_wait_config;
+    std::optional<dnp3host::ReadOptions> last_read_options;
+    std::optional<dnp3host::ClassPollConfig> last_class_poll_config;
+    std::optional<dnp3host::ReadConfig> last_read_config;
+    std::optional<dnp3host::CommandConfig> last_command_config;
+
+private:
+    dnp3host::BackendOperationResult read_result(const char* operation)
+    {
+        if (!connected) {
+            return dnp3host::BackendOperationResult::failure(
+                dnp3host::ErrorCode::NotConnected, "not connected");
+        }
+        return dnp3host::BackendOperationResult::success(dnp3host::Json{
+            {"operation", operation},
+            {"task_id", 1},
+            {"task_status", "SUCCESS"},
+            {"measurements", dnp3host::Json::array()}});
+    }
+
+    dnp3host::BackendOperationResult command_result(
+        const char* operation, const std::size_t points)
+    {
+        if (!connected) {
+            return dnp3host::BackendOperationResult::failure(
+                dnp3host::ErrorCode::NotConnected, "not connected");
+        }
+        return dnp3host::BackendOperationResult::success(dnp3host::Json{
+            {"mode", operation},
+            {"task_id", 2},
+            {"task_status", "SUCCESS"},
+            {"all_success", true},
+            {"requested_points", points}});
+    }
 };
 
 void check(const bool condition, const std::string_view message)
@@ -237,6 +329,19 @@ void test_connection_config_contract()
     check(!error.has_value(), "documented upper and lower bounds must be accepted");
     check(boundary.outstation_address == 65519, "last individual DNP3 address must be accepted");
 
+    dnp3host::ConnectionConfig lab;
+    error = dnp3host::parse_connection_config(
+        dnp3host::Json{
+            {"host", "127.0.0.1"},
+            {"safety",
+             dnp3host::Json{{"environment", "LAB"},
+                            {"allow_state_change", true},
+                            {"operator_id", "pytest-operator"},
+                            {"dut_id", "simulated-dut"}}}},
+        lab);
+    check(!error.has_value(), "explicit LAB authorization must parse");
+    check(lab.allow_state_change, "LAB state-change authorization must be preserved");
+
     const auto expect_error = [](const dnp3host::Json& params,
                                  const std::string_view field,
                                  const std::string_view reason) {
@@ -278,6 +383,16 @@ void test_connection_config_contract()
                                        {"outstation_address", 7}}}},
         "link",
         "addresses_must_differ");
+    expect_error(
+        dnp3host::Json{
+            {"host", "127.0.0.1"},
+            {"safety",
+             dnp3host::Json{{"environment", "PRODUCTION"},
+                            {"allow_state_change", true},
+                            {"operator_id", "operator"},
+                            {"dut_id", "dut"}}}},
+        "safety.environment",
+        "state_change_requires_lab");
 
     dnp3host::WaitEventConfig wait_config;
     auto wait_error = dnp3host::parse_wait_event_config(
@@ -287,6 +402,196 @@ void test_connection_config_contract()
     wait_error = dnp3host::parse_wait_event_config(
         dnp3host::Json{{"max_events", 0}}, wait_config);
     check(wait_error.has_value(), "wait_event must reject an empty batch limit");
+}
+
+void test_command_config_contract()
+{
+    const auto token = "0123456789abcdef0123456789abcdef";
+    dnp3host::CommandConfig config;
+    auto error = dnp3host::parse_command_config(
+        dnp3host::Json{
+            {"safety_token", token},
+            {"timeout_ms", 50},
+            {"response_mode", "response"},
+            {"commands",
+             dnp3host::Json::array(
+                 {dnp3host::Json{{"type", "crob"},
+                                 {"index", 1},
+                                 {"operation", "pulse_on"},
+                                 {"trip_close", "close"},
+                                 {"count", 2},
+                                 {"on_time_ms", 250},
+                                 {"off_time_ms", 500}},
+                  dnp3host::Json{{"type", "analog_output_int16"},
+                                 {"index", 2},
+                                 {"value", -32768}},
+                  dnp3host::Json{{"type", "analog_output_int32"},
+                                 {"index", 3},
+                                 {"value", 2147483647}},
+                  dnp3host::Json{{"type", "analog_output_float32"},
+                                 {"index", 4},
+                                 {"value", 1.25}},
+                  dnp3host::Json{{"type", "analog_output_double64"},
+                                 {"index", 5},
+                                 {"value", -2.5}}})}},
+        config);
+    check(!error.has_value(), "mixed command batch must parse");
+    check(config.commands.size() == 5, "every command point must be preserved");
+    check(config.commands[0].count == 2, "CROB count must be preserved");
+    check(config.commands[1].integer_value == -32768, "int16 value must be preserved");
+    check(config.commands[3].floating_value == 1.25, "float value must be preserved");
+
+    const auto expect_error = [](
+                                  const dnp3host::Json& params,
+                                  const std::string_view field,
+                                  const std::string_view reason) {
+        dnp3host::CommandConfig output;
+        const auto parsed_error = dnp3host::parse_command_config(params, output);
+        check(parsed_error.has_value(), "invalid command config must fail");
+        if (parsed_error) {
+            check(
+                parsed_error->details.value("field", "") == field,
+                "invalid command config must identify its field");
+            check(
+                parsed_error->details.value("reason", "") == reason,
+                "invalid command config must expose a stable reason");
+        }
+    };
+
+    expect_error(
+        dnp3host::Json{{"commands", dnp3host::Json::array()}},
+        "safety_token",
+        "missing_field");
+    expect_error(
+        dnp3host::Json{{"safety_token", "not-a-token"},
+                       {"commands", dnp3host::Json::array()}},
+        "safety_token",
+        "invalid_length");
+    expect_error(
+        dnp3host::Json{{"safety_token", token},
+                       {"commands", dnp3host::Json::array()}},
+        "commands",
+        "invalid_length");
+    expect_error(
+        dnp3host::Json{
+            {"safety_token", token},
+            {"commands",
+             dnp3host::Json::array(
+                 {dnp3host::Json{{"type", "analog_output_int16"},
+                                 {"index", 0},
+                                 {"value", 32768}}})}},
+        "commands[0].value",
+        "out_of_range");
+    expect_error(
+        dnp3host::Json{
+            {"safety_token", token},
+            {"commands",
+             dnp3host::Json::array(
+                 {dnp3host::Json{{"type", "crob"},
+                                 {"index", 7},
+                                 {"operation", "latch_on"}},
+                  dnp3host::Json{{"type", "crob"},
+                                 {"index", 7},
+                                 {"operation", "latch_off"}}})}},
+        "commands[1]",
+        "duplicate_command_point");
+}
+
+void test_read_config_contract()
+{
+    dnp3host::ReadOptions options;
+    auto error = dnp3host::parse_read_options(
+        dnp3host::Json{{"timeout_ms", 50},
+                       {"max_measurements", 1000000},
+                       {"return_mode", "summary"}},
+        options);
+    check(!error.has_value(), "documented read options must be accepted");
+    check(options.timeout_ms == 50, "read timeout must be preserved");
+    check(
+        options.return_mode == dnp3host::ReturnMode::Summary,
+        "summary return mode must be parsed");
+
+    dnp3host::ClassPollConfig classes;
+    error = dnp3host::parse_class_poll_config(
+        dnp3host::Json{{"classes", dnp3host::Json::array({1, 3})}}, classes);
+    check(!error.has_value(), "Class 1/3 poll must be accepted");
+    check(classes.class_mask == 0x0A, "class list must map to the OpenDNP3 bit mask");
+
+    dnp3host::ReadConfig read;
+    error = dnp3host::parse_read_config(
+        dnp3host::Json{
+            {"headers",
+             dnp3host::Json::array(
+                 {dnp3host::Json{{"group", 30},
+                                 {"variation", 0},
+                                 {"qualifier", "all_objects"}},
+                  dnp3host::Json{{"group", 1},
+                                 {"variation", 2},
+                                 {"qualifier", "range16"},
+                                 {"start", 0},
+                                 {"stop", 999}},
+                  dnp3host::Json{{"group", 60},
+                                 {"variation", 2},
+                                 {"qualifier", "count8"},
+                                 {"count", 10}}})}},
+        read);
+    check(!error.has_value(), "multi-header read must be accepted");
+    check(read.headers.size() == 3, "all read headers must be preserved");
+    check(
+        read.headers[1].qualifier == dnp3host::ReadQualifier::Range16,
+        "range16 qualifier must use the fixed enum");
+
+    const auto expect_error = [](const dnp3host::Json& params,
+                                 const std::string_view field,
+                                 const std::string_view reason) {
+        dnp3host::ReadConfig output;
+        const auto parsed_error = dnp3host::parse_read_config(params, output);
+        check(parsed_error.has_value(), "invalid read config must fail");
+        if (parsed_error) {
+            check(
+                parsed_error->details.value("field", "") == field,
+                "invalid read config must identify its field");
+            check(
+                parsed_error->details.value("reason", "") == reason,
+                "invalid read config must expose a stable reason");
+        }
+    };
+    expect_error(dnp3host::Json::object(), "headers", "missing_field");
+    expect_error(
+        dnp3host::Json{{"headers", dnp3host::Json::array()}},
+        "headers",
+        "invalid_length");
+    expect_error(
+        dnp3host::Json{
+            {"headers",
+             dnp3host::Json::array({dnp3host::Json{{"group", 1},
+                                                  {"variation", 2},
+                                                  {"qualifier", "range8"},
+                                                  {"start", 5},
+                                                  {"stop", 4}}})}},
+        "headers[0]",
+        "invalid_range");
+    expect_error(
+        dnp3host::Json{
+            {"headers",
+             dnp3host::Json::array({dnp3host::Json{{"group", 60},
+                                                  {"variation", 2},
+                                                  {"qualifier", "range16"},
+                                                  {"start", 0},
+                                                  {"stop", 1}}})}},
+        "headers[0].qualifier",
+        "unsupported_combination");
+
+    dnp3host::ClassPollConfig duplicate_classes;
+    const auto duplicate_error = dnp3host::parse_class_poll_config(
+        dnp3host::Json{{"classes", dnp3host::Json::array({1, 1})}},
+        duplicate_classes);
+    check(duplicate_error.has_value(), "duplicate event classes must be rejected");
+    if (duplicate_error) {
+        check(
+            duplicate_error->details.value("reason", "") == "duplicate_value",
+            "duplicate event classes must expose a stable reason");
+    }
 }
 
 void test_controller()
@@ -309,7 +614,18 @@ void test_controller()
     check(
         hello.response.at("result").at("supported_commands")
             == dnp3host::Json::array(
-                {"connect", "disconnect", "get_status", "hello", "shutdown", "wait_event"}),
+                {"class_poll",
+                 "connect",
+                 "direct_operate",
+                 "disconnect",
+                 "get_status",
+                 "hello",
+                 "integrity_poll",
+                 "read",
+                 "select_and_operate",
+                 "shutdown",
+                 "stats",
+                 "wait_event"}),
         "hello must advertise the injected backend command set");
 
     controller.record_request_received();
@@ -360,6 +676,64 @@ void test_controller()
     check(backend->last_wait_config->max_events == 3, "wait_event batch limit must be preserved");
 
     controller.record_request_received();
+    const auto integrity = controller.dispatch(dnp3host::Request{
+        "integrity-1",
+        "integrity_poll",
+        dnp3host::Json{{"timeout_ms", 2500}, {"return_mode", "summary"}}});
+    check(integrity.response.at("ok") == true, "integrity_poll must reach the backend");
+    check(backend->integrity_poll_calls == 1, "integrity_poll must be dispatched once");
+    check(
+        backend->last_read_options->return_mode == dnp3host::ReturnMode::Summary,
+        "integrity_poll return mode must be preserved");
+
+    controller.record_request_received();
+    const auto class_poll = controller.dispatch(dnp3host::Request{
+        "class-1",
+        "class_poll",
+        dnp3host::Json{{"classes", dnp3host::Json::array({1, 2})}}});
+    check(class_poll.response.at("ok") == true, "class_poll must reach the backend");
+    check(
+        backend->last_class_poll_config->class_mask == 0x06,
+        "class_poll class mask must be preserved");
+
+    controller.record_request_received();
+    const auto read = controller.dispatch(dnp3host::Request{
+        "read-1",
+        "read",
+        dnp3host::Json{
+            {"headers",
+             dnp3host::Json::array({dnp3host::Json{{"group", 30},
+                                                  {"variation", 0},
+                                                  {"qualifier", "all_objects"}}})}}});
+    check(read.response.at("ok") == true, "read must reach the backend");
+    check(backend->last_read_config->headers.size() == 1, "read headers must reach backend");
+
+    controller.record_request_received();
+    const auto control_params = dnp3host::Json{
+        {"safety_token", "0123456789abcdef0123456789abcdef"},
+        {"timeout_ms", 2000},
+        {"commands",
+         dnp3host::Json::array({dnp3host::Json{
+             {"type", "crob"}, {"index", 7}, {"operation", "latch_on"}}})}};
+    const auto control = controller.dispatch(dnp3host::Request{
+        "control-1", "select_and_operate", control_params});
+    check(control.response.at("ok") == true, "control must reach the backend");
+    check(
+        backend->select_and_operate_calls == 1,
+        "select_and_operate must be dispatched once");
+    check(
+        backend->last_command_config->commands.front().index == 7,
+        "control point index must reach the backend");
+
+    controller.record_request_received();
+    const auto stats = controller.dispatch(
+        dnp3host::Request{"stats-1", "stats", dnp3host::Json::object()});
+    check(stats.response.at("ok") == true, "stats must be available without a session");
+    check(
+        stats.response.at("result").at("scope") == "host_channel_and_local_queues",
+        "stats must state its implemented scope");
+
+    controller.record_request_received();
     const auto disconnected = controller.dispatch(
         dnp3host::Request{"disconnect-1", "disconnect", dnp3host::Json::object()});
     check(disconnected.response.at("ok") == true, "disconnect must reach the backend");
@@ -372,11 +746,11 @@ void test_controller()
         "disconnect without an active session must use NOT_CONNECTED");
 
     controller.record_request_received();
-    const auto backend_command = controller.dispatch(
-        dnp3host::Request{"read-1", "read", dnp3host::Json::object()});
+    const auto backend_command = controller.dispatch(dnp3host::Request{
+        "capture-1", "capture.begin", dnp3host::Json::object()});
     check(
         backend_command.response.at("error").at("code") == "UNSUPPORTED_BY_BACKEND",
-        "future backend commands must not report success");
+        "known but unavailable backend commands must not report success");
     check(
         backend_command.response.at("error").at("details").at("backend") == "fake",
         "unsupported command must identify the active backend");
@@ -393,7 +767,7 @@ void test_controller()
         dnp3host::Request{"status-1", "get_status", dnp3host::Json::object()});
     check(status.response.at("result").at("state") == "READY", "host must be ready");
     check(
-        status.response.at("result").at("metrics").at("requests_received") == 12,
+        status.response.at("result").at("metrics").at("requests_received") == 17,
         "status must report received requests");
 
     controller.record_request_received();
@@ -429,6 +803,8 @@ int main()
     test_line_reader();
     test_strict_parser();
     test_connection_config_contract();
+    test_read_config_contract();
+    test_command_config_contract();
     test_controller();
     test_response_serialization();
     if (failures != 0) {

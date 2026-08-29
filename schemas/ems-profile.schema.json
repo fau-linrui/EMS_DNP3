@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dnp3-master/ems-profile.schema.json",
+  "title": "DNP3 EMS capability profile v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "device", "capabilities"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vendor", "model", "firmware", "profile_revision"],
+      "properties": {
+        "vendor": {"type": "string", "minLength": 1, "maxLength": 256},
+        "model": {"type": "string", "minLength": 1, "maxLength": 256},
+        "firmware": {"type": "string", "minLength": 1, "maxLength": 256},
+        "profile_revision": {"type": "string", "minLength": 1, "maxLength": 256}
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[A-Z0-9]+(?:[._-][A-Z0-9]+)*$"
+      },
+      "additionalProperties": {
+        "enum": ["SUPPORTED", "NOT_SUPPORTED", "UNKNOWN"]
+      }
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 4096
+    }
+  }
+}

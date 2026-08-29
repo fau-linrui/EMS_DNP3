@@ -1,6 +1,6 @@
 # OpenDNP3 3.1.2 缺口分析
 
-> 状态：`IN_PROGRESS`。固定版 OpenDNP3 源码、commit、源码包、三项离线构建依赖、摘要和许可证已经进入项目。T05 已完成 TCP client 生命周期的源码/API 复核与本机行为测试；其余公共 API 与功能缺口复核尚未完成。
+> 状态：`IN_PROGRESS`。TCP Client、核心 solicited Read/IIN 和有响应控制的公共 API 已完成定向复核与本机同栈测试；其余能力仍需按真实 EMS PICS 逐项分析。任何本机结论均不等同于独立互操作。
 
 ## 固定依赖记录
 
@@ -11,52 +11,72 @@
 | 完整 commit | `26b4c01e4839bbbda8866655e086471c4917ee53` |
 | tag / tag object | `3.1.2` / `523f7d2d6c65aa671f594fc63c3adcd74e81407d` |
 | Git tree | `18fedf6a7cf5aa98f7556afafec848d7e61f8f24` |
-| 源码包 | `third_party/distfiles/opendnp3-3.1.2.zip` |
-| 源码包 SHA-256 | `7cb1a8a84f95c05b579a48543687a78c7dc9e3c394883419a92355a4aa6c1d5f` |
-| 许可证文件 | `LICENSES/opendnp3/LICENSE` 和 `LICENSES/opendnp3/NOTICE` |
+| 源码 ZIP SHA-256 | `7cb1a8a84f95c05b579a48543687a78c7dc9e3c394883419a92355a4aa6c1d5f` |
 | 构建依赖锁 | `third_party/opendnp3-dependencies.lock.json` |
 | 离线依赖 | Asio `asio-1-16-0`；exe4cpp `fb878a4...`；ser4cpp `3c449734...` |
-| 运行时冒烟 | `native/tests/opendnp3_runtime_tests.cpp` |
-| 官方 master example 路径 | `third_party/opendnp3/cpp/examples/master/` |
-| 自动校验日期 | 2026-08-28 |
-| 人工源码/API 复核人 | MISSING |
+| 许可证 | `LICENSES/opendnp3/LICENSE`、`LICENSES/opendnp3/NOTICE` |
+| 自动校验日期 | 2026-08-29 |
+| 人工源码/API 最终复核人 | MISSING |
 
-## 复核方法
+## 复核判定方法
 
-每个能力必须分别回答以下五个问题，并引用固定源码的文件与符号：
+每个能力分别判断：
 
-1. 编解码器能否表达该对象和限定词？
-2. Master 公共 API 能否发起该事务？
-3. 回调能否无损交付值、flags、时间、IIN 和状态？
-4. 是否存在完整事务状态机和资源清理？
-5. 是否已有独立互操作证据？
+1. codec 能否表达对象、功能码和限定词；
+2. Master 公共 API 能否发起事务；
+3. 回调能否无损交付值、flags、时间、IIN 和状态；
+4. 框架是否有完整事务、超时、取消和清理；
+5. 是否有非同一实现的互操作/一致性证据。
 
-仅存在枚举或解析类型不能判定端到端支持。
+只存在枚举、生成对象或 decoder 不能判定端到端支持。状态含义：
 
-## 待源码复核的初始缺口表
+- `IMPLEMENTED_UNVERIFIED`：框架已接入并有本机证据，缺独立/DUT 证据。
+- `UNSUPPORTED_BY_BACKEND`：固定公共 API 无法安全表达，运行时明确失败。
+- `BLOCKED`：尚未完成源码/标准/PICS/安全前置分析。
 
-| 能力族 | 指导书初始判断 | 必须读取的固定源码证据 | 当前结论 |
-|---|---|---|---|
-| 常用 BI/DBBI/BOS/Counter/Analog/AOS 静态与事件 | 大部分支持 | `cpp/examples/master`、Master API headers、SOE handler overloads | BLOCKED |
-| Class 0/1/2/3 扫描和主动上送 | 支持 | Scan APIs、task lifecycle、unsolicited handling | BLOCKED |
-| CROB/Analog Output 的 SBO 与 Direct Operate | 支持；No Response 需单独确认 | `ICommandProcessor`、`CommandSet`、结果回调 | BLOCKED |
-| TCP client | 通道 API 支持 | `DNP3Manager::AddTCPClient`、`IChannel::AddMaster`、`IMaster::Enable/Disable/Shutdown`、`IChannelListener::OnStateChange`；`native/src/OpenDnp3Backend.cpp`；`python/tests/test_host_tcp.py` | IMPLEMENTED_UNVERIFIED；本机 TCP connect/FIN reconnect/disconnect/timeout/shutdown 已测，独立 DNP3 互操作仍缺失 |
-| TCP server / TLS / UDP / Serial | 通道 API 存在，框架尚未接入 | `DNP3Manager` 与 channel headers/examples | BLOCKED |
-| Group 0 Device Attributes | 部分/缺失 | object definitions、decoder、Master API delivery | BLOCKED |
-| Group 31/33 Frozen Analog | 公共支持不足 | generated objects、decoder、SOE overloads | BLOCKED |
-| Group 34 Deadband | 缺失 | object catalog、write/read header support | BLOCKED |
-| Group 13/43 Command Event | 部分/缺失 | object catalog、SOE delivery | BLOCKED |
-| Group 50V1/V2 与 Group 80 主站读取 | 限制/缺口 | Header factories、read path、callbacks | BLOCKED |
-| Group 110/111 Octet String | 支持 | length variants、SOE delivery、limits | BLOCKED |
-| 广播与 self-address | 部分/缺失 | link-layer addressing and public configuration | BLOCKED |
-| File Transfer / Group 70 | 无完整业务实现 | object support plus transaction API/state machine | BLOCKED |
-| Data Set / Groups 83/85-88 | 未实现 | object catalog and public API | BLOCKED |
-| Virtual Terminal / Groups 112-113 | 未实现 | object catalog and public API | BLOCKED |
-| SAv5 / Groups 120-122 | 未实现 | object catalog/security modules/public API | BLOCKED |
+## 已完成定向复核
 
-## 完成此分析所需输出
+| 能力 | 固定源码/API 与本项目证据 | 当前结论 |
+|---|---|---|
+| TCP Client | `DNP3Manager::AddTCPClient`、`IChannel::AddMaster`、`IMaster::Enable/Disable/Shutdown`、`IChannelListener::OnStateChange`；`OpenDnp3Backend.cpp`；`test_host_tcp.py` | `IMPLEMENTED_UNVERIFIED`：connect/timeout/reconnect/disconnect 本机已测 |
+| 一次性 Integrity/Class/自定义 Read | `IMasterOperations::Scan/ScanClasses`、`Header` 工厂、`IMasterTaskCallback`；`OpenDnp3ReadSupport.cpp` | `IMPLEMENTED_UNVERIFIED`：范围、multi-header、summary、deadline 和 cancellation 本机已测 |
+| BI/DBBI/BOS/Counter/Frozen Counter/Analog/AOS | `ISOEHandler` 公共 overload；类型化 visitors | `IMPLEMENTED_UNVERIFIED`：值/index/raw flags/顺序交付本机已测 |
+| Octet String、TimeAndInterval 及其余公开 SOE 类型 | `ISOEHandler` overload；`OpenDnp3ReadSupport.cpp` | `IMPLEMENTED_UNVERIFIED`：公共回调均有归一化，完整长度/变体组合待独立测试 |
+| IIN | `IMasterApplication::OnReceiveIIN`；有界 IIN store/completion gate | `IMPLEMENTED_UNVERIFIED`：raw/parsed 和 OBJECT_UNKNOWN 本机已测 |
+| CROB SBO | `ICommandProcessor::SelectAndOperate(CommandSet, ...)` | `IMPLEMENTED_UNVERIFIED`：逐点状态、安全门和批次本机已测 |
+| 有响应 Direct Operate | `ICommandProcessor::DirectOperate(CommandSet, ...)` | `IMPLEMENTED_UNVERIFIED`：CROB 路径本机已测，禁止自动重试 |
+| G41 V1～V4 | `AnalogOutputInt32/Int16/Float32/Double64` + `CommandSet` | `IMPLEMENTED_UNVERIFIED`：混合批次和逐点关联本机已测 |
+| Command Status | `CommandPointResult`、`CommandStatusSpec` | `IMPLEMENTED_UNVERIFIED`：公共枚举无损映射；全状态故障注入待独立端 |
+| Direct Operate No Response | 3.1.2 `ICommandProcessor` 公共接口仅提供结果回调型 Direct Operate | `UNSUPPORTED_BY_BACKEND`：明确失败，不用有响应命令模拟 |
 
-- 每行补充固定 commit 下的源码路径、类型/函数名和测试路径。
-- 分开记录 `codec_status`、`master_api_status`、`callback_status`、`transaction_status` 和 `interop_status`。
-- 将明确缺失项映射到 `capability_matrix.csv`，使用 `UNSUPPORTED_BY_BACKEND`；不能返回空成功。
-- 形成后端选型评审后，才能决定内部 fork、扩展后端或替换协议栈。
+## 尚未完成/需按 PICS 决策
+
+| 能力族 | 主要缺口 | 当前状态 |
+|---|---|---|
+| Unsolicited | 当前 master 不自动扫描/启用；没有持久 SOE collector、Confirm/重发测试 | `BLOCKED`（T12） |
+| 时间同步 | Delay Measure/Write Time、Record Current Time 流程和 DUT 延迟预算未接入 | `BLOCKED`（T13） |
+| Restart/Freeze/Assign Class/周期扫描 | 事务 API、风险门和真实 DUT 副作用未实现 | `BLOCKED`（T14，必须拆卡） |
+| 持续 capture/性能 | 只有单次 detail/summary 和有限 stats；无 capture/network bytes/resource timeline | `BLOCKED`（T15/T16） |
+| TCP Server/TLS/UDP/Serial | 后端/构建或 API 可用性未按目标拓扑复核 | `BLOCKED` |
+| Group 0 Device Attributes | 对象支持、读取语义和 Profile 断言未闭环 | `BLOCKED` |
+| Group 31/33 Frozen Analog、G34 Deadband | codec/回调/公共 Header/事务需逐项确认 | `BLOCKED` |
+| Group 13/43 Command Event | 公开回调存在性与端到端交付未闭环 | `BLOCKED` |
+| G50V1/V2、Group 80 主站读路径 | 特定读取/写入流程和公开 Header 能力未闭环 | `BLOCKED` |
+| Group 110 全长度组合 | 公共 OctetString 回调已接入，只测一个本机长度 | `IMPLEMENTED_UNVERIFIED`，全组合待测 |
+| 广播/self-address/特殊限定词 | 公共 API 表达能力和链路行为未闭环 | `BLOCKED` |
+| File/Group 70 | 无完整文件事务状态机 | `BLOCKED` |
+| Data Set/83/85–88 | 无完整业务事务 | `BLOCKED` |
+| Virtual Terminal/112–113 | 无完整业务事务 | `BLOCKED` |
+| SAv5/120–122 | 3.1.2 无项目批准的完整实现；安全前置输入缺失 | `BLOCKED` |
+
+## 不得越过的证据边界
+
+- `native/tests/local_outstation_main.cpp` 和 `opendnp3_read_integration_tests.cpp` 使用相同固定栈，只能作为工程回归。
+- 修改/扩展 OpenDNP3 fork 后用该 fork 两端互测，仍不能算独立互操作。
+- `hello.capabilities` 只列已接入能力；能力矩阵可能包含尚未实现的完整 IEEE 目录。
+- 无 PICS 时 `dut_pics_status` 必须保持 `UNKNOWN`。
+- 无不可变证据时不能使用 `VERIFIED_INTEROP` 或 `VERIFIED_CONFORMANCE`。
+
+## 下一步
+
+优先取得真实 EMS PICS、点表、连接参数和独立端，并先关闭 `ems_device_profile.md` 的 D01～D09，再执行 `docs/INTRANET_HANDOFF_REMAINING_TASKS.md` 的 H01～H04。当前操作约定提到 FC6，但固定 OpenDNP3 3.1.2 公共 API 不能安全表达 no-response 控制；在厂商确认、低层实现评审和独立证据前继续明确失败。其余能力只在 PICS/项目目标需要时逐卡复核，避免为目标 EMS 不支持的能力建立高风险自定义协议栈。

@@ -8,7 +8,10 @@ import time
 import pytest
 
 from dnp3_master import (
+    AnalogOutputCommand,
     ClientStateError,
+    CommandTaskResult,
+    CrobCommand,
     Dnp3MasterClient,
     HostCommandError,
     HostExitedError,
@@ -16,11 +19,25 @@ from dnp3_master import (
     HostProtocolError,
     HostStartError,
     HostTimeoutError,
+    LabSafetyConfig,
+    ReadHeader,
+    ReadTaskResult,
     TcpConnectionConfig,
 )
+from dnp3_master.client import _TailBuffer
 
 
 FAKE_HOST = Path(__file__).with_name("fake_host.py")
+
+
+def test_diagnostic_tail_redacts_safety_tokens_across_chunks() -> None:
+    token = "0123456789abcdef0123456789abcdef"
+    tail = _TailBuffer(1024)
+    tail.append(b'{"safety_token":"0123456789abcdef')
+    tail.append(b'0123456789abcdef"}')
+
+    assert token not in tail.text()
+    assert '"safety_token":"<redacted>"' in tail.text()
 
 
 def fake_config(mode: str, **overrides: object) -> HostProcessConfig:
@@ -80,10 +97,37 @@ def test_tcp_helpers_use_validated_protocol_parameters() -> None:
         assert connected["state"] == "CONNECTED"
         assert connected["received"] == connection.to_params()
         assert client.get_status()["state"] == "CONNECTED"
+        assert client.get_stats()["scope"] == "host_channel_and_local_queues"
 
         waited = client.wait_event(wait_timeout=0.025, max_events=3)
         assert waited["received"] == {"timeout_ms": 25, "max_events": 3}
         assert waited["timed_out"] is True
+
+        integrity = client.integrity_poll(timeout=0.25, max_measurements=25)
+        assert isinstance(integrity, ReadTaskResult)
+        assert integrity.task_status == "SUCCESS"
+        assert integrity.measurements[0].kind == "analog_input"
+        assert integrity.measurements[0].value == 220.5
+        assert integrity.measurements_of_kind("analog_input") == integrity.measurements
+        assert integrity.raw["received"] == {
+            "timeout_ms": 250,
+            "max_measurements": 25,
+            "return_mode": "detail",
+        }
+
+        events = client.class_poll(
+            (1, 3),
+            timeout=0.25,
+            max_measurements=5,
+            return_mode="summary",
+        )
+        assert events.return_mode == "summary"
+        assert events.measurements == ()
+        assert events.raw["received"]["classes"] == [1, 3]
+
+        header = ReadHeader.range16(30, 0, 0, 999)
+        explicit = client.read([header], timeout=0.25)
+        assert explicit.raw["received"]["headers"] == [header.to_params()]
 
         disconnected = client.disconnect()
         assert disconnected["state"] == "READY"
@@ -138,6 +182,190 @@ def test_tcp_connection_config_accepts_documented_boundaries() -> None:
         "outstation_address": 65519,
         "keep_alive_timeout_ms": 86400000,
     }
+
+
+def test_read_header_factories_and_validation() -> None:
+    assert ReadHeader.all_objects(60, 1).to_params() == {
+        "group": 60,
+        "variation": 1,
+        "qualifier": "all_objects",
+    }
+    assert ReadHeader.range8(1, 2, 0, 255).to_params()["stop"] == 255
+    assert ReadHeader.range16(30, 5, 0, 65535).to_params()["stop"] == 65535
+    assert ReadHeader.count8(60, 2, 10).to_params()["count"] == 10
+    assert ReadHeader.count16(60, 3, 1000).to_params()["count"] == 1000
+
+    with pytest.raises(ValueError, match="start must not exceed"):
+        ReadHeader.range16(30, 0, 2, 1)
+    with pytest.raises(ValueError, match="class data"):
+        ReadHeader.range16(60, 2, 0, 1)
+    with pytest.raises(ValueError, match="requires count"):
+        ReadHeader(group=1, variation=2, qualifier="count8")
+    with pytest.raises(ValueError, match="qualifier"):
+        ReadHeader(group=1, variation=2, qualifier="raw")
+
+
+@pytest.mark.parametrize(
+    ("method", "kwargs", "message"),
+    [
+        ("integrity_poll", {"timeout": 0.01}, "timeout"),
+        ("integrity_poll", {"timeout": 10**10_000}, "timeout"),
+        ("integrity_poll", {"max_measurements": 0}, "max_measurements"),
+        ("integrity_poll", {"return_mode": "raw"}, "return_mode"),
+        ("class_poll", {"classes": ()}, "classes"),
+        ("class_poll", {"classes": (0,)}, "classes"),
+        ("class_poll", {"classes": (1, 1)}, "duplicate"),
+        ("read", {"headers": ()}, "headers"),
+        ("read", {"headers": ({"group": 1},)}, "ReadHeader"),
+    ],
+)
+def test_read_helpers_reject_invalid_inputs(
+    method: str, kwargs: dict[str, object], message: str
+) -> None:
+    with Dnp3MasterClient(fake_config("tcp_api")) as client:
+        with pytest.raises((TypeError, ValueError), match=message):
+            getattr(client, method)(**kwargs)
+
+
+def test_command_models_validate_ranges_and_serialize() -> None:
+    crob = CrobCommand(
+        index=7,
+        operation="pulse_on",
+        trip_close="close",
+        count=2,
+        on_time_ms=250,
+        off_time_ms=500,
+    )
+    assert crob.to_params() == {
+        "type": "crob",
+        "index": 7,
+        "operation": "pulse_on",
+        "trip_close": "close",
+        "clear": False,
+        "count": 2,
+        "on_time_ms": 250,
+        "off_time_ms": 500,
+    }
+    assert AnalogOutputCommand.int16(1, -32768).to_params()["value"] == -32768
+    assert AnalogOutputCommand.int32(2, 2147483647).command_type.endswith("int32")
+    assert AnalogOutputCommand.float32(3, 1.25).value == 1.25
+    assert AnalogOutputCommand.double64(4, -2.5).value == -2.5
+
+    with pytest.raises(ValueError, match="operation"):
+        CrobCommand(index=0, operation="toggle")
+    with pytest.raises(ValueError, match="int16"):
+        AnalogOutputCommand.int16(0, 32768)
+    with pytest.raises(ValueError, match="finite"):
+        AnalogOutputCommand.double64(0, float("nan"))
+    with pytest.raises(ValueError, match="finite"):
+        AnalogOutputCommand.double64(0, 10**10_000)
+
+
+def test_command_helpers_require_lab_session_and_preserve_batch_results() -> None:
+    locked_connection = TcpConnectionConfig(host="127.0.0.1")
+    with Dnp3MasterClient(fake_config("tcp_api")) as client:
+        client.connect(locked_connection)
+        assert client.state_change_authorized is False
+        with pytest.raises(ClientStateError, match="locked"):
+            client.direct_operate([CrobCommand(index=0, operation="latch_on")])
+        client.disconnect()
+
+    authorized_connection = TcpConnectionConfig(
+        host="127.0.0.1",
+        safety=LabSafetyConfig(
+            operator_id="pytest-operator",
+            dut_id="simulated-dut",
+            allow_state_change=True,
+        ),
+    )
+    with Dnp3MasterClient(fake_config("tcp_api")) as client:
+        connected = client.connect(authorized_connection)
+        assert connected["safety"]["state_change_authorized"] is True
+        assert connected["safety"]["token_exposed"] is False
+        assert "safety_token" not in connected["safety"]
+        assert client.state_change_authorized is True
+
+        result = client.select_and_operate(
+            [
+                CrobCommand(index=0, operation="latch_on"),
+                AnalogOutputCommand.int16(0, -5),
+                AnalogOutputCommand.float32(0, 12.5),
+            ],
+            timeout=0.25,
+        )
+        assert isinstance(result, CommandTaskResult)
+        assert result.all_success is True
+        assert len(result.point_results) == 3
+        assert {point.status for point in result.point_results} == {"SUCCESS"}
+
+        direct = client.direct_operate(
+            [AnalogOutputCommand.double64(1, 99.25)], timeout=0.25
+        )
+        assert direct.mode == "direct_operate"
+
+        with pytest.raises(HostCommandError) as unsupported:
+            client.direct_operate(
+                [CrobCommand(index=0, operation="latch_off")],
+                timeout=0.25,
+                response_mode="no_response",
+            )
+        assert unsupported.value.code == "UNSUPPORTED_BY_BACKEND"
+
+        client.disconnect()
+        assert client.state_change_authorized is False
+
+    diagnostics = client.diagnostics
+    assert "0123456789abcdef0123456789abcdef" not in diagnostics.stdout_tail
+    assert "pytest-operator" not in diagnostics.stdout_tail
+    assert "simulated-dut" not in diagnostics.stdout_tail
+
+
+def test_command_helper_rejects_duplicate_points_and_invalid_options() -> None:
+    connection = TcpConnectionConfig(
+        host="127.0.0.1",
+        safety=LabSafetyConfig(
+            operator_id="pytest-operator",
+            dut_id="simulated-dut",
+            allow_state_change=True,
+        ),
+    )
+    with Dnp3MasterClient(fake_config("tcp_api")) as client:
+        client.connect(connection)
+        duplicate = CrobCommand(index=1, operation="latch_on")
+        with pytest.raises(ValueError, match="repeat"):
+            client.select_and_operate([duplicate, duplicate])
+        with pytest.raises(ValueError, match="response_mode"):
+            client.direct_operate([duplicate], response_mode="maybe")
+        with pytest.raises(ValueError, match="timeout"):
+            client.direct_operate([duplicate], timeout=0.01)
+
+
+def test_uncertain_command_result_invalidates_the_session() -> None:
+    connection = TcpConnectionConfig(
+        host="127.0.0.1",
+        safety=LabSafetyConfig(
+            operator_id="pytest-operator",
+            dut_id="simulated-dut",
+            allow_state_change=True,
+        ),
+    )
+    client = Dnp3MasterClient(fake_config("tcp_api"))
+    client.start()
+    client.connect(connection)
+
+    with pytest.raises(HostCommandError) as captured:
+        client.direct_operate(
+            [CrobCommand(index=65535, operation="latch_on")],
+            timeout=0.25,
+        )
+
+    assert captured.value.code == "RESPONSE_TIMEOUT"
+    assert captured.value.details["execution_uncertain"] is True
+    assert client.state_change_authorized is False
+    assert not client.is_running
+    with pytest.raises(ClientStateError, match="closed"):
+        client.get_status()
+    client.close()
 
 
 def test_startup_timeout_terminates_process_and_preserves_diagnostics() -> None:
@@ -265,8 +493,12 @@ def test_missing_executable_fails_before_process_creation(tmp_path: Path) -> Non
         ("startup_timeout", 0),
         ("request_timeout", -1),
         ("shutdown_timeout", 0),
+        ("startup_timeout", float("nan")),
+        ("request_timeout", float("inf")),
         ("diagnostic_tail_bytes", 0),
+        ("diagnostic_tail_bytes", True),
         ("max_response_bytes", 63),
+        ("max_response_bytes", True),
     ],
 )
 def test_process_config_rejects_invalid_limits(field: str, value: object) -> None:

@@ -14,7 +14,7 @@ import queue
 import re
 import subprocess
 import threading
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Sequence
 import uuid
 
 from ._win32_job import ProcessJob
@@ -26,10 +26,23 @@ from .errors import (
     HostStartError,
     HostTimeoutError,
 )
-from .models import HostProcessConfig, HostProcessDiagnostics, TcpConnectionConfig
+from .models import (
+    AnalogOutputCommand,
+    CommandTaskResult,
+    CrobCommand,
+    HostProcessConfig,
+    HostProcessDiagnostics,
+    ReadHeader,
+    ReadTaskResult,
+    TcpConnectionConfig,
+)
 
 
 _TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9._:-]+$")
+_SAFETY_TOKEN_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
+_DIAGNOSTIC_SAFETY_TOKEN_PATTERN = re.compile(
+    r'("safety_token"\s*:\s*")[0-9a-fA-F]{32}(")'
+)
 _STDOUT_EOF = object()
 
 
@@ -77,7 +90,10 @@ class _TailBuffer:
     def text(self) -> str:
         with self._lock:
             value = b"".join(self._chunks)
-        return value.decode("utf-8", errors="replace")
+        decoded = value.decode("utf-8", errors="replace")
+        return _DIAGNOSTIC_SAFETY_TOKEN_PATTERN.sub(
+            r"\1<redacted>\2", decoded
+        )
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -110,6 +126,7 @@ class Dnp3MasterClient:
         self._stdout_thread: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
         self._hello_info: dict[str, Any] | None = None
+        self._safety_token: str | None = None
         self._request_prefix = f"py-{os.getpid()}-{uuid.uuid4().hex[:12]}"
         self._request_counter = 0
         self._cleanup_error: str | None = None
@@ -153,6 +170,12 @@ class Dnp3MasterClient:
         if self._process is None:
             return self._last_diagnostics
         return self._snapshot_diagnostics()
+
+    @property
+    def state_change_authorized(self) -> bool:
+        """Whether the active session owns a non-exported short-lived safety token."""
+
+        return self._safety_token is not None
 
     def start(self) -> Mapping[str, Any]:
         with self._request_lock:
@@ -211,10 +234,19 @@ class Dnp3MasterClient:
                 state_name = "closed" if self._state in {_State.CLOSED, _State.BROKEN} else "not started"
                 raise ClientStateError(f"client is {state_name}")
             deadline = self.config.request_timeout if timeout is None else timeout
-            if isinstance(deadline, bool) or not isinstance(deadline, (int, float)) or deadline <= 0:
-                raise ValueError("timeout must be a positive number")
+            try:
+                normalized_deadline = float(deadline)
+            except (TypeError, ValueError, OverflowError):
+                normalized_deadline = math.nan
+            if (
+                isinstance(deadline, bool)
+                or not isinstance(deadline, (int, float))
+                or not math.isfinite(normalized_deadline)
+                or normalized_deadline <= 0
+            ):
+                raise ValueError("timeout must be a positive finite number")
             request_params = {} if params is None else dict(params)
-            return self._exchange(command, request_params, float(deadline))
+            return self._exchange(command, request_params, normalized_deadline)
 
     def get_status(self, *, timeout: float | None = None) -> Mapping[str, Any]:
         result = self.request("get_status", timeout=timeout)
@@ -225,6 +257,11 @@ class Dnp3MasterClient:
                 self.diagnostics,
             )
         return result
+
+    def get_stats(self, *, timeout: float | None = None) -> Mapping[str, Any]:
+        """Return bounded host/channel counters and an explicit scope statement."""
+
+        return self._mapping_result("stats", self.request("stats", timeout=timeout))
 
     def connect(
         self,
@@ -241,18 +278,44 @@ class Dnp3MasterClient:
             if timeout is None
             else timeout
         )
-        return self._mapping_result(
+        result = self._mapping_result(
             "connect",
             self.request("connect", config.to_params(), timeout=request_timeout),
         )
+        safety = result.get("safety")
+        if not isinstance(safety, Mapping):
+            self._abort_process("connect returned invalid safety metadata")
+            raise HostProtocolError(
+                "connect result safety must be an object", self.diagnostics
+            )
+        authorized = safety.get("state_change_authorized")
+        token = safety.get("safety_token")
+        if type(authorized) is not bool or (
+            authorized
+            and (not isinstance(token, str) or not _SAFETY_TOKEN_PATTERN.fullmatch(token))
+        ) or (not authorized and token is not None):
+            self._abort_process("connect returned invalid safety metadata")
+            raise HostProtocolError(
+                "connect result contains inconsistent safety authorization",
+                self.diagnostics,
+            )
+        self._safety_token = token if authorized else None
+        public_result = deepcopy(result)
+        public_safety = dict(public_result["safety"])
+        public_safety.pop("safety_token", None)
+        public_safety["token_exposed"] = False
+        public_result["safety"] = public_safety
+        return public_result
 
     def disconnect(self, *, timeout: float | None = None) -> Mapping[str, Any]:
         """Close the active master, channel, and manager in lifecycle order."""
 
-        return self._mapping_result(
+        result = self._mapping_result(
             "disconnect",
             self.request("disconnect", timeout=timeout),
         )
+        self._safety_token = None
+        return result
 
     def wait_event(
         self,
@@ -263,11 +326,15 @@ class Dnp3MasterClient:
     ) -> Mapping[str, Any]:
         """Consume a bounded batch of queued channel-state events."""
 
+        try:
+            normalized_wait_timeout = float(wait_timeout)
+        except (TypeError, ValueError, OverflowError):
+            normalized_wait_timeout = math.nan
         if (
             isinstance(wait_timeout, bool)
             or not isinstance(wait_timeout, (int, float))
-            or not math.isfinite(wait_timeout)
-            or not 0 <= wait_timeout <= 60
+            or not math.isfinite(normalized_wait_timeout)
+            or not 0 <= normalized_wait_timeout <= 60
         ):
             raise ValueError("wait_timeout must be between 0 and 60 seconds")
         if (
@@ -276,9 +343,9 @@ class Dnp3MasterClient:
             or not 1 <= max_events <= 256
         ):
             raise ValueError("max_events must be an integer between 1 and 256")
-        wait_timeout_ms = round(float(wait_timeout) * 1000)
+        wait_timeout_ms = round(normalized_wait_timeout * 1000)
         exchange_timeout = (
-            max(self.config.request_timeout, float(wait_timeout) + 1.0)
+            max(self.config.request_timeout, normalized_wait_timeout + 1.0)
             if request_timeout is None
             else request_timeout
         )
@@ -290,6 +357,264 @@ class Dnp3MasterClient:
                 timeout=exchange_timeout,
             ),
         )
+
+    def integrity_poll(
+        self,
+        *,
+        timeout: float = 5.0,
+        max_measurements: int = 10_000,
+        return_mode: str = "detail",
+        request_timeout: float | None = None,
+    ) -> ReadTaskResult:
+        """Read Class 0 static data and Class 1/2/3 events once."""
+
+        params, task_timeout = self._read_options(
+            timeout, max_measurements, return_mode
+        )
+        return self._read_task_result(
+            "integrity_poll",
+            params,
+            task_timeout=task_timeout,
+            request_timeout=request_timeout,
+        )
+
+    def class_poll(
+        self,
+        classes: Sequence[int] = (1, 2, 3),
+        *,
+        timeout: float = 5.0,
+        max_measurements: int = 10_000,
+        return_mode: str = "detail",
+        request_timeout: float | None = None,
+    ) -> ReadTaskResult:
+        """Read one or more event classes; Class 0 belongs to integrity_poll."""
+
+        if isinstance(classes, (str, bytes)):
+            raise TypeError("classes must be a sequence containing 1, 2, and/or 3")
+        normalized = tuple(classes)
+        if not 1 <= len(normalized) <= 3:
+            raise ValueError("classes must contain between one and three items")
+        if any(type(value) is not int or value not in {1, 2, 3} for value in normalized):
+            raise ValueError("classes may contain only the integers 1, 2, and 3")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("classes must not contain duplicate values")
+
+        params, task_timeout = self._read_options(
+            timeout, max_measurements, return_mode
+        )
+        params["classes"] = list(normalized)
+        return self._read_task_result(
+            "class_poll",
+            params,
+            task_timeout=task_timeout,
+            request_timeout=request_timeout,
+        )
+
+    def read(
+        self,
+        headers: Sequence[ReadHeader],
+        *,
+        timeout: float = 5.0,
+        max_measurements: int = 10_000,
+        return_mode: str = "detail",
+        request_timeout: float | None = None,
+    ) -> ReadTaskResult:
+        """Perform one bounded multi-header READ through OpenDNP3."""
+
+        if isinstance(headers, (str, bytes)):
+            raise TypeError("headers must be a sequence of ReadHeader objects")
+        normalized = tuple(headers)
+        if not 1 <= len(normalized) <= 64:
+            raise ValueError("headers must contain between one and 64 items")
+        if not all(isinstance(header, ReadHeader) for header in normalized):
+            raise TypeError("every header must be a ReadHeader")
+
+        params, task_timeout = self._read_options(
+            timeout, max_measurements, return_mode
+        )
+        params["headers"] = [header.to_params() for header in normalized]
+        return self._read_task_result(
+            "read",
+            params,
+            task_timeout=task_timeout,
+            request_timeout=request_timeout,
+        )
+
+    def select_and_operate(
+        self,
+        commands: Sequence[CrobCommand | AnalogOutputCommand],
+        *,
+        timeout: float = 10.0,
+        request_timeout: float | None = None,
+    ) -> CommandTaskResult:
+        """Execute one bounded Select-Before-Operate batch without automatic retry."""
+
+        return self._command_task_result(
+            "select_and_operate",
+            commands,
+            timeout=timeout,
+            response_mode="response",
+            request_timeout=request_timeout,
+        )
+
+    def direct_operate(
+        self,
+        commands: Sequence[CrobCommand | AnalogOutputCommand],
+        *,
+        timeout: float = 10.0,
+        response_mode: str = "response",
+        request_timeout: float | None = None,
+    ) -> CommandTaskResult:
+        """Execute Direct Operate; no-response is reported unsupported by this backend."""
+
+        return self._command_task_result(
+            "direct_operate",
+            commands,
+            timeout=timeout,
+            response_mode=response_mode,
+            request_timeout=request_timeout,
+        )
+
+    def _command_task_result(
+        self,
+        command: str,
+        commands: Sequence[CrobCommand | AnalogOutputCommand],
+        *,
+        timeout: float,
+        response_mode: str,
+        request_timeout: float | None,
+    ) -> CommandTaskResult:
+        if self._safety_token is None:
+            raise ClientStateError(
+                "state-changing command is locked; connect with a LabSafetyConfig "
+                "whose allow_state_change is explicitly true"
+            )
+        if isinstance(commands, (str, bytes)):
+            raise TypeError("commands must be a sequence of command model objects")
+        normalized = tuple(commands)
+        if not 1 <= len(normalized) <= 256:
+            raise ValueError("commands must contain between one and 256 items")
+        if not all(isinstance(item, (CrobCommand, AnalogOutputCommand)) for item in normalized):
+            raise TypeError(
+                "every command must be a CrobCommand or AnalogOutputCommand"
+            )
+        identities = {
+            (
+                "crob" if isinstance(item, CrobCommand) else item.command_type,
+                item.index,
+            )
+            for item in normalized
+        }
+        if len(identities) != len(normalized):
+            raise ValueError("commands must not repeat the same type and point index")
+        try:
+            normalized_timeout = float(timeout)
+        except (TypeError, ValueError, OverflowError):
+            normalized_timeout = math.nan
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(normalized_timeout)
+            or not 0.05 <= normalized_timeout <= 300
+        ):
+            raise ValueError("timeout must be between 0.05 and 300 seconds")
+        if response_mode not in {"response", "no_response"}:
+            raise ValueError("response_mode must be 'response' or 'no_response'")
+
+        task_timeout = normalized_timeout
+        exchange_timeout = (
+            max(self.config.request_timeout, task_timeout + 1.0)
+            if request_timeout is None
+            else request_timeout
+        )
+        params = {
+            "safety_token": self._safety_token,
+            "timeout_ms": round(task_timeout * 1000),
+            "response_mode": response_mode,
+            "commands": [item.to_params() for item in normalized],
+        }
+        try:
+            raw_result = self.request(command, params, timeout=exchange_timeout)
+        except HostCommandError as error:
+            if (
+                error.code == "RESPONSE_TIMEOUT"
+                or error.details.get("execution_uncertain") is True
+                or error.details.get("may_still_execute") is True
+            ):
+                self._safety_token = None
+                self._abort_process(
+                    f"state-changing command '{command}' has an uncertain outcome"
+                )
+            raise
+        result = self._mapping_result(command, raw_result)
+        try:
+            return CommandTaskResult.from_mapping(result)
+        except (TypeError, ValueError, KeyError) as error:
+            self._abort_process(f"{command} returned an invalid command result")
+            raise HostProtocolError(
+                f"{command} result is invalid: {error}", self.diagnostics
+            ) from error
+
+    @staticmethod
+    def _read_options(
+        timeout: float,
+        max_measurements: int,
+        return_mode: str,
+    ) -> tuple[dict[str, Any], float]:
+        try:
+            normalized_timeout = float(timeout)
+        except (TypeError, ValueError, OverflowError):
+            normalized_timeout = math.nan
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(normalized_timeout)
+            or not 0.05 <= normalized_timeout <= 300
+        ):
+            raise ValueError("timeout must be between 0.05 and 300 seconds")
+        if (
+            isinstance(max_measurements, bool)
+            or not isinstance(max_measurements, int)
+            or not 1 <= max_measurements <= 1_000_000
+        ):
+            raise ValueError(
+                "max_measurements must be an integer between 1 and 1000000"
+            )
+        if return_mode not in {"detail", "summary"}:
+            raise ValueError("return_mode must be 'detail' or 'summary'")
+        return (
+            {
+                "timeout_ms": round(normalized_timeout * 1000),
+                "max_measurements": max_measurements,
+                "return_mode": return_mode,
+            },
+            normalized_timeout,
+        )
+
+    def _read_task_result(
+        self,
+        command: str,
+        params: Mapping[str, Any],
+        *,
+        task_timeout: float,
+        request_timeout: float | None,
+    ) -> ReadTaskResult:
+        exchange_timeout = (
+            max(self.config.request_timeout, task_timeout + 1.0)
+            if request_timeout is None
+            else request_timeout
+        )
+        result = self._mapping_result(
+            command,
+            self.request(command, params, timeout=exchange_timeout),
+        )
+        try:
+            return ReadTaskResult.from_mapping(result)
+        except (TypeError, ValueError, KeyError) as error:
+            self._abort_process(f"{command} returned an invalid read result")
+            raise HostProtocolError(
+                f"{command} result is invalid: {error}", self.diagnostics
+            ) from error
 
     def _mapping_result(self, command: str, result: Any) -> Mapping[str, Any]:
         if not isinstance(result, dict):
@@ -303,12 +628,15 @@ class Dnp3MasterClient:
     def close(self) -> HostProcessDiagnostics:
         with self._request_lock:
             if self._state is _State.CLOSED:
+                self._safety_token = None
                 return self._last_diagnostics
             if self._state is _State.NEW:
+                self._safety_token = None
                 self._state = _State.CLOSED
                 self._last_diagnostics = self._snapshot_diagnostics()
                 return self._last_diagnostics
             if self._state is _State.BROKEN:
+                self._safety_token = None
                 self._state = _State.CLOSED
                 self._last_diagnostics = self._snapshot_diagnostics()
                 return self._last_diagnostics
@@ -334,6 +662,7 @@ class Dnp3MasterClient:
                 self._job.close()
                 self._job = None
             self._state = _State.CLOSED
+            self._safety_token = None
             self._store_diagnostics_and_release_process()
             return self._last_diagnostics
 
@@ -409,7 +738,6 @@ class Dnp3MasterClient:
                 raw = stream.readline(limit + 2)
                 if not raw:
                     break
-                self._stdout_tail.append(raw)
                 if raw.endswith(b"\n"):
                     payload = raw[:-1]
                     if payload.endswith(b"\r"):
@@ -425,7 +753,6 @@ class Dnp3MasterClient:
                 if len(raw) > limit:
                     while raw and not raw.endswith(b"\n"):
                         raw = stream.readline(4096)
-                        self._stdout_tail.append(raw)
                     self._enqueue_stdout(
                         _StreamFailure("response line exceeds max_response_bytes")
                     )
@@ -441,6 +768,7 @@ class Dnp3MasterClient:
             self._stdout_queue.put_nowait(item)
         except queue.Full:
             self._stdout_overflow.set()
+            self._stdout_tail.append(b"[stdout response queue overflow]\n")
 
     def _read_stderr(self, stream: BinaryIO) -> None:
         try:
@@ -507,6 +835,7 @@ class Dnp3MasterClient:
         if item is _STDOUT_EOF:
             self._raise_exited(command)
         if isinstance(item, _StreamFailure):
+            self._stdout_tail.append(f"[{item.message}]\n".encode("utf-8"))
             self._abort_process(item.message)
             raise HostProtocolError(item.message, self.diagnostics)
         if not isinstance(item, bytes):
@@ -516,6 +845,10 @@ class Dnp3MasterClient:
         try:
             return self._parse_response(item, request_id)
         except _ProtocolViolation as error:
+            # Normal responses can contain EMS values and the private safety
+            # token. Retain stdout only when the protocol itself is malformed;
+            # exposed diagnostics also redact token-shaped safety fields.
+            self._stdout_tail.append(item)
             self._abort_process(str(error))
             raise HostProtocolError(str(error), self.diagnostics) from error
 

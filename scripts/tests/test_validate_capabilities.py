@@ -145,6 +145,35 @@ def test_unknown_pytest_capability_marker_is_rejected(tmp_path: Path) -> None:
     assert "UNKNOWN_MARKED_CAPABILITY" in _issue_codes(matrix, tests_root=tests_root)
 
 
+def test_native_test_id_is_discovered(tmp_path: Path) -> None:
+    tests_root = tmp_path / "native" / "tests"
+    tests_root.mkdir(parents=True)
+    (tests_root / "read_tests.cpp").write_text(
+        'constexpr auto id = "TC_APP_FC01_READ_NATIVE_001";\n',
+        encoding="utf-8",
+    )
+    matrix = tmp_path / "capability_matrix.csv"
+    _write_matrix(
+        matrix,
+        [
+            _valid_row(
+                std_reference="IEEE 1815-2012 4.4.2",
+                framework_status="IMPLEMENTED_UNVERIFIED",
+                test_case_ids="TC_APP_FC01_READ_NATIVE_001",
+            )
+        ],
+    )
+
+    result = validate_matrix(
+        matrix,
+        project_root=tmp_path,
+        test_roots=(tests_root,),
+        require_baseline=False,
+    )
+
+    assert result.ok, [issue.render() for issue in result.issues]
+
+
 def test_missing_baseline_is_rejected_when_gate_is_enabled(tmp_path: Path) -> None:
     matrix = tmp_path / "capability_matrix.csv"
     _write_matrix(matrix, [_valid_row()])

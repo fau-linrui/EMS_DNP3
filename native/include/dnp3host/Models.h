@@ -18,7 +18,15 @@ enum class ErrorCode {
     NotConnected,
     AlreadyConnected,
     ConnectionTimeout,
+    SafetyInterlock,
+    AlreadyExecuting,
+    ResponseTimeout,
+    TaskFailed,
+    CommandFailed,
     UnsupportedByBackend,
+    UnsupportedByDeviceProfile,
+    ProtocolError,
+    QueueOverflow,
     ProcessShuttingDown,
     InternalError,
 };
@@ -40,8 +48,24 @@ inline const char* to_string(const ErrorCode code) noexcept
         return "ALREADY_CONNECTED";
     case ErrorCode::ConnectionTimeout:
         return "CONNECTION_TIMEOUT";
+    case ErrorCode::SafetyInterlock:
+        return "SAFETY_INTERLOCK";
+    case ErrorCode::AlreadyExecuting:
+        return "ALREADY_EXECUTING";
+    case ErrorCode::ResponseTimeout:
+        return "RESPONSE_TIMEOUT";
+    case ErrorCode::TaskFailed:
+        return "TASK_FAILED";
+    case ErrorCode::CommandFailed:
+        return "COMMAND_FAILED";
     case ErrorCode::UnsupportedByBackend:
         return "UNSUPPORTED_BY_BACKEND";
+    case ErrorCode::UnsupportedByDeviceProfile:
+        return "UNSUPPORTED_BY_DEVICE_PROFILE";
+    case ErrorCode::ProtocolError:
+        return "PROTOCOL_ERROR";
+    case ErrorCode::QueueOverflow:
+        return "QUEUE_OVERFLOW";
     case ErrorCode::ProcessShuttingDown:
         return "PROCESS_SHUTTING_DOWN";
     case ErrorCode::InternalError:
