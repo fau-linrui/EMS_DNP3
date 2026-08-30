@@ -5,91 +5,21 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-import queue
-import socket
-import subprocess
 import sys
 import tempfile
-import threading
 from typing import Sequence
 
 from . import __version__
 from .client import Dnp3MasterClient
+from .local_outstation import LocalTestOutstation
 from .models import (
+    AnalogOutputCommand,
     CrobCommand,
     HostProcessConfig,
     LabSafetyConfig,
     ReadHeader,
     TcpConnectionConfig,
 )
-
-
-def _unused_local_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
-        reservation.bind(("127.0.0.1", 0))
-        return int(reservation.getsockname()[1])
-
-
-def _terminate_process(process: subprocess.Popen[str]) -> None:
-    """Best-effort bounded cleanup for a helper that failed during startup."""
-
-    if process.poll() is None:
-        process.terminate()
-    try:
-        process.wait(timeout=1.0)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=2.0)
-
-
-def _start_outstation(executable: Path, port: int) -> subprocess.Popen[str]:
-    process = subprocess.Popen(
-        [str(executable), "--port", str(port)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    assert process.stdout is not None
-    ready_queue: queue.Queue[str] = queue.Queue(maxsize=1)
-    reader = threading.Thread(
-        target=lambda: ready_queue.put(process.stdout.readline()),
-        name=f"dnp3-self-test-outstation-{process.pid}",
-        daemon=True,
-    )
-    reader.start()
-    try:
-        line = ready_queue.get(timeout=5.0)
-    except queue.Empty as error:
-        _terminate_process(process)
-        stderr = process.stderr.read() if process.stderr is not None else ""
-        raise RuntimeError(f"local outstation did not become ready: {stderr}") from error
-    try:
-        ready = json.loads(line)
-    except json.JSONDecodeError as error:
-        _terminate_process(process)
-        raise RuntimeError(f"local outstation returned invalid readiness data: {line!r}") from error
-    if ready != {"ready": True, "port": port}:
-        _terminate_process(process)
-        raise RuntimeError(f"unexpected local outstation readiness data: {ready!r}")
-    return process
-
-
-def _stop_outstation(process: subprocess.Popen[str]) -> None:
-    if process.poll() is None and process.stdin is not None:
-        process.stdin.write("shutdown\n")
-        process.stdin.flush()
-    try:
-        process.wait(timeout=3.0)
-    except subprocess.TimeoutExpired:
-        _terminate_process(process)
-    stderr = process.stderr.read() if process.stderr is not None else ""
-    if process.returncode != 0:
-        raise RuntimeError(
-            f"local outstation exited with code {process.returncode}: {stderr}"
-        )
 
 
 def run_self_test(host_executable: Path, outstation_executable: Path) -> dict[str, object]:
@@ -100,8 +30,7 @@ def run_self_test(host_executable: Path, outstation_executable: Path) -> dict[st
     if not outstation.is_file():
         raise FileNotFoundError(f"local test outstation does not exist: {outstation}")
 
-    port = _unused_local_port()
-    process = _start_outstation(outstation, port)
+    local_outstation = LocalTestOutstation(outstation).start()
     incident_directory = tempfile.TemporaryDirectory(
         prefix="dnp3-self-test-safety-incidents-"
     )
@@ -120,7 +49,7 @@ def run_self_test(host_executable: Path, outstation_executable: Path) -> dict[st
         client.connect(
             TcpConnectionConfig(
                 host="127.0.0.1",
-                port=port,
+                port=local_outstation.port,
                 connect_timeout=3.0,
                 retry_min=0.05,
                 retry_max=0.2,
@@ -135,10 +64,96 @@ def run_self_test(host_executable: Path, outstation_executable: Path) -> dict[st
         )
         integrity = client.integrity_poll(timeout=3.0)
         analog = client.read([ReadHeader.range16(30, 0, 0, 0)], timeout=3.0)
-        command = client.direct_operate(
+        binary_baseline = client.read(
+            [ReadHeader.range16(10, 2, 0, 0)], timeout=3.0
+        )
+        binary_operate = client.direct_operate(
             [CrobCommand(index=0, operation="latch_on")], timeout=3.0
         )
+        binary_operated = client.read(
+            [ReadHeader.range16(10, 2, 0, 0)], timeout=3.0
+        )
+        binary_restore = client.direct_operate(
+            [CrobCommand(index=0, operation="latch_off")], timeout=3.0
+        )
+        binary_restored = client.read(
+            [ReadHeader.range16(10, 2, 0, 0)], timeout=3.0
+        )
+        analog_baseline = client.read(
+            [ReadHeader.range16(40, 3, 0, 0)], timeout=3.0
+        )
+        analog_operate = client.select_and_operate(
+            [AnalogOutputCommand.float32(0, 1.25)], timeout=3.0
+        )
+        analog_operated = client.read(
+            [ReadHeader.range16(40, 3, 0, 0)], timeout=3.0
+        )
+        analog_restore = client.select_and_operate(
+            [AnalogOutputCommand.float32(0, 0.0)], timeout=3.0
+        )
+        analog_restored = client.read(
+            [ReadHeader.range16(40, 3, 0, 0)], timeout=3.0
+        )
+        snapshot = local_outstation.snapshot()
         stats = client.get_stats()
+        command_results = (
+            binary_operate,
+            binary_restore,
+            analog_operate,
+            analog_restore,
+        )
+        feedback_reads = (
+            binary_baseline,
+            binary_operated,
+            binary_restored,
+            analog_baseline,
+            analog_operated,
+            analog_restored,
+        )
+        if any(
+            result.task_status != "SUCCESS" or len(result.measurements) != 1
+            for result in feedback_reads
+        ):
+            raise RuntimeError("loopback feedback read did not return one exact point")
+        binary_feedback_cycle = [
+            binary_baseline.measurements[0].value,
+            binary_operated.measurements[0].value,
+            binary_restored.measurements[0].value,
+        ]
+        analog_feedback_cycle = [
+            analog_baseline.measurements[0].value,
+            analog_operated.measurements[0].value,
+            analog_restored.measurements[0].value,
+        ]
+        if integrity.task_status != "SUCCESS" or len(integrity.measurements) < 9:
+            raise RuntimeError("loopback integrity poll did not return the test database")
+        if (
+            analog.task_status != "SUCCESS"
+            or len(analog.measurements) != 1
+            or analog.measurements[0].value != 123.5
+        ):
+            raise RuntimeError("loopback G30V5 range read did not match 123.5")
+        if not all(
+            result.task_status == "SUCCESS"
+            and result.all_success
+            and len(result.point_results) == 1
+            for result in command_results
+        ):
+            raise RuntimeError("loopback control or restore command failed")
+        if binary_feedback_cycle != [False, True, False]:
+            raise RuntimeError(
+                f"unexpected binary feedback cycle: {binary_feedback_cycle!r}"
+            )
+        if analog_feedback_cycle != [0.0, 1.25, 0.0]:
+            raise RuntimeError(
+                f"unexpected analog feedback cycle: {analog_feedback_cycle!r}"
+            )
+        if snapshot.get("operation_count") != 4:
+            raise RuntimeError(
+                "loopback outstation did not observe exactly four operations"
+            )
+        if stats.get("scope") != "host_channel_and_local_queues":
+            raise RuntimeError("loopback host returned an unexpected stats scope")
         client.disconnect()
         return {
             "ok": True,
@@ -147,8 +162,13 @@ def run_self_test(host_executable: Path, outstation_executable: Path) -> dict[st
             "backend_version": client.hello_info["backend_version"],
             "integrity_measurements": len(integrity.measurements),
             "analog_value": analog.measurements[0].value,
-            "command_points": len(command.point_results),
-            "command_all_success": command.all_success,
+            "command_points": sum(
+                len(result.point_results) for result in command_results
+            ),
+            "command_all_success": all(result.all_success for result in command_results),
+            "binary_feedback_cycle": binary_feedback_cycle,
+            "analog_feedback_cycle": analog_feedback_cycle,
+            "outstation_operation_count": snapshot["operation_count"],
             "stats_scope": stats["scope"],
         }
     finally:
@@ -156,7 +176,7 @@ def run_self_test(host_executable: Path, outstation_executable: Path) -> dict[st
         if diagnostics.cleanup_error is not None:
             cleanup_error = RuntimeError(diagnostics.cleanup_error)
         try:
-            _stop_outstation(process)
+            local_outstation.close()
         except Exception as error:
             cleanup_error = cleanup_error or error
         incident_directory.cleanup()

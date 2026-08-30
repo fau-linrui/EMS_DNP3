@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import json
 import os
 from pathlib import Path
 import re
@@ -12,6 +11,7 @@ from typing import Iterator, Mapping
 import pytest
 
 from .client import Dnp3MasterClient
+from .ems_profile import EmsProfileError, load_ems_profile
 from .ems_test_plan import EmsTestPlan, EmsTestPlanError, load_ems_test_plan
 from .evidence import EvidenceRecorder
 from .errors import HostCommandError
@@ -19,18 +19,8 @@ from .models import HostProcessConfig, LabSafetyConfig, TcpConnectionConfig
 from .point_table import PointTable, PointTableError, load_point_table
 
 
-_VALID_PICS_STATUSES = frozenset({"SUPPORTED", "NOT_SUPPORTED", "UNKNOWN"})
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _CAPABILITY_ID_PATTERN = re.compile(r"^[A-Z0-9]+(?:[._-][A-Z0-9]+)*$")
-
-
-def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"duplicate JSON key: {key}")
-        result[key] = value
-    return result
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -274,73 +264,13 @@ def _load_pics_capabilities(
     known_capability_ids: frozenset[str] | None = None,
 ) -> dict[str, str]:
     try:
-        raw = path.read_text(encoding="utf-8")
-    except OSError as error:
-        raise pytest.UsageError(f"cannot read DNP3 PICS file {path}: {error}") from error
-    try:
-        document = json.loads(raw, object_pairs_hook=_reject_duplicate_json_keys)
-    except (json.JSONDecodeError, ValueError) as error:
-        raise pytest.UsageError(f"DNP3 PICS file is not valid JSON: {error}") from error
-    if not isinstance(document, dict):
-        raise pytest.UsageError("DNP3 PICS root must be a JSON object")
-    if document.get("schema_version") != 1:
-        raise pytest.UsageError("DNP3 PICS schema_version must be 1")
-    unknown_root_fields = set(document).difference(
-        {"schema_version", "device", "capabilities", "notes"}
-    )
-    if unknown_root_fields:
-        raise pytest.UsageError(
-            "DNP3 PICS has unknown root fields: "
-            + ", ".join(sorted(unknown_root_fields))
+        profile = load_ems_profile(
+            path,
+            known_capability_ids=known_capability_ids,
         )
-    capabilities = document.get("capabilities")
-    if not isinstance(capabilities, dict) or not capabilities:
-        raise pytest.UsageError(
-            "DNP3 PICS capabilities must be a non-empty JSON object"
-        )
-
-    normalized: dict[str, str] = {}
-    for capability_id, status in capabilities.items():
-        if not isinstance(capability_id, str) or not _CAPABILITY_ID_PATTERN.fullmatch(
-            capability_id
-        ):
-            raise pytest.UsageError(
-                "DNP3 PICS capability IDs must use the capability-matrix ID syntax"
-            )
-        if status not in _VALID_PICS_STATUSES:
-            raise pytest.UsageError(
-                f"DNP3 PICS capability {capability_id!r} has invalid status {status!r}"
-            )
-        if (
-            known_capability_ids is not None
-            and capability_id not in known_capability_ids
-        ):
-            raise pytest.UsageError(
-                f"DNP3 PICS capability {capability_id!r} is not present in the "
-                "capability matrix"
-            )
-        normalized[capability_id] = status
-
-    device = document.get("device")
-    required_device_fields = {"vendor", "model", "firmware", "profile_revision"}
-    if not isinstance(device, dict) or set(device) != required_device_fields:
-        raise pytest.UsageError(
-            "DNP3 PICS device must contain exactly vendor, model, firmware, "
-            "and profile_revision"
-        )
-    for field_name, field_value in device.items():
-        if (
-            not isinstance(field_value, str)
-            or not field_value
-            or len(field_value) > 256
-        ):
-            raise pytest.UsageError(
-                f"DNP3 PICS device field {field_name!r} must contain 1-256 characters"
-            )
-    notes = document.get("notes")
-    if notes is not None and (not isinstance(notes, str) or len(notes) > 4096):
-        raise pytest.UsageError("DNP3 PICS notes must be a string of at most 4096 characters")
-    return normalized
+    except EmsProfileError as error:
+        raise pytest.UsageError(f"invalid DNP3 PICS file: {error}") from error
+    return dict(profile.capabilities)
 
 
 def pytest_configure(config: pytest.Config) -> None:

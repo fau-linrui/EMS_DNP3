@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dnp3-master/local-outstation-request.schema.json",
+  "title": "Loopback-only DNP3 local test outstation control request v1",
+  "oneOf": [
+    { "$ref": "#/$defs/hello" },
+    { "$ref": "#/$defs/snapshot" },
+    { "$ref": "#/$defs/update" },
+    { "$ref": "#/$defs/shutdown" }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "emptyParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 0
+    },
+    "hello": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "cmd", "params"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "id": { "$ref": "#/$defs/id" },
+        "cmd": { "const": "hello" },
+        "params": { "$ref": "#/$defs/emptyParams" }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "cmd", "params"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "id": { "$ref": "#/$defs/id" },
+        "cmd": { "const": "snapshot" },
+        "params": { "$ref": "#/$defs/emptyParams" }
+      }
+    },
+    "shutdown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "cmd", "params"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "id": { "$ref": "#/$defs/id" },
+        "cmd": { "const": "shutdown" },
+        "params": { "$ref": "#/$defs/emptyParams" }
+      }
+    },
+    "update": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "cmd", "params"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "id": { "$ref": "#/$defs/id" },
+        "cmd": { "const": "update" },
+        "params": {
+          "oneOf": [
+            { "$ref": "#/$defs/binaryInputUpdate" },
+            { "$ref": "#/$defs/analogInputUpdate" },
+            { "$ref": "#/$defs/binaryOutputUpdate" },
+            { "$ref": "#/$defs/analogOutputUpdate" }
+          ]
+        }
+      }
+    },
+    "eventMode": {
+      "enum": ["detect", "force", "suppress", "event_only"]
+    },
+    "inputUpdateBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "index", "value", "timestamp_ms", "event_mode"],
+      "properties": {
+        "type": { "type": "string" },
+        "index": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "value": {},
+        "timestamp_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 281474976710655
+        },
+        "event_mode": { "$ref": "#/$defs/eventMode" }
+      }
+    },
+    "binaryInputUpdate": {
+      "allOf": [
+        { "$ref": "#/$defs/inputUpdateBase" },
+        {
+          "properties": {
+            "type": { "const": "binary_input" },
+            "value": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "analogInputUpdate": {
+      "allOf": [
+        { "$ref": "#/$defs/inputUpdateBase" },
+        {
+          "properties": {
+            "type": { "const": "analog_input" },
+            "value": { "type": "number" }
+          }
+        }
+      ]
+    },
+    "outputUpdateBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "index", "value", "event_mode"],
+      "properties": {
+        "type": { "type": "string" },
+        "index": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "value": {},
+        "event_mode": { "$ref": "#/$defs/eventMode" }
+      }
+    },
+    "binaryOutputUpdate": {
+      "allOf": [
+        { "$ref": "#/$defs/outputUpdateBase" },
+        {
+          "properties": {
+            "type": { "const": "binary_output_status" },
+            "value": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "analogOutputUpdate": {
+      "allOf": [
+        { "$ref": "#/$defs/outputUpdateBase" },
+        {
+          "properties": {
+            "type": { "const": "analog_output_status" },
+            "value": { "type": "number" }
+          }
+        }
+      ]
+    }
+  }
+}

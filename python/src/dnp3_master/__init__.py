@@ -14,6 +14,14 @@ from .ems_test_plan import (
     ValueExpectation,
     load_ems_test_plan,
 )
+from .ems_profile import (
+    EMS_PICS_STATUSES,
+    EMS_PROFILE_SCHEMA_VERSION,
+    EmsDeviceIdentity,
+    EmsProfile,
+    EmsProfileError,
+    load_ems_profile,
+)
 from .errors import (
     ClientStateError,
     Dnp3ClientError,
@@ -59,7 +67,7 @@ from .safety_incidents import (
     dut_identity_sha256,
 )
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 TARGET_STANDARD = "IEEE1815-2012"
 
 __all__ = [
@@ -73,6 +81,11 @@ __all__ = [
     "Dnp3ClientError",
     "Dnp3MasterClient",
     "EMS_TEST_PLAN_SCHEMA_VERSION",
+    "EMS_PICS_STATUSES",
+    "EMS_PROFILE_SCHEMA_VERSION",
+    "EmsDeviceIdentity",
+    "EmsProfile",
+    "EmsProfileError",
     "EmsTestPlan",
     "EmsTestPlanError",
     "HostCommandError",
@@ -108,6 +121,7 @@ __all__ = [
     "IncidentRecordResult",
     "dut_identity_sha256",
     "load_ems_test_plan",
+    "load_ems_profile",
     "load_point_table",
     "ValueExpectation",
     "__version__",

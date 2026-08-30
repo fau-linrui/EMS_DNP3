@@ -14,17 +14,18 @@
       "additionalProperties": false,
       "required": ["vendor", "model", "firmware", "profile_revision"],
       "properties": {
-        "vendor": {"type": "string", "minLength": 1, "maxLength": 256},
-        "model": {"type": "string", "minLength": 1, "maxLength": 256},
-        "firmware": {"type": "string", "minLength": 1, "maxLength": 256},
-        "profile_revision": {"type": "string", "minLength": 1, "maxLength": 256}
+        "vendor": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": ".*\\S.*"},
+        "model": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": ".*\\S.*"},
+        "firmware": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": ".*\\S.*"},
+        "profile_revision": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": ".*\\S.*"}
       }
     },
     "capabilities": {
       "type": "object",
       "minProperties": 1,
       "propertyNames": {
-        "pattern": "^[A-Z0-9]+(?:[._-][A-Z0-9]+)*$"
+        "pattern": "^[A-Z0-9]+(?:[._-][A-Z0-9]+)*$",
+        "maxLength": 256
       },
       "additionalProperties": {
         "enum": ["SUPPORTED", "NOT_SUPPORTED", "UNKNOWN"]
@@ -32,7 +33,9 @@
     },
     "notes": {
       "type": "string",
-      "maxLength": 4096
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": ".*\\S.*"
     }
   }
 }

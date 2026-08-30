@@ -43,7 +43,7 @@ int main()
                  "dnp3-master-host",
                  "host executable name")
         && passed;
-    passed = expect_equal(dnp3host::kVersion, "0.4.0", "host version") && passed;
+    passed = expect_equal(dnp3host::kVersion, "0.5.0", "host version") && passed;
     passed = expect_equal(
                  dnp3host::kTargetStandard,
                  "IEEE1815-2012",

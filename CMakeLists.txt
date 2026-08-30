@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
     dnp3_master_test_framework
-    VERSION 0.4.0
+    VERSION 0.5.0
     DESCRIPTION "Windows DNP3 master automation test framework"
     LANGUAGES CXX
 )
@@ -328,7 +328,7 @@ if(BUILD_TESTING)
     target_link_libraries(
         dnp3-local-test-outstation
         PRIVATE
-            dnp3host_build_options
+            dnp3host_core
             opendnp3
     )
     target_link_libraries(

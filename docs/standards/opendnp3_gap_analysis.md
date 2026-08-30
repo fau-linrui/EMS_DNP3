@@ -47,13 +47,14 @@
 | 有响应 Direct Operate | `ICommandProcessor::DirectOperate(CommandSet, ...)` | `IMPLEMENTED_UNVERIFIED`：CROB 路径本机已测，禁止自动重试 |
 | G41 V1～V4 | `AnalogOutputInt32/Int16/Float32/Double64` + `CommandSet` | `IMPLEMENTED_UNVERIFIED`：混合批次和逐点关联本机已测 |
 | Command Status | `CommandPointResult`、`CommandStatusSpec` | `IMPLEMENTED_UNVERIFIED`：公共枚举无损映射；全状态故障注入待独立端 |
+| Unsolicited | `EnableUnsolicited/DisableUnsolicited`、持久 `ISOEHandler`、有界 SOE 队列 | `IMPLEMENTED_UNVERIFIED`：FC20/FC21、G2V2/G32V7、FC130 接收、禁用和溢出已做同栈本机回归；Confirm 丢失、重发、重复及序号回绕仍待独立故障注入 |
 | Direct Operate No Response | 3.1.2 `ICommandProcessor` 公共接口仅提供结果回调型 Direct Operate | `UNSUPPORTED_BY_BACKEND`：明确失败，不用有响应命令模拟 |
 
 ## 尚未完成/需按 PICS 决策
 
 | 能力族 | 主要缺口 | 当前状态 |
 |---|---|---|
-| Unsolicited | 当前 master 不自动扫描/启用；没有持久 SOE collector、Confirm/重发测试 | `BLOCKED`（T12） |
+| Unsolicited 原始故障时序 | 基线路径已实现；缺 Confirm 丢失、重发/重复、序号回绕、启动空响应和独立端抓包 | 基线 `IMPLEMENTED_UNVERIFIED`；故障/互操作证据 `BLOCKED` |
 | 时间同步 | Delay Measure/Write Time、Record Current Time 流程和 DUT 延迟预算未接入 | `BLOCKED`（T13） |
 | Restart/Freeze/Assign Class/周期扫描 | 事务 API、风险门和真实 DUT 副作用未实现 | `BLOCKED`（T14，必须拆卡） |
 | 持续 capture/性能 | 只有单次 detail/summary 和有限 stats；无 capture/network bytes/resource timeline | `BLOCKED`（T15/T16） |

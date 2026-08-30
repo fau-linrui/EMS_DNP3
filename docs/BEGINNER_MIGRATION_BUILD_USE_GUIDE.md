@@ -2,7 +2,7 @@
 
 本文面向不熟悉 C++ 的测试开发人员。正常使用时，你只需要写 Python/pytest；C++ 已封装在 `dnp3-master-host.exe` 中，不需要在测试代码里调用 OpenDNP3，也不需要理解 C++ 指针或编译器细节。
 
-> 当前版本：0.4.0，目标平台 Windows x64，固定协议栈 OpenDNP3 3.1.2。当前实现已完成本机 TCP、Read/Class Poll、主动上报、测量值/IIN、CROB 和四种 Analog Output 控制的同栈回归，并提供可复制的严格 EMS pytest 场景套件，但尚未代表真实 EMS 互操作或 IEEE 一致性认证。
+> 当前版本：0.5.0，目标平台 Windows x64，固定协议栈 OpenDNP3 3.1.2。当前实现已完成本机 TCP、Read/Class Poll、主动上报、测量值/IIN、CROB 和四种 Analog Output 控制的同栈回归，并提供可编程回环从站、可复制的严格 EMS pytest 场景套件和不连接 DUT 的配置预检，但尚未代表真实 EMS 互操作或 IEEE 一致性认证。
 
 ## 1. 先理解四个目录
 
@@ -55,9 +55,9 @@ cd D:\Work\Code\EMS_DNP3
 产物位于：
 
 ```text
-out\package\ems-dnp3-pytest-0.4.0\
-out\package\ems-dnp3-pytest-0.4.0.zip
-out\package\ems-dnp3-pytest-0.4.0.zip.sha256
+out\package\ems-dnp3-pytest-0.5.0\
+out\package\ems-dnp3-pytest-0.5.0.zip
+out\package\ems-dnp3-pytest-0.5.0.zip.sha256
 ```
 
 打包过程会在临时目录解开 ZIP、逐文件验证 `package-manifest.json`，再执行一次 DNP3 读写回环自检。将 ZIP 和 `.sha256` 一起传入内网；传输后先用 `Get-FileHash -Algorithm SHA256` 与旁车文件第一列比对，再解压。包中包含主程序、只用于本机自检的测试从站、Python 源码、Schema、能力矩阵、严格点表/场景计划示例、可复制 EMS pytest 套件、依赖锁、许可证和本文档，不包含 IEEE 标准 PDF、EMS 本地配置、抓包或密钥。
@@ -180,7 +180,7 @@ out\build\windows-msvc-release\bin\dnp3-local-test-outstation.exe
 两条路线最终都应得到以下可移植内容：
 
 ```text
-ems-dnp3-pytest-0.4.0\
+ems-dnp3-pytest-0.5.0\
   bin\dnp3-master-host.exe
   python\
   config\
@@ -208,7 +208,7 @@ New-Item -ItemType Directory `
   -Path (Join-Path $targetProject 'third_party') `
   -Force | Out-Null
 Copy-Item `
-  -LiteralPath '.\out\package\ems-dnp3-pytest-0.4.0' `
+  -LiteralPath '.\out\package\ems-dnp3-pytest-0.5.0' `
   -Destination $packageRoot `
   -Recurse
 ```
@@ -218,7 +218,7 @@ Copy-Item `
 ```powershell
 $targetProject = 'D:\Automation\MyPytest'
 $packageRoot = Join-Path $targetProject 'third_party\ems_dnp3'
-$zip = (Resolve-Path '.\ems-dnp3-pytest-0.4.0.zip').Path
+$zip = (Resolve-Path '.\ems-dnp3-pytest-0.5.0.zip').Path
 $expectedHash = (
   (Get-Content -LiteralPath "$zip.sha256" -Raw).Trim() -split '\s+'
 )[0].ToLowerInvariant()
@@ -372,7 +372,27 @@ Copy-Item `
 
 插件会把 PICS 中的每个能力 ID 与 `config\capability_matrix.csv` 交叉检查，拼错或不存在的 ID 会在收集阶段直接报错。整包/推荐目录无需额外参数；如果你改变了目录布局，请同时传入 `--dnp3-capability-matrix ".\third_party\ems_dnp3\config\capability_matrix.csv"`。
 
-### 6.2 写一个只读 pytest 用例
+### 6.2 在任何 EMS 连接前执行离线预检
+
+先不要填写 IP/端口，也不要启动 DUT 用例。在源码仓库中执行：
+
+```powershell
+.\.venv\Scripts\python.exe -m dnp3_master.preflight `
+  --pics .\config\ems.local.json `
+  --points .\config\points.local.csv `
+  --plan .\config\ems_test_plan.local.json `
+  --capability-matrix .\config\capability_matrix.csv
+```
+
+移植到另一个 pytest 项目后，把最后一个路径改为 `third_party\ems_dnp3\config\capability_matrix.csv`。命令只读取本地文件，不启动 host、不建立 TCP 连接：
+
+- 退出码 `0`：离线配置 `READY`，可以继续准备只读 DUT 测试；
+- 退出码 `2`：文件格式、字段、引用或边界无效，必须先修复；
+- 退出码 `3`：格式有效，但仍有 `FILL_ME`、PICS `UNKNOWN/NOT_SUPPORTED`、缺失能力或框架未实现项。
+
+仓库示例故意返回 3。必须依据正式资料修正私有输入，不能为了“变绿”修改报告或把未知能力猜成支持。需要保存机器可读证据时加 `--json`；详细规则见 `docs/OFFLINE_PREFLIGHT.md`。
+
+### 6.3 写一个只读 pytest 用例
 
 ```python
 import pytest

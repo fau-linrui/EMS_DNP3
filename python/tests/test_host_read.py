@@ -1,12 +1,7 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
-import queue
-import socket
-import subprocess
-import threading
 from typing import Iterator
 
 import pytest
@@ -21,6 +16,7 @@ from dnp3_master import (
     ReadHeader,
     TcpConnectionConfig,
 )
+from dnp3_master.local_outstation import LocalTestOutstation
 
 
 TC_APP_FC01_PYTHON_E2E_LOCAL_001 = "TC_APP_FC01_PYTHON_E2E_LOCAL_001"
@@ -64,63 +60,14 @@ pytestmark = [
 ]
 
 
-def unused_local_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
-        reservation.bind(("127.0.0.1", 0))
-        return int(reservation.getsockname()[1])
-
-
 @pytest.fixture
-def local_outstation() -> Iterator[int]:
+def local_outstation() -> Iterator[LocalTestOutstation]:
     configured = os.environ.get("DNP3_TEST_OUTSTATION_EXE")
     assert configured, "DNP3_TEST_OUTSTATION_EXE must identify the built test helper"
     executable = Path(configured)
     assert executable.is_file(), f"local test outstation does not exist: {executable}"
-    port = unused_local_port()
-    process = subprocess.Popen(
-        [str(executable), "--port", str(port)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    assert process.stdout is not None
-    ready_queue: queue.Queue[str] = queue.Queue(maxsize=1)
-    reader = threading.Thread(
-        target=lambda: ready_queue.put(process.stdout.readline()),
-        name=f"dnp3-local-outstation-ready-{process.pid}",
-        daemon=True,
-    )
-    reader.start()
-    try:
-        line = ready_queue.get(timeout=3.0)
-    except queue.Empty as error:
-        process.terminate()
-        process.wait(timeout=3.0)
-        stderr = process.stderr.read() if process.stderr is not None else ""
-        raise AssertionError(f"local outstation did not become ready: {stderr}") from error
-    ready = json.loads(line)
-    assert ready == {"ready": True, "port": port}
-
-    try:
-        yield port
-    finally:
-        if process.poll() is None and process.stdin is not None:
-            process.stdin.write("shutdown\n")
-            process.stdin.flush()
-        try:
-            process.wait(timeout=3.0)
-        except subprocess.TimeoutExpired:
-            process.terminate()
-            try:
-                process.wait(timeout=1.0)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=2.0)
-        stderr = process.stderr.read() if process.stderr is not None else ""
-        assert process.returncode == 0, stderr
+    with LocalTestOutstation(executable, startup_timeout=3.0) as controller:
+        yield controller
 
 
 @pytest.fixture
@@ -146,7 +93,7 @@ def real_client(tmp_path: Path) -> Iterator[Dnp3MasterClient]:
 
 def test_python_read_api_against_local_opendnp3_outstation(
     real_client: Dnp3MasterClient,
-    local_outstation: int,
+    local_outstation: LocalTestOutstation,
 ) -> None:
     assert TC_APP_FC01_PYTHON_E2E_LOCAL_001
     assert TC_APP_TASK_RESULT_PYTHON_LOCAL_001
@@ -160,7 +107,7 @@ def test_python_read_api_against_local_opendnp3_outstation(
     real_client.connect(
         TcpConnectionConfig(
             host="127.0.0.1",
-            port=local_outstation,
+            port=local_outstation.port,
             connect_timeout=3.0,
             retry_min=0.05,
             retry_max=0.2,
@@ -177,6 +124,12 @@ def test_python_read_api_against_local_opendnp3_outstation(
 
     enabled_unsolicited = real_client.enable_unsolicited((1, 2), timeout=3.0)
     assert enabled_unsolicited.task_status == "SUCCESS"
+    local_outstation.update_binary_input(
+        True, timestamp_ms=1700000000101, event_mode="force"
+    )
+    local_outstation.update_analog_input(
+        456.25, timestamp_ms=1700000000102, event_mode="force"
+    )
     unsolicited = real_client.wait_unsolicited(
         wait_timeout=3.0, max_events=16
     )
@@ -219,7 +172,7 @@ def test_python_read_api_against_local_opendnp3_outstation(
     assert len(analog.measurements) == 1
     assert analog.measurements[0].kind == "analog_input"
     assert analog.measurements[0].index == 0
-    assert analog.measurements[0].value == 123.5
+    assert analog.measurements[0].value == 456.25
 
     summary = real_client.read(
         [ReadHeader.all_objects(1), ReadHeader.all_objects(20)],
@@ -262,12 +215,31 @@ def test_python_read_api_against_local_opendnp3_outstation(
         "analog_output_float32",
         "analog_output_double64",
     }
+    binary_operated = real_client.read(
+        [ReadHeader.range16(10, 2, 0, 0)], timeout=3.0
+    )
+    analog_operated = real_client.read(
+        [ReadHeader.range16(40, 3, 0, 0)], timeout=3.0
+    )
+    assert binary_operated.measurements[0].value is True
+    assert analog_operated.measurements[0].value == -9876.125
 
     direct = real_client.direct_operate(
         [CrobCommand(index=0, operation="latch_off")], timeout=3.0
     )
     assert direct.mode == "direct_operate"
     assert direct.all_success is True
+    binary_restored = real_client.read(
+        [ReadHeader.range16(10, 2, 0, 0)], timeout=3.0
+    )
+    assert binary_restored.measurements[0].value is False
+    snapshot = local_outstation.snapshot()
+    assert snapshot["operation_count"] == 6
+    assert snapshot["crob_operation_count"] == 2
+    assert snapshot["analog_operation_count"] == 4
+    assert snapshot["select_before_operate_count"] == 5
+    assert snapshot["direct_operate_count"] == 1
+    assert snapshot["direct_operate_no_ack_count"] == 0
 
     with pytest.raises(HostCommandError) as no_response:
         real_client.direct_operate(

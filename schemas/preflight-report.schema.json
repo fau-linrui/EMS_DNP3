@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dnp3-master/preflight-report.schema.json",
+  "title": "DNP3 EMS offline preflight result v1",
+  "oneOf": [
+    { "$ref": "#/$defs/report" },
+    { "$ref": "#/$defs/invalidConfiguration" }
+  ],
+  "$defs": {
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "maxLength": 128
+        },
+        "message": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      }
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vendor", "model", "firmware", "profile_revision"],
+      "properties": {
+        "vendor": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "model": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "firmware": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "profile_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "size_bytes", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1, "maxLength": 32767 },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pics", "points", "plan", "capability_matrix"],
+      "properties": {
+        "pics": { "$ref": "#/$defs/input" },
+        "points": { "$ref": "#/$defs/input" },
+        "plan": { "$ref": "#/$defs/input" },
+        "capability_matrix": { "$ref": "#/$defs/input" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total_points",
+        "enabled_points",
+        "enabled_poll_scenarios",
+        "enabled_unsolicited_scenarios",
+        "enabled_control_scenarios",
+        "required_capabilities",
+        "ready_capabilities",
+        "blockers",
+        "warnings"
+      ],
+      "properties": {
+        "total_points": { "type": "integer", "minimum": 0 },
+        "enabled_points": { "type": "integer", "minimum": 0 },
+        "enabled_poll_scenarios": { "type": "integer", "minimum": 0 },
+        "enabled_unsolicited_scenarios": { "type": "integer", "minimum": 0 },
+        "enabled_control_scenarios": { "type": "integer", "minimum": 0 },
+        "required_capabilities": { "type": "integer", "minimum": 0 },
+        "ready_capabilities": { "type": "integer", "minimum": 0 },
+        "blockers": { "type": "integer", "minimum": 0 },
+        "warnings": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "scenarioIds": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$"
+      }
+    },
+    "enabledScenarios": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["poll", "unsolicited", "control"],
+      "properties": {
+        "poll": { "$ref": "#/$defs/scenarioIds" },
+        "unsolicited": { "$ref": "#/$defs/scenarioIds" },
+        "control": { "$ref": "#/$defs/scenarioIds" }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capability_id",
+        "reasons",
+        "pics_status",
+        "framework_status",
+        "ready"
+      ],
+      "properties": {
+        "capability_id": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]+(?:[._-][A-Z0-9]+)*$"
+        },
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+        },
+        "pics_status": {
+          "enum": ["SUPPORTED", "NOT_SUPPORTED", "UNKNOWN", "MISSING"]
+        },
+        "framework_status": {
+          "enum": [
+            "NOT_ANALYZED",
+            "UNSUPPORTED_BY_BACKEND",
+            "PLANNED",
+            "IMPLEMENTED_UNVERIFIED",
+            "VERIFIED_UNIT",
+            "VERIFIED_INTEROP",
+            "VERIFIED_CONFORMANCE",
+            "NOT_APPLICABLE_BY_PICS",
+            "BLOCKED",
+            "MISSING"
+          ]
+        },
+        "ready": { "type": "boolean" }
+      }
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "ready",
+        "scope",
+        "device",
+        "inputs",
+        "summary",
+        "enabled_scenarios",
+        "required_capabilities",
+        "blockers",
+        "warnings"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "ready": { "type": "boolean" },
+        "scope": { "const": "OFFLINE_CONFIGURATION_ONLY" },
+        "device": { "$ref": "#/$defs/device" },
+        "inputs": { "$ref": "#/$defs/inputs" },
+        "summary": { "$ref": "#/$defs/summary" },
+        "enabled_scenarios": { "$ref": "#/$defs/enabledScenarios" },
+        "required_capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/capability" }
+        },
+        "blockers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/issue" }
+        },
+        "warnings": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/issue" }
+        }
+      }
+    },
+    "invalidConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "ready", "error"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "ready": { "const": false },
+        "error": {
+          "allOf": [
+            { "$ref": "#/$defs/issue" },
+            { "properties": { "code": { "const": "INVALID_CONFIGURATION" } } }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -191,3 +191,5 @@ measurements, summary, fragments, iin, timings
 ## pytest 场景计划不属于 NDJSON 协议
 
 `config/ems_test_plan.example.json` 及 `ems_test_plan.py` 只在 Python 收集/业务编排层使用。它们把完整性/Class、主动上报和控制闭环转换成上述既有公开 API 调用，不会把计划、授权引用、反馈期望或恢复步骤发送给 host。host 仍只接收本文件定义的单条严格命令；控制计划也不能绕过会话令牌或持久事故锁。
+
+同理，`dnp3-local-test-outstation.exe` 的 stdin 控制协议只用于回环测试工具，不属于 host 公共协议，也不会发往 EMS。其严格格式见 `schemas/local-outstation-request.schema.json`，使用方法与安全边界见 `docs/LOCAL_TEST_OUTSTATION.md`。

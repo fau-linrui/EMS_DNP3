@@ -4,7 +4,7 @@
 
 ## 1. 当前已经完成什么
 
-截至 0.4.0，仓库已完成指导书 T00～T12 中可在本机可靠闭环的核心部分：
+截至 0.5.0，仓库已完成指导书 T00～T12 中可在本机可靠闭环的核心部分：
 
 - Windows x64 CMake/Visual Studio 工程、固定 OpenDNP3 3.1.2 和全部离线构建依赖。
 - C++ host 的严格 NDJSON 协议、Schema、错误码、重复请求 ID 防护、请求大小/深度限制和有序清理。
@@ -23,6 +23,8 @@
 - `DIRECT_OPERATE_NR` 明确返回 `UNSUPPORTED_BY_BACKEND`，不会模拟成功。
 - PICS 三态门禁、能力 ID 与 389 行矩阵交叉校验、严格只读点表加载器、严格 EMS 场景计划，以及 `dnp3_dut`、`dnp3_unsupported_behavior`、`dnp3_state_changing` 风险门禁。
 - 可整体复制的真实 EMS pytest 套件：逐点 Static Read、完整性/Class Poll、外部触发的 unsolicited 精确匹配，以及“前读回 -> 单次控制 -> 后读回 -> 单次恢复 -> 恢复读回”模板。主动上报和控制默认关闭；控制还必须逐次精确选择一个场景。
+- 只绑定 `127.0.0.1` 的可编程有状态测试从站：可制造带时间的 BI/AI 事件，CROB/G41 会更新 BOS/AOS 反馈，并记录 SBO/Direct/No-Ack 操作次数。真实 EMS 场景模板已通过 Python -> native host -> OpenDNP3 -> 测试从站的完整链路回归。
+- 共用严格 PICS 模型的离线预检：在不启动 host、不连接 DUT 的情况下交叉检查 PICS、点表、场景计划和能力矩阵，输出逐能力 blocker、输入 SHA-256、JSON 报告和明确退出码。
 - pytest 脱敏证据记录器：运行/测试阶段结果、构建身份及 PICS/点表/场景计划/矩阵文件名、大小、SHA-256；不复制私有输入内容，并替换已知本机绝对路径。任意 DUT/第三方输出仍须在外发前人工复核。
 - 有界 `stats`、环境体检、确定性 ZIP/SHA-256/逐文件清单、解包校验和不接真实 EMS 的本机一键读写自检。
 - `build-info.json` 记录 Git commit 和 clean/dirty/unavailable 工作区状态；正式证据只接受 clean 构建。
@@ -40,12 +42,17 @@ native/src/OpenDnp3CommandSupport.cpp
 python/src/dnp3_master/client.py
 python/src/dnp3_master/models.py
 python/src/dnp3_master/pytest_plugin.py
+python/src/dnp3_master/ems_profile.py
 python/src/dnp3_master/point_table.py
 python/src/dnp3_master/ems_test_plan.py
+python/src/dnp3_master/preflight.py
+python/src/dnp3_master/local_outstation.py
 python/src/dnp3_master/evidence.py
 python/src/dnp3_master/safety_incidents.py
 native/tests/opendnp3_read_integration_tests.cpp
+native/tests/local_outstation_main.cpp
 python/tests/test_host_read.py
+python/tests/test_ems_native_scenarios.py
 config/capability_matrix.csv
 config/ems_test_plan.example.json
 examples/pytest_ems/
@@ -122,6 +129,7 @@ examples/pytest_ems/
 .\scripts\build.ps1 -Preset windows-msvc-release
 .\scripts\test.ps1 -Preset windows-msvc-release
 .\scripts\run-local-self-test.ps1 -Preset windows-msvc-release
+.\.venv\Scripts\python.exe -m pytest -q python\tests\test_ems_native_scenarios.py
 git diff --check
 git status --short
 ```
@@ -132,7 +140,7 @@ git status --short
 
 唯一目标：把获批 EMS Profile 转成机器可读本地配置，不写协议功能。
 
-先读：`docs/standards/ems_device_profile.md`、`config/ems_profile.example.json`、`config/points.example.csv`、`config/ems_test_plan.example.json`、三个对应 Schema、`python/src/dnp3_master/pytest_plugin.py`、`point_table.py`、`ems_test_plan.py` 和 `config/capability_matrix.csv`。
+先读：`docs/standards/ems_device_profile.md`、`docs/OFFLINE_PREFLIGHT.md`、`config/ems_profile.example.json`、`config/points.example.csv`、`config/ems_test_plan.example.json`、对应 Schema、`python/src/dnp3_master/ems_profile.py`、`preflight.py`、`pytest_plugin.py`、`point_table.py`、`ems_test_plan.py` 和 `config/capability_matrix.csv`。
 
 操作：
 
@@ -146,6 +154,13 @@ git status --short
 安全验证：
 
 ```powershell
+.\.venv\Scripts\python.exe -m dnp3_master.preflight `
+  --pics config\ems.local.json `
+  --points config\points.local.csv `
+  --plan config\ems_test_plan.local.json `
+  --capability-matrix config\capability_matrix.csv `
+  --json
+
 .\.venv\Scripts\python.exe -m pytest examples\pytest_ems --collect-only `
   --dnp3-pics-file config\ems.local.json `
   --dnp3-points-file config\points.local.csv `
@@ -154,7 +169,7 @@ git status --short
 git status --short
 ```
 
-验收：JSON 无重复键/未知字段/非法状态；点表和场景引用交叉校验通过；每个能力 ID 都能在 `config/capability_matrix.csv` 中找到；所有计划执行能力不再是 `UNKNOWN`；三个本地配置均不出现在 Git 状态中。
+验收：预检退出码为 0 且报告 `scope=OFFLINE_CONFIGURATION_ONLY`、无 blocker；JSON 无重复键/未知字段/非法状态；点表和场景引用交叉校验通过；每个能力 ID 都能在 `config/capability_matrix.csv` 中找到；所有计划执行能力不再是 `UNKNOWN`；三个本地配置均不出现在 Git 状态中。预检通过不是 EMS 互操作证据。
 
 停止条件：Profile 与实际固件不匹配、无版本/批准来源、连接角色或链路地址不确定，或 D01～D09 未关闭。此时保持 `UNKNOWN`，向 DUT 负责人提问。
 
@@ -164,7 +179,7 @@ git status --short
 
 先读：`docs/BEGINNER_MIGRATION_BUILD_USE_GUIDE.md`、`examples/pytest_ems/README.md`、Read 模型/客户端、PICS、本地点表和本地场景计划。
 
-修改范围：0.4.0 已提供 `test_read_points.py` 和 `test_poll_scenarios.py`。先只填写私有点表/场景计划并运行，不改协议或控制代码；只有业务断言确实缺失时，才在内网复制目录中做最小扩展。
+修改范围：0.5.0 已提供 `test_read_points.py` 和 `test_poll_scenarios.py`。先只填写私有点表/场景计划并运行，不改协议或控制代码；只有业务断言确实缺失时，才在内网复制目录中做最小扩展。
 
 每个真实 DUT 用例必须同时带：
 
@@ -215,7 +230,7 @@ git status --short
 
 先读：PICS、批准点表/工单、回退方案、`examples/pytest_ems/README.md`、`ems_test_plan.py`、`test_control_scenarios.py`、`OpenDnp3CommandSupport.cpp`、Python 命令模型和开发指导书 4.4.4/4.4.5 对应内部条款索引。
 
-0.4.0 已提供单场景控制闭环模板；不要先重写控制代码。把准确操作/恢复、反馈期望和真实 `authorization_reference` 写入私有计划，只启用本次获批场景。模板会自动附加 `dnp3_dut`、准确 capability ID 和 `dnp3_state_changing`。运行时必须同时提供：
+0.5.0 已提供单场景控制闭环模板，并已用本机有状态反馈从站验证完整调用链；不要先重写控制代码。把准确操作/恢复、反馈期望和真实 `authorization_reference` 写入私有计划，只启用本次获批场景。模板会自动附加 `dnp3_dut`、准确 capability ID 和 `dnp3_state_changing`。运行时必须同时提供：
 
 ```powershell
 --dnp3-control-scenario "<EXACT_ENABLED_SCENARIO_ID>" `

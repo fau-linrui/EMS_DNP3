@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 
 $dnp3RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $dnp3PackageRoot = Join-Path $dnp3RepoRoot 'out\package'
-$dnp3PackageVersion = '0.4.0'
+$dnp3PackageVersion = '0.5.0'
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $dnp3PackageRoot "ems-dnp3-pytest-$dnp3PackageVersion"
 }
@@ -73,6 +73,8 @@ try {
         'docs\architecture.md',
         'docs\protocol.md',
         'docs\python_client.md',
+        'docs\LOCAL_TEST_OUTSTATION.md',
+        'docs\OFFLINE_PREFLIGHT.md',
         'docs\SAFETY_INCIDENT_RUNBOOK.md',
         'docs\BEGINNER_MIGRATION_BUILD_USE_GUIDE.md',
         'docs\INTRANET_HANDOFF_REMAINING_TASKS.md'

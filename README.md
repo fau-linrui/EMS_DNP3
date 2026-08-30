@@ -1,6 +1,6 @@
 # DNP3 Windows Master Automation Test Framework
 
-面向 Windows x64、IEEE 1815-2012 和 pytest 的可移植 DNP3 主站自动化测试框架。当前版本 0.4.0，固定使用 OpenDNP3 3.1.2，并支持完全离线的 C++ 构建。
+面向 Windows x64、IEEE 1815-2012 和 pytest 的可移植 DNP3 主站自动化测试框架。当前版本 0.5.0，固定使用 OpenDNP3 3.1.2，并支持完全离线的 C++ 构建。
 
 普通测试开发只使用 Python/pytest；C++ 协议栈封装在独立的 `dnp3-master-host.exe` 中：
 
@@ -20,6 +20,8 @@ pytest -> dnp3_master Python package -> NDJSON -> dnp3-master-host.exe
 - CROB Select-Before-Operate、有响应 Direct Operate、四种 Analog Output 和逐点 Command Status。
 - pytest PICS 三态选择、严格点表、严格 EMS 场景计划、脱敏证据清单和状态改变安全门。
 - 可整体复制的真实 EMS pytest 套件：逐点 Static Read、完整性/Class Poll、外部触发的主动上报观察，以及控制前后读回和恢复闭环。
+- 只监听 `127.0.0.1` 的可编程有状态测试从站，以及经过真实 Python/native/OpenDNP3 链路的 Static/Poll/Unsolicited/Control 场景回归。
+- PICS、点表、EMS 场景计划和能力矩阵的离线交叉预检；输出逐能力 blocker、输入 SHA-256 和机器可读 JSON，且不会连接 DUT。
 - 不确定控制结果的跨进程 DUT 事故锁、只读核对和显式读回确认归档。
 - 环境体检、确定性 ZIP/SHA-256/逐文件清单、解包回环自检、Debug/Release/ASan 和 1,000 次生命周期验收入口。
 
@@ -63,7 +65,7 @@ out\build\windows-msvc-release\bin\build-info.json
 .\scripts\package.ps1 -Preset windows-msvc-release -Force
 ```
 
-产物目录、确定性 ZIP 和 SHA-256 校验文件位于 `out\package\ems-dnp3-pytest-0.4.0*`。包不会包含本地 IEEE 标准 PDF、EMS PICS、点表、场景计划、PCAP 或密钥。
+产物目录、确定性 ZIP 和 SHA-256 校验文件位于 `out\package\ems-dnp3-pytest-0.5.0*`。包不会包含本地 IEEE 标准 PDF、EMS PICS、点表、场景计划、PCAP 或密钥。
 
 ## 集成到现有 pytest
 
@@ -89,6 +91,16 @@ def test_integrity(connected_master):
 
 可直接复制 `examples/pytest_ems`，再从 `config/ems_test_plan.example.json` 建立私有计划。计划内的完整性/Class 场景可只读执行；主动上报和控制示例默认关闭。控制即使在计划中启用，也必须逐次用 `--dnp3-control-scenario` 精确点名，并同时通过 PICS、pytest 状态改变授权和 host 会话令牌门。
 
+填写三个私有配置后，应先离线预检；只有退出码为 0 才进入 DUT 测试准备：
+
+```powershell
+.\.venv\Scripts\python.exe -m dnp3_master.preflight `
+  --pics .\config\ems.local.json `
+  --points .\config\points.local.csv `
+  --plan .\config\ems_test_plan.local.json `
+  --capability-matrix .\config\capability_matrix.csv
+```
+
 真实 EMS 用例必须从未提交的本地 PICS、点表、场景计划和连接参数驱动。当前已取得一份部分“DNP3 操作约定”，但因缺固件身份且事件、FC6、SBO、CROB 模型、广播和遥脉映射仍待澄清，不能直接解锁 DUT 测试。详细命令、控制安全示例和排错方法见下方文档。
 
 ## 文档入口
@@ -96,6 +108,8 @@ def test_integrity(connected_master):
 - [小白拉取、构建、移植与使用指南](docs/BEGINNER_MIGRATION_BUILD_USE_GUIDE.md)
 - [内网交接与剩余任务卡](docs/INTRANET_HANDOFF_REMAINING_TASKS.md)
 - [Python 客户端与 pytest 集成](docs/python_client.md)
+- [EMS 私有配置离线预检](docs/OFFLINE_PREFLIGHT.md)
+- [本机可编程 DNP3 测试从站](docs/LOCAL_TEST_OUTSTATION.md)
 - [不确定控制结果事故锁处理手册](docs/SAFETY_INCIDENT_RUNBOOK.md)
 - [Host NDJSON 协议](docs/protocol.md)
 - [架构说明](docs/architecture.md)

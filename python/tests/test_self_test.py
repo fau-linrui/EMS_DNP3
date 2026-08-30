@@ -37,3 +37,7 @@ def test_loopback_self_test_covers_packaged_read_and_control_path() -> None:
     assert result["integrity_measurements"] >= 9
     assert result["analog_value"] == 123.5
     assert result["command_all_success"] is True
+    assert result["command_points"] == 4
+    assert result["binary_feedback_cycle"] == [False, True, False]
+    assert result["analog_feedback_cycle"] == [0.0, 1.25, 0.0]
+    assert result["outstation_operation_count"] == 4

@@ -1,4 +1,4 @@
-# Python 子进程客户端与 pytest 集成（0.4.0）
+# Python 子进程客户端与 pytest 集成（0.5.0）
 
 `dnp3_master` 核心只依赖 Python 标准库。它启动 `dnp3-master-host.exe`、自动完成 hello、串行化单个在途请求、持续排空 stdout/stderr、验证严格响应、处理超时/异常退出，并在 Windows Job Object 中拥有整个子进程树。
 
@@ -157,6 +157,22 @@ def test_real_ems_read(connected_master):
 - `UNKNOWN`/缺失：按 `--dnp3-unknown-policy=xfail|skip|error` 处理，默认 xfail 且不运行测试体。
 
 正式 EMS 执行推荐 `--dnp3-unknown-policy error`，避免漏填 PICS 被误认为通过。
+
+## DUT 连接前离线预检
+
+pytest 插件与独立预检共用 `EmsProfile`/`load_ems_profile()` 的严格 PICS 模型。准备好私有 PICS、点表和场景计划后，先执行：
+
+```powershell
+python -m dnp3_master.preflight `
+  --pics .\config\ems.local.json `
+  --points .\config\points.local.csv `
+  --plan .\config\ems_test_plan.local.json `
+  --capability-matrix .\config\capability_matrix.csv
+```
+
+它不接受或读取 DUT IP/端口，不启动 host。退出码 0/2/3 分别表示离线 `READY`、配置无效、配置有效但存在 blocker。`--json` 报告含逐能力 PICS/框架判定和输入 SHA-256；完整规则见 `docs/OFFLINE_PREFLIGHT.md`。
+
+本机回归需要制造事件或检查命令是否重发时，可使用 `dnp3_master.local_outstation.LocalTestOutstation` 控制包内回环从站。该帮助类不是面向真实 DUT 的接口，详见 `docs/LOCAL_TEST_OUTSTATION.md`。
 
 ## 状态改变收集门
 

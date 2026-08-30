@@ -72,6 +72,8 @@ def test_ems_profile_schema_is_strict_and_uses_tri_state_capabilities() -> None:
         "NOT_SUPPORTED",
         "UNKNOWN",
     ]
+    assert schema["properties"]["capabilities"]["propertyNames"]["maxLength"] == 256
+    assert schema["properties"]["notes"]["minLength"] == 1
 
 
 def test_point_table_schema_is_strict_and_versioned() -> None:
@@ -116,6 +118,39 @@ def test_ems_test_plan_schema_keeps_controls_explicit_and_strict() -> None:
         "operation"
     ]["enum"]
     assert schema["$defs"]["analogCommand"]["additionalProperties"] is False
+
+
+def test_local_outstation_control_schema_is_bounded_and_strict() -> None:
+    schema = load_schema("local-outstation-request.schema.json")
+    assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert len(schema["oneOf"]) == 4
+    assert schema["$defs"]["hello"]["additionalProperties"] is False
+    assert schema["$defs"]["update"]["additionalProperties"] is False
+    assert schema["$defs"]["inputUpdateBase"]["additionalProperties"] is False
+    assert schema["$defs"]["outputUpdateBase"]["additionalProperties"] is False
+    assert schema["$defs"]["inputUpdateBase"]["properties"]["index"] == {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1,
+    }
+    assert schema["$defs"]["inputUpdateBase"]["properties"]["timestamp_ms"][
+        "maximum"
+    ] == (1 << 48) - 1
+
+
+def test_preflight_report_schema_separates_valid_and_invalid_results() -> None:
+    schema = load_schema("preflight-report.schema.json")
+    assert len(schema["oneOf"]) == 2
+    report = schema["$defs"]["report"]
+    invalid = schema["$defs"]["invalidConfiguration"]
+    assert report["additionalProperties"] is False
+    assert invalid["additionalProperties"] is False
+    assert report["properties"]["schema_version"]["const"] == 1
+    assert report["properties"]["scope"]["const"] == (
+        "OFFLINE_CONFIGURATION_ONLY"
+    )
+    assert schema["$defs"]["capability"]["additionalProperties"] is False
+    assert schema["$defs"]["issue"]["additionalProperties"] is False
 
 
 def test_evidence_manifest_schema_forbids_private_top_level_fields() -> None:

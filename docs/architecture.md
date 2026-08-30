@@ -1,4 +1,4 @@
-# 工程架构基线（0.4.0）
+# 工程架构基线（0.5.0）
 
 ## 可移植边界
 
@@ -20,13 +20,13 @@ pytest/业务断言
 
 ## 目录职责
 
-| 目录 | 职责 | 0.4.0 状态 |
+| 目录 | 职责 | 0.5.0 状态 |
 |---|---|---|
 | `native/` | C++17 host、后端和原生测试 | TCP、Read/IIN、unsolicited、控制、安全联锁、stats 已接入 |
-| `python/` | 可嵌入 pytest 的包与测试 | 类型模型、进程所有权、PICS/点表/场景计划/证据/风险门禁和 fixtures |
+| `python/` | 可嵌入 pytest 的包与测试 | 类型模型、进程所有权、PICS/点表/场景计划/离线预检/证据/风险门禁和 fixtures |
 | `config/` | 能力台账和 EMS 配置示例 | 389 条能力及 PICS、点表、场景计划模板；真实配置不提交 |
-| `schemas/` | NDJSON 和 EMS 配置格式 | v1 严格 Schema |
-| `scripts/` | 工具链发现、构建、测试、自检、打包 | Debug/Release/ASan 和离线校验 |
+| `schemas/` | NDJSON、EMS 配置、本机测试控制和预检报告格式 | v1 严格 Schema |
+| `scripts/` | 工具链发现、构建、测试、自检、打包 | Debug/Release/ASan、离线校验和解包回环验收 |
 | `third_party/` | 固定源码、归档和锁 | OpenDNP3 3.1.2 及依赖已固定 |
 | `docs/standards/` | 标准、PICS、依赖与证据状态 | 缺失项显式保留 |
 
@@ -52,6 +52,14 @@ detail 模式保留并返回逐点结果；summary 模式只累计计数，不�
 `ems_test_plan.py` 是 Python/pytest 层的业务编排边界，不修改 NDJSON 或 OpenDNP3 协议层。它在 DUT 连接前加载最多 1 MiB 的严格 JSON，拒绝重复键、未知字段、非有限/越界值、重复场景、无效点引用和不完整恢复闭环，并把每个场景映射为能力矩阵 marker。
 
 公开点表只描述可读对象；场景计划单独描述完整性/Class 读取、外部触发的主动上报期望以及预批准控制闭环。二者在收集阶段交叉校验。`examples/pytest_ems` 的控制测试每次只接受一个命令行精确选择的场景，依次执行基线读回、一次操作、确认后读回、一次恢复和恢复读回；它不会批量选择控制，也不会重试任何控制。如果操作后状态未确认，测试停止且不盲目恢复。
+
+`ems_profile.py` 是 PICS 的唯一严格解析入口，pytest 插件和 `preflight.py` 共用它。离线预检进一步把 PICS、点表、场景计划与能力矩阵交叉计算，在没有 IP/端口且不启动 host 的情况下列出所需能力、blocker、warning 和输入哈希。预检 `READY` 只表示配置门通过，不提升互操作证据等级。
+
+## 本机有状态端到端回归
+
+`dnp3-local-test-outstation.exe` 强制绑定 `127.0.0.1`，提供两个 BI/AI/BOS/AOS 索引。测试控制协议可以显式制造 G2V2/G32V7 事件；G12V1 与 G41V1～V4 命令会改变对应 BOS/AOS 静态反馈，并记录 SBO/Direct/No-Ack 操作计数。
+
+`test_ems_native_scenarios.py` 把公开 EMS pytest 场景模板接到真实 Python client、native host、OpenDNP3 master 和该测试从站，覆盖逐点 Static/Integrity/Class、主动上报以及控制/读回/恢复。该从站与主站仍是同栈，因此只属于本机工程证据。
 
 ## 控制数据路径与安全门
 

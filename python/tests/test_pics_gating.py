@@ -102,6 +102,16 @@ def test_pics_loader_rejects_invalid_profile(
     tmp_path: Path, document: object, message: str
 ) -> None:
     profile = tmp_path / "invalid.json"
+    if isinstance(document, dict):
+        document = {
+            "device": {
+                "vendor": "test",
+                "model": "test",
+                "firmware": "test",
+                "profile_revision": "test",
+            },
+            **document,
+        }
     profile.write_text(json.dumps(document), encoding="utf-8")
 
     with pytest.raises(pytest.UsageError, match=message):

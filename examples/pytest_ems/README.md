@@ -27,7 +27,21 @@ Copy-Item .\config\ems_test_plan.example.json .\config\ems_test_plan.local.json
 
 加载器会在建立连接前拒绝重复键、未知字段、重复场景、错误 Class/点号、越界 timeout、无事件元数据的主动上报点、无法恢复原基线的控制，以及已启用但仍使用占位授权信息的控制。
 
-## 2. 先只收集，不连接 EMS
+## 2. 先做离线预检
+
+以下命令不会启动 host，也不会连接 EMS：
+
+```powershell
+.\.venv\Scripts\python.exe -m dnp3_master.preflight `
+  --pics .\config\ems.local.json `
+  --points .\config\points.local.csv `
+  --plan .\config\ems_test_plan.local.json `
+  --capability-matrix .\config\capability_matrix.csv
+```
+
+只有退出码 0 才继续。退出码 2 表示配置无效；退出码 3 表示仍有占位符、所需 PICS 能力不是 `SUPPORTED` 或框架状态不满足。示例配置返回 3 是设计行为。`READY` 只代表离线配置门通过，不代表真实 EMS 互操作通过。
+
+## 3. 先只收集，不连接 EMS
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest .\examples\pytest_ems --collect-only -q `
@@ -39,7 +53,7 @@ Copy-Item .\config\ems_test_plan.example.json .\config\ems_test_plan.local.json
 
 任何 `UsageError` 都应先修配置。不要为了消除 `UNKNOWN` 而把没有证据的能力改成 `SUPPORTED`。
 
-## 3. 运行只读基线
+## 4. 运行只读基线
 
 把地址替换为隔离实验 EMS 的真实值：
 
@@ -61,19 +75,19 @@ Copy-Item .\config\ems_test_plan.example.json .\config\ems_test_plan.local.json
 
 示例计划允许 Class Read 空响应，以兼容目前拿到的 EMS 操作约定。若 PICS/厂商确认某次操作必须返回事件，应填写 `minimum_measurements` 和 `expected_point_ids`，不能把任意空响应当成功。
 
-## 4. 主动上报
+## 5. 主动上报
 
 先在本地计划中填写准确的事件点、Class、目标值和外部触发步骤，再把对应 `enabled` 改为 `true`。运行测试后，在观察窗口内按私有计划由独立信号源改变输入：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest `
   .\examples\pytest_ems\test_unsolicited_scenarios.py -v -s `
-  <第3节的全部连接、PICS、点表、计划和证据参数>
+  <第4节的全部连接、PICS、点表、计划和证据参数>
 ```
 
 此测试不会通过遥控制造事件。它要求精确匹配点类型、索引、Event Group/Variation、目标值和可选时间戳，并在任何路径关闭 unsolicited；`dropped_total` 非零立即失败。
 
-## 5. 控制：三道技术门且每次只能选一个
+## 6. 控制：三道技术门且每次只能选一个
 
 控制场景默认 `enabled=false`。只有书面授权、低风险实验点、联锁、初始值、目标值、反馈点和恢复动作全部复核后，才能在私有计划中填写真实 `authorization_reference` 并启用一个场景。
 
@@ -86,7 +100,7 @@ Copy-Item .\config\ems_test_plan.example.json .\config\ems_test_plan.local.json
 --dnp3-dut-id "<STABLE_LAB_ASSET_ID>"
 ```
 
-`--dnp3-control-scenario` 故意没有环境变量替代项，避免旧终端环境意外选择控制。完整命令还必须包含第 3 节的 PICS、点表、计划、证据和连接参数，并只运行 `test_control_scenarios.py`。插件会拒绝已授权的 xdist 并行控制，模板也会拒绝同一 pytest 进程中的 rerun/repeat；仍须保证外部没有第二个主站。
+`--dnp3-control-scenario` 故意没有环境变量替代项，避免旧终端环境意外选择控制。完整命令还必须包含第 4 节的 PICS、点表、计划、证据和连接参数，并只运行 `test_control_scenarios.py`。插件会拒绝已授权的 xdist 并行控制，模板也会拒绝同一 pytest 进程中的 rerun/repeat；仍须保证外部没有第二个主站。
 
 模板不会重试任何控制。只有操作结果明确成功且控制后反馈达到批准值，才会发送一次预批准恢复命令；反馈不一致时停止并要求人工读回，不会盲目恢复。控制结果超时或不确定时，核心客户端会写入持久事故锁、清除令牌并销毁 host，之后按 `docs/SAFETY_INCIDENT_RUNBOOK.md` 处置。
 
