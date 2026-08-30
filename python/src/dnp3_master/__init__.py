@@ -3,6 +3,17 @@
 from __future__ import annotations
 
 from .client import Dnp3MasterClient
+from .ems_test_plan import (
+    EMS_TEST_PLAN_SCHEMA_VERSION,
+    ControlCommand,
+    ControlScenario,
+    EmsTestPlan,
+    EmsTestPlanError,
+    PollScenario,
+    UnsolicitedScenario,
+    ValueExpectation,
+    load_ems_test_plan,
+)
 from .errors import (
     ClientStateError,
     Dnp3ClientError,
@@ -48,7 +59,7 @@ from .safety_incidents import (
     dut_identity_sha256,
 )
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 TARGET_STANDARD = "IEEE1815-2012"
 
 __all__ = [
@@ -57,8 +68,13 @@ __all__ = [
     "CommandPointResult",
     "CommandTaskResult",
     "CrobCommand",
+    "ControlCommand",
+    "ControlScenario",
     "Dnp3ClientError",
     "Dnp3MasterClient",
+    "EMS_TEST_PLAN_SCHEMA_VERSION",
+    "EmsTestPlan",
+    "EmsTestPlanError",
     "HostCommandError",
     "HostExitedError",
     "HostProcessConfig",
@@ -74,6 +90,7 @@ __all__ = [
     "PointDefinition",
     "PointTable",
     "PointTableError",
+    "PollScenario",
     "ReadHeader",
     "ReadTaskResult",
     "SAFETY_INCIDENT_SCHEMA_VERSION",
@@ -86,9 +103,12 @@ __all__ = [
     "TcpConnectionConfig",
     "UnsolicitedBatchResult",
     "UnsolicitedControlResult",
+    "UnsolicitedScenario",
     "UnresolvedSafetyIncidentError",
     "IncidentRecordResult",
     "dut_identity_sha256",
+    "load_ems_test_plan",
     "load_point_table",
+    "ValueExpectation",
     "__version__",
 ]

@@ -57,6 +57,7 @@ def test_example_point_table_loads_and_generates_exact_headers() -> None:
     assert table.by_id["AI_DEMO_0001"].point_name == "示例遥测"
     analog = table.by_id["AI_DEMO_0001"]
     assert analog.capability_id == "OBJ.G30.V5"
+    assert analog.event_capability_id == "OBJ.G32.V7"
     assert analog.read_header().to_params() == {
         "group": 30,
         "variation": 5,
@@ -65,6 +66,7 @@ def test_example_point_table_loads_and_generates_exact_headers() -> None:
         "stop": 0,
     }
     assert table.to_mapping()["points"][0]["event_class"] == 1
+    assert table.by_id["BO_DEMO_0001"].event_capability_id is None
 
 
 @pytest.mark.parametrize(

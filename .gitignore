@@ -27,6 +27,7 @@ Thumbs.db
 
 # Environment-specific DUT configuration must not be committed
 config/ems.local.json
+config/ems_test_plan.local.json
 config/points.local.csv
 config/*.local.json
 config/*.local.csv

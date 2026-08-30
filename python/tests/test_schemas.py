@@ -91,6 +91,33 @@ def test_point_table_schema_is_strict_and_versioned() -> None:
     assert len(point["allOf"]) == 9
 
 
+def test_ems_test_plan_schema_keeps_controls_explicit_and_strict() -> None:
+    schema = load_schema("ems-test-plan.schema.json")
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["schema_version"]["const"] == 1
+    assert schema["required"] == [
+        "schema_version",
+        "poll_scenarios",
+        "unsolicited_scenarios",
+        "control_scenarios",
+    ]
+    control = schema["$defs"]["controlScenario"]
+    assert control["additionalProperties"] is False
+    assert {
+        "authorization_reference",
+        "command",
+        "precondition",
+        "postcondition",
+        "restore_command",
+        "restore_expectation",
+    }.issubset(control["required"])
+    assert schema["$defs"]["crobCommand"]["additionalProperties"] is False
+    assert "null" not in schema["$defs"]["crobCommand"]["properties"][
+        "operation"
+    ]["enum"]
+    assert schema["$defs"]["analogCommand"]["additionalProperties"] is False
+
+
 def test_evidence_manifest_schema_forbids_private_top_level_fields() -> None:
     schema = load_schema("evidence-manifest.schema.json")
     assert schema["additionalProperties"] is False

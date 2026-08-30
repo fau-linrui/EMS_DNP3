@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 
 $dnp3RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $dnp3PackageRoot = Join-Path $dnp3RepoRoot 'out\package'
-$dnp3PackageVersion = '0.3.0'
+$dnp3PackageVersion = '0.4.0'
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $dnp3PackageRoot "ems-dnp3-pytest-$dnp3PackageVersion"
 }

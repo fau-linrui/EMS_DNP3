@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
     dnp3_master_test_framework
-    VERSION 0.3.0
+    VERSION 0.4.0
     DESCRIPTION "Windows DNP3 master automation test framework"
     LANGUAGES CXX
 )
@@ -370,6 +370,7 @@ install(
     FILES
         "${PROJECT_SOURCE_DIR}/config/capability_matrix.csv"
         "${PROJECT_SOURCE_DIR}/config/ems_profile.example.json"
+        "${PROJECT_SOURCE_DIR}/config/ems_test_plan.example.json"
         "${PROJECT_SOURCE_DIR}/config/points.example.csv"
     DESTINATION config
 )

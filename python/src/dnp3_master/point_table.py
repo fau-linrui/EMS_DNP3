@@ -108,6 +108,16 @@ class PointDefinition:
             return "OBJ.G110.LENGTH_VARIANTS"
         return f"OBJ.G{self.static_group}.V{self.static_variation}"
 
+    @property
+    def event_capability_id(self) -> str | None:
+        """Return the exact event capability ID, or ``None`` for static-only rows."""
+
+        if self.event_group is None or self.event_variation is None:
+            return None
+        if self.event_group == 111:
+            return "OBJ.G111.LENGTH_VARIANTS"
+        return f"OBJ.G{self.event_group}.V{self.event_variation}"
+
     def read_header(self) -> ReadHeader:
         """Create the exact one-point static READ header for this row."""
 
@@ -134,6 +144,23 @@ class PointDefinition:
             and item.group == self.static_group
             and item.variation == self.static_variation
             and not item.is_event
+        )
+
+    def matching_event_measurements(
+        self, measurements: tuple[MeasurementRecord, ...]
+    ) -> tuple[MeasurementRecord, ...]:
+        """Return exact event-object matches for this point-table row."""
+
+        if self.event_group is None or self.event_variation is None:
+            return ()
+        return tuple(
+            item
+            for item in measurements
+            if item.kind == self.point_type
+            and item.index == self.index
+            and item.group == self.event_group
+            and item.variation == self.event_variation
+            and item.is_event
         )
 
     def value_in_expected_range(self, value: object) -> bool:

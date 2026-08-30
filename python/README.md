@@ -1,9 +1,9 @@
 # dnp3-master-test-framework Python package
 
-This directory is the portable pytest-facing layer. Version 0.3.0 provides the
+This directory is the portable pytest-facing layer. Version 0.4.0 provides the
 synchronous `Dnp3MasterClient`, validated TCP/read/control models, typed task
 results, strict process/protocol exceptions, bounded diagnostics, PICS-aware
-selection, state-change safety gates, and opt-in fixtures without exposing
+selection, strict EMS scenario plans, state-change safety gates, and opt-in fixtures without exposing
 OpenDNP3-specific C++ APIs to test cases.
 
 The core package uses only the Python standard library. Enable the fixtures from
@@ -24,7 +24,9 @@ then use `connected_master` in the test signature. The client exposes
 `integrity_poll`, `class_poll`, strict multi-header `read`, guarded
 `select_and_operate`, response-bearing `direct_operate`, channel events and
 bounded stats. State-changing tests remain skipped unless explicitly marked and
-authorized with an operator ID and lab DUT ID.
+authorized with an operator ID and lab DUT ID. The bundled real-EMS templates
+also require an enabled private plan entry and an exact per-run
+`--dnp3-control-scenario` selection.
 
 Full integration, safety, timeout, diagnostic and copy boundaries are
 documented in `docs/python_client.md` and

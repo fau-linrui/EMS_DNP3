@@ -1,4 +1,4 @@
-# Python 子进程客户端与 pytest 集成（0.3.0）
+# Python 子进程客户端与 pytest 集成（0.4.0）
 
 `dnp3_master` 核心只依赖 Python 标准库。它启动 `dnp3-master-host.exe`、自动完成 hello、串行化单个在途请求、持续排空 stdout/stderr、验证严格响应、处理超时/异常退出，并在 Windows Job Object 中拥有整个子进程树。
 
@@ -118,6 +118,7 @@ pytest_plugins = ("dnp3_master.pytest_plugin",)
 |---|---|
 | `dnp3_pics` | session；已校验的 capability -> 三态映射 |
 | `dnp3_point_table` | session；严格加载的只读点表，未配置时为 `None` |
+| `dnp3_ems_test_plan` | session；与点表交叉校验的完整性/Class、主动上报和控制场景计划，未配置时为 `None` |
 | `dnp3_host_config` | session；可覆盖的 `HostProcessConfig` |
 | `host_process` | session；已完成 hello 的客户端，teardown 幂等清理 |
 | `master_client` | session；`host_process` 的别名边界 |
@@ -125,6 +126,18 @@ pytest_plugins = ("dnp3_master.pytest_plugin",)
 | `connected_master` | function；每个测试连接并在 teardown 断开 |
 
 pytest-xdist 每个 worker 会创建独立 host/session；若 EMS 只允许一个主站，DUT 用例必须串行，不能使用多个 worker。
+
+## 严格 EMS 场景计划
+
+`--dnp3-ems-plan` 或 `DNP3_EMS_PLAN` 加载 `config/ems_test_plan.example.json` 格式的私有副本。使用计划时必须同时提供点表；插件会在建立 DUT 连接前完成以下检查：
+
+- JSON 最多 1 MiB，拒绝重复键、未知字段、非标准数字和重复场景 ID。
+- 所有 point ID 必须存在且启用；Class/unsolicited 场景还必须与点表中的 Event Class、Group 和 Variation 一致。
+- timeout、测量/事件上限和期望值均有界，布尔点只能使用布尔期望，数值点只能使用有限数值期望。
+- 控制的操作和恢复必须使用相同命令类型/索引但载荷不同，恢复期望必须等于操作前基线。
+- 已启用控制不能保留 `FILL_ME/TODO/TBD/PLACEHOLDER/EXAMPLE` 授权引用。
+
+公开点表保持只读；控制值、反馈关系和授权只存在于未提交的私有场景计划中。证据清单只记录计划文件名、大小和 SHA-256，不复制内容。
 
 ## PICS 选择门
 
@@ -163,6 +176,8 @@ def test_real_ems_read(connected_master):
 
 环境变量等价为 `DNP3_ALLOW_STATE_CHANGING`、`DNP3_OPERATOR_ID`、`DNP3_DUT_ID`。这只是技术防误触；项目书面授权、点表确认、回退方案和人工监护仍不可省略。
 
+捆绑的 `examples/pytest_ems/test_control_scenarios.py` 还要求计划场景已启用，并在每次命令中用 `--dnp3-control-scenario <精确ID>` 单独选择。该参数故意没有环境变量替代项，一次只能选择一个场景。模板先读基线，只发送一次操作；只有明确成功且反馈确认后才发送一次预批准恢复，任何控制都不自动重试。插件拒绝已授权状态改变测试使用 pytest-xdist，模板拒绝同一 pytest 进程内的 rerun/repeat。
+
 ## 主要 pytest 参数/环境变量
 
 | CLI | 环境变量 | 默认 |
@@ -171,6 +186,8 @@ def test_real_ems_read(connected_master):
 | `--dnp3-pics-file` | `DNP3_PICS_FILE` | 无 |
 | `--dnp3-capability-matrix` | `DNP3_CAPABILITY_MATRIX` | 自动查找 `config/capability_matrix.csv` |
 | `--dnp3-points-file` | `DNP3_POINTS_FILE` | 无；提供时在收集前严格校验 |
+| `--dnp3-ems-plan` | `DNP3_EMS_PLAN` | 无；使用时必须同时提供点表 |
+| `--dnp3-control-scenario` | 无 | 无；每次精确选择一个已启用控制场景 |
 | `--dnp3-evidence-dir` | `DNP3_EVIDENCE_DIR` | 无；提供时生成脱敏运行清单 |
 | `--dnp3-safety-incident-dir` | `DNP3_SAFETY_INCIDENT_DIR` | `evidence/local/safety-incidents` |
 | `--dnp3-unknown-policy` | `DNP3_UNKNOWN_POLICY` | `xfail` |
@@ -222,6 +239,10 @@ bin/dnp3-master-host.exe
 bin/build-info.json
 schemas/
 config/capability_matrix.csv
+config/ems_profile.example.json
+config/points.example.csv
+config/ems_test_plan.example.json
+examples/pytest_ems/
 package-manifest.json
 ```
 

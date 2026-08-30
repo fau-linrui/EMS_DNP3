@@ -187,3 +187,7 @@ measurements, summary, fragments, iin, timings
 | `QUEUE_OVERFLOW` | 有界结果容量不足，不能视为完整成功 |
 | `PROCESS_SHUTTING_DOWN` | shutdown 后收到请求 |
 | `INTERNAL_ERROR` | 未预期异常已被边界捕获 |
+
+## pytest 场景计划不属于 NDJSON 协议
+
+`config/ems_test_plan.example.json` 及 `ems_test_plan.py` 只在 Python 收集/业务编排层使用。它们把完整性/Class、主动上报和控制闭环转换成上述既有公开 API 调用，不会把计划、授权引用、反馈期望或恢复步骤发送给 host。host 仍只接收本文件定义的单条严格命令；控制计划也不能绕过会话令牌或持久事故锁。

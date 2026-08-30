@@ -4,7 +4,7 @@
 
 ## 1. 当前已经完成什么
 
-截至 0.3.0，仓库已完成指导书 T00～T12 中可在本机可靠闭环的核心部分：
+截至 0.4.0，仓库已完成指导书 T00～T12 中可在本机可靠闭环的核心部分：
 
 - Windows x64 CMake/Visual Studio 工程、固定 OpenDNP3 3.1.2 和全部离线构建依赖。
 - C++ host 的严格 NDJSON 协议、Schema、错误码、重复请求 ID 防护、请求大小/深度限制和有序清理。
@@ -21,8 +21,9 @@
 - FC20/FC21 显式 Enable/Disable Unsolicited、跨请求 ISOE 收集、G2V2/G32V7、会话/分片/顺序字段及 4096 条 drop-oldest 有界队列；启动时仍默认关闭。
 - 控制超时、host 交换失败、非法控制结果或结果自报不确定时，框架不自动重试；Python 会先按 DUT 哈希写入跨进程事故锁，再清除令牌并终止 host。新进程只读可用，控制必须在独立读回和显式事故确认后恢复。
 - `DIRECT_OPERATE_NR` 明确返回 `UNSUPPORTED_BY_BACKEND`，不会模拟成功。
-- PICS 三态门禁、能力 ID 与 389 行矩阵交叉校验、严格只读点表加载器、可复制的只读 EMS pytest 示例，以及 `dnp3_dut`、`dnp3_unsupported_behavior`、`dnp3_state_changing` 风险门禁。
-- pytest 脱敏证据记录器：运行/测试阶段结果、构建身份及 PICS/点表/矩阵文件名、大小、SHA-256；不复制私有输入内容，并替换已知本机绝对路径。任意 DUT/第三方输出仍须在外发前人工复核。
+- PICS 三态门禁、能力 ID 与 389 行矩阵交叉校验、严格只读点表加载器、严格 EMS 场景计划，以及 `dnp3_dut`、`dnp3_unsupported_behavior`、`dnp3_state_changing` 风险门禁。
+- 可整体复制的真实 EMS pytest 套件：逐点 Static Read、完整性/Class Poll、外部触发的 unsolicited 精确匹配，以及“前读回 -> 单次控制 -> 后读回 -> 单次恢复 -> 恢复读回”模板。主动上报和控制默认关闭；控制还必须逐次精确选择一个场景。
+- pytest 脱敏证据记录器：运行/测试阶段结果、构建身份及 PICS/点表/场景计划/矩阵文件名、大小、SHA-256；不复制私有输入内容，并替换已知本机绝对路径。任意 DUT/第三方输出仍须在外发前人工复核。
 - 有界 `stats`、环境体检、确定性 ZIP/SHA-256/逐文件清单、解包校验和不接真实 EMS 的本机一键读写自检。
 - `build-info.json` 记录 Git commit 和 clean/dirty/unavailable 工作区状态；正式证据只接受 clean 构建。
 - 389 行 IEEE 1815-2012 能力矩阵；已实现项均保持 `IMPLEMENTED_UNVERIFIED`，没有虚构 `VERIFIED_INTEROP/CONFORMANCE`。
@@ -40,11 +41,14 @@ python/src/dnp3_master/client.py
 python/src/dnp3_master/models.py
 python/src/dnp3_master/pytest_plugin.py
 python/src/dnp3_master/point_table.py
+python/src/dnp3_master/ems_test_plan.py
 python/src/dnp3_master/evidence.py
 python/src/dnp3_master/safety_incidents.py
 native/tests/opendnp3_read_integration_tests.cpp
 python/tests/test_host_read.py
 config/capability_matrix.csv
+config/ems_test_plan.example.json
+examples/pytest_ems/
 ```
 
 ## 2. 证据边界：交接时必须原样保留
@@ -74,7 +78,7 @@ config/capability_matrix.csv
 - 控制会话令牌只用于防误操作，不是用户认证、权限系统或 Secure Authentication v5。
 - 事故锁只对使用同一持久目录和完全相同 `dut_id` 的进程有效，不是多机分布式锁；真实控制必须保持单控制器、串行执行。
 - 未完成时间同步、Restart、Freeze、Assign Class、File/Data Set/VT、SAv5、Raw fault/fuzz 等能力。
-- 没有真实 EMS 点表断言、PICS 适用性结果、性能阈值、24 小时稳定性或独立互操作证据。
+- 已有真实 EMS 点表/场景断言模板，但尚无目标 EMS 的实际运行结果、PICS 适用性结论、性能阈值、24 小时稳定性或独立互操作证据。
 - 已知 EMS 操作约定声称事件仅 unsolicited、支持 FC5/FC6、使用“Activation Model”式 LATCH_ON/OFF、TCP 不支持广播且遥脉同遥测；这些陈述存在标准差异/歧义，不能直接转成自动化断言。
 
 ## 4. 进入内网后必须取得的输入
@@ -83,7 +87,7 @@ config/capability_matrix.csv
 
 1. EMS 厂商、型号、固件、Device Profile/PICS 版本及其批准来源。
 2. 连接角色和参数：EMS 是否为 Outstation/TCP Server、IP、端口、本地网卡、主/从链路地址、最大分片和超时要求。
-3. 点表：对象类型、索引、Class、量程、工程单位、初值、可写性、控制反馈点和危险等级。
+3. 点表及场景计划输入：对象类型、索引、Class、量程、工程单位、初值、可写性、控制反馈点、操作/恢复值、危险等级和批准工单。
 4. 主动上送、启动完整性、Confirm、时间同步、Restart、Freeze、Assign Class 策略。
 5. 隔离实验环境的书面状态改变授权、操作人标识、资产标识、回退步骤和允许时段。
 6. 目标点数、事件率、延迟、吞吐、CPU/内存和稳定性阈值。
@@ -92,7 +96,7 @@ config/capability_matrix.csv
 9. IEEE 1815-2012 PDF 的内部使用授权、对应勘误和条款复核责任人。
 10. 对 `docs/standards/ems_device_profile.md` 中 D01～D09 的厂商书面答复，尤其是 FC6 无响应、SBO、事件 Read、CROB 点模型、广播和遥脉对象映射。
 
-私有输入放在 `config/*.local.*`、`secrets/` 或 `evidence/local/`，不得提交到 GitHub。
+私有输入放在 `config/*.local.*`、`secrets/` 或 `evidence/local/`，包括 `ems.local.json`、`points.local.csv` 和 `ems_test_plan.local.json`，不得提交到 GitHub。
 
 ## 5. 给内网 agent 的固定执行规则
 
@@ -109,7 +113,7 @@ config/capability_matrix.csv
 7. 控制、时间写入、Restart、Freeze、Assign Class、文件/配置和 fuzz 必须有相应风险标记；未经授权绝不连接生产设备。
 8. 每卡结束运行 Release 全套测试，更新能力矩阵、Schema、`hello.capabilities` 和文档，再提交一个独立 commit。
 9. 不确定控制结果必须按 `docs/SAFETY_INCIDENT_RUNBOOK.md` 只读核对和确认；禁止删除/编辑活动锁，禁止自动重发。
-10. 真实 DUT 运行必须指定 `--dnp3-evidence-dir`；私有 PICS/点表只保存哈希，不复制进公开仓库。自动脱敏不是数据泄露审查的替代品，证据出内网前必须人工复核。
+10. 真实 DUT 运行必须指定 `--dnp3-evidence-dir`；私有 PICS/点表/场景计划只保存哈希，不复制进公开仓库。自动脱敏不是数据泄露审查的替代品，证据出内网前必须人工复核。
 
 通用本机验收命令：
 
@@ -128,13 +132,14 @@ git status --short
 
 唯一目标：把获批 EMS Profile 转成机器可读本地配置，不写协议功能。
 
-先读：`docs/standards/ems_device_profile.md`、`config/ems_profile.example.json`、`config/points.example.csv`、两个对应 Schema、`python/src/dnp3_master/pytest_plugin.py`、`python/src/dnp3_master/point_table.py` 和 `config/capability_matrix.csv`。
+先读：`docs/standards/ems_device_profile.md`、`config/ems_profile.example.json`、`config/points.example.csv`、`config/ems_test_plan.example.json`、三个对应 Schema、`python/src/dnp3_master/pytest_plugin.py`、`point_table.py`、`ems_test_plan.py` 和 `config/capability_matrix.csv`。
 
 操作：
 
 - 复制示例为 `config/ems.local.json`；填写准确设备身份和 Profile revision。
 - 每项只按原始 PICS/Device Profile 填 `SUPPORTED`、`NOT_SUPPORTED` 或 `UNKNOWN`。
 - 复制严格模板为 `config/points.local.csv`，只填写模板已有的只读点定义列；不得增删列。控制反馈、批准值和风险等级另存内部受控清单，不交给通用只读加载器。
+- 复制场景模板为 `config/ems_test_plan.local.json`；填写只读 poll 期望。主动上报和控制保持关闭，直到对应任务卡的输入和授权齐全。
 - 记录原始文档哈希和批准人；原文存内部文档系统，不提交仓库。
 - 逐项关闭 D01～D09；厂商未答复或答复仍冲突的能力保持 `UNKNOWN`，不能用现场试错替代书面确认。
 
@@ -144,11 +149,12 @@ git status --short
 .\.venv\Scripts\python.exe -m pytest examples\pytest_ems --collect-only `
   --dnp3-pics-file config\ems.local.json `
   --dnp3-points-file config\points.local.csv `
+  --dnp3-ems-plan config\ems_test_plan.local.json `
   --dnp3-unknown-policy error
 git status --short
 ```
 
-验收：JSON 无重复键/未知字段/非法状态；每个能力 ID 都能在 `config/capability_matrix.csv` 中找到；所有计划执行能力不再是 `UNKNOWN`；`ems.local.json` 和点表不出现在 Git 状态中。
+验收：JSON 无重复键/未知字段/非法状态；点表和场景引用交叉校验通过；每个能力 ID 都能在 `config/capability_matrix.csv` 中找到；所有计划执行能力不再是 `UNKNOWN`；三个本地配置均不出现在 Git 状态中。
 
 停止条件：Profile 与实际固件不匹配、无版本/批准来源、连接角色或链路地址不确定，或 D01～D09 未关闭。此时保持 `UNKNOWN`，向 DUT 负责人提问。
 
@@ -156,9 +162,9 @@ git status --short
 
 唯一目标：在隔离 EMS 上完成连接、总召、单点范围、多 Header、Class Read 的只读基线。对于“事件 Read 恒为空”的厂商约定，应分别保存无事件和人工产生已知事件时的结果，不能把任意空响应当成功。
 
-先读：`docs/BEGINNER_MIGRATION_BUILD_USE_GUIDE.md`、`python/tests/test_host_read.py`、Read 模型/客户端、PICS 和本地点表。
+先读：`docs/BEGINNER_MIGRATION_BUILD_USE_GUIDE.md`、`examples/pytest_ems/README.md`、Read 模型/客户端、PICS、本地点表和本地场景计划。
 
-修改范围：优先复制/扩展 `examples/pytest_ems` 为内网 DUT 测试目录；使用现成 `dnp3_point_table` fixture，不改控制代码。
+修改范围：0.4.0 已提供 `test_read_points.py` 和 `test_poll_scenarios.py`。先只填写私有点表/场景计划并运行，不改协议或控制代码；只有业务断言确实缺失时，才在内网复制目录中做最小扩展。
 
 每个真实 DUT 用例必须同时带：
 
@@ -170,12 +176,18 @@ git status --short
 第一次运行只收集，然后串行执行；命令中绝不加入状态改变开关：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest python\tests\dut\test_ems_read.py --collect-only `
-  --dnp3-pics-file config\ems.local.json --dnp3-unknown-policy error
+.\.venv\Scripts\python.exe -m pytest examples\pytest_ems --collect-only `
+  --dnp3-pics-file config\ems.local.json `
+  --dnp3-points-file config\points.local.csv `
+  --dnp3-ems-plan config\ems_test_plan.local.json `
+  --dnp3-unknown-policy error
 
-.\.venv\Scripts\python.exe -m pytest python\tests\dut\test_ems_read.py -v -ra `
+.\.venv\Scripts\python.exe -m pytest `
+  examples\pytest_ems\test_read_points.py `
+  examples\pytest_ems\test_poll_scenarios.py -v -ra `
   --dnp3-host-exe out\build\windows-msvc-release\bin\dnp3-master-host.exe `
   --dnp3-pics-file config\ems.local.json --dnp3-points-file config\points.local.csv `
+  --dnp3-ems-plan config\ems_test_plan.local.json `
   --dnp3-evidence-dir evidence\local --dnp3-unknown-policy error `
   --dnp3-outstation-host "<LAB_EMS_IP>" --dnp3-outstation-port <PORT> `
   --dnp3-master-address <MASTER_ADDR> --dnp3-outstation-address <OUTSTATION_ADDR>
@@ -201,17 +213,20 @@ git status --short
 
 唯一目标：对获批低风险点验证 CROB/Analog Output 的 SBO、Direct Operate、逐点状态和读回。
 
-先读：PICS、批准点表/工单、回退方案、`OpenDnp3CommandSupport.cpp`、Python 命令模型和开发指导书 4.4.4/4.4.5 对应内部条款索引。
+先读：PICS、批准点表/工单、回退方案、`examples/pytest_ems/README.md`、`ems_test_plan.py`、`test_control_scenarios.py`、`OpenDnp3CommandSupport.cpp`、Python 命令模型和开发指导书 4.4.4/4.4.5 对应内部条款索引。
 
-每个用例必须带 `dnp3_dut`、对应 capability ID 和 `dnp3_state_changing`。运行时必须同时提供：
+0.4.0 已提供单场景控制闭环模板；不要先重写控制代码。把准确操作/恢复、反馈期望和真实 `authorization_reference` 写入私有计划，只启用本次获批场景。模板会自动附加 `dnp3_dut`、准确 capability ID 和 `dnp3_state_changing`。运行时必须同时提供：
 
 ```powershell
+--dnp3-control-scenario "<EXACT_ENABLED_SCENARIO_ID>" `
 --dnp3-allow-state-changing `
 --dnp3-operator-id "<OPERATOR_OR_TICKET>" `
 --dnp3-dut-id "<LAB_ASSET_ID>"
 ```
 
-验收顺序：先由厂商确认每点是 Activation、Complementary Latch 还是 Complementary Two-output 模型，并确认 FC3/FC4；随后操作前读回 -> 发一个命令 -> 检查每点 Command Status -> 操作后读回/业务反馈 -> 执行批准的复位。覆盖拒绝状态、SBO 超时/不匹配、混合批次部分失败；控制超时不自动重试。
+还必须传 `--dnp3-ems-plan config\ems_test_plan.local.json`、PICS、点表、持久证据/事故目录和全部连接参数，并只运行 `examples\pytest_ems\test_control_scenarios.py`。选择参数没有环境变量替代，一次只能选择一个场景；框架会拒绝已授权的 xdist 和同进程 rerun/repeat，实验环境仍须保证没有第二个控制器。
+
+验收顺序：先由厂商确认每点是 Activation、Complementary Latch 还是 Complementary Two-output 模型，并确认 FC3/FC4；随后由现有模板完成操作前读回 -> 发一个命令 -> 检查每点 Command Status -> 操作后读回/业务反馈 -> 发一个批准的恢复命令 -> 恢复读回。只有后状态确认后才自动恢复；状态不明时停止并人工处置。拒绝状态、SBO 超时/不匹配和混合批次部分失败应另建独立、经评审的负向任务，不能混进首次低风险控制；控制超时不自动重试。
 
 `DIRECT_OPERATE_NR` 保持 `UNSUPPORTED_BY_BACKEND`，除非另立 M5 扩展任务并有抓包、副作用读回和独立端证据。
 
@@ -223,7 +238,7 @@ git status --short
 
 先读：固定 OpenDNP3 Master 配置、`ISOEHandler`/`IMasterApplication`、开发指导书 M3、PICS 主动上送策略和标准内部条款。
 
-已有入口：`OpenDnp3UnsolicitedSupport.cpp`、host 的 `enable_unsolicited` / `disable_unsolicited` / `wait_unsolicited`、Python 同名类型化 API。先用真实 EMS 验证 G60V2/V3/V4、G2V2/G32V7、启停和 `dropped_total==0`。只在确需异常时序且评审通过后，增加隔离 Raw FaultPlan/代理；不得让回调阻塞命令线程。
+已有入口：`OpenDnp3UnsolicitedSupport.cpp`、host/Python 的 `enable_unsolicited` / `disable_unsolicited` / `wait_unsolicited`，以及 `examples/pytest_ems/test_unsolicited_scenarios.py`。先在私有计划填写确定性外部触发、期望点/值/时间戳并启用对应场景，用现成模板验证 G60V2/V3/V4、G2V2/G32V7、启停和 `dropped_total==0`。模板不会发控制制造事件，并保证退出时 Disable。只在确需异常时序且评审通过后，增加隔离 Raw FaultPlan/代理；不得让回调阻塞命令线程。
 
 已有本机测试覆盖事件上送、启停、禁用后无新事件、会话/来源标记和队列溢出。剩余测试：空 unsolicited、Confirm 可见证据、序号回绕、重发/重复、Confirm 丢失、solicited 交错和重连；随后在真实 EMS 按 PICS 验证。不能因 OpenDNP3 内部自动 Confirm 就宣称这些异常路径已覆盖。
 

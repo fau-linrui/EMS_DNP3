@@ -248,3 +248,38 @@ def test_only_marked_dut_test_receives_safety_config(
     )
 
     result.assert_outcomes(passed=2)
+
+
+def test_authorized_state_change_is_rejected_in_xdist_worker(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = write_profile(
+        pytester.path / "profile.json", {"APP.FC.03.SELECT": "SUPPORTED"}
+    )
+    configure_nested_test(
+        pytester,
+        """
+        import pytest
+
+        @pytest.mark.dnp3_dut
+        @pytest.mark.dnp3_capability("APP.FC.03.SELECT")
+        @pytest.mark.dnp3_state_changing
+        def test_control_must_not_run():
+            raise AssertionError("parallel control must not execute")
+        """,
+    )
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
+
+    result = pytester.runpytest(
+        "-q",
+        "--dnp3-pics-file",
+        str(profile),
+        "--dnp3-allow-state-changing",
+        "--dnp3-operator-id",
+        "test-operator",
+        "--dnp3-dut-id",
+        "test-dut",
+    )
+
+    assert result.ret != 0
+    result.stderr.fnmatch_lines(["*must run without pytest-xdist*"])

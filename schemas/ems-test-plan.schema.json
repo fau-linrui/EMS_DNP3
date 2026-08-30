@@ -1,0 +1,279 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ems-dnp3/ems-test-plan.schema.json",
+  "title": "EMS DNP3 pytest scenario plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "poll_scenarios",
+    "unsolicited_scenarios",
+    "control_scenarios"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "poll_scenarios": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/pollScenario" }
+    },
+    "unsolicited_scenarios": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/unsolicitedScenario" }
+    },
+    "control_scenarios": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/controlScenario" }
+    },
+    "notes": { "$ref": "#/$defs/notes" }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+      "maxLength": 128
+    },
+    "notes": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "classes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": { "type": "integer", "minimum": 1, "maximum": 3 }
+    },
+    "expectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "absolute_tolerance"],
+      "properties": {
+        "value": {
+          "oneOf": [
+            { "type": "boolean" },
+            { "type": "number" },
+            { "type": "string", "minLength": 1, "maxLength": 4096 }
+          ]
+        },
+        "absolute_tolerance": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000000000
+        }
+      }
+    },
+    "pollScenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_id",
+        "enabled",
+        "poll_type",
+        "classes",
+        "timeout_seconds",
+        "max_measurements",
+        "minimum_measurements",
+        "expected_point_ids"
+      ],
+      "properties": {
+        "scenario_id": { "$ref": "#/$defs/identifier" },
+        "enabled": { "type": "boolean" },
+        "poll_type": { "enum": ["integrity", "class"] },
+        "classes": {
+          "type": "array",
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 1, "maximum": 3 }
+        },
+        "timeout_seconds": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 60
+        },
+        "max_measurements": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "minimum_measurements": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "expected_point_ids": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" }
+        },
+        "notes": { "$ref": "#/$defs/notes" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "poll_type": { "const": "integrity" } } },
+          "then": { "properties": { "classes": { "maxItems": 0 } } },
+          "else": { "properties": { "classes": { "minItems": 1 } } }
+        }
+      ]
+    },
+    "unsolicitedScenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_id",
+        "enabled",
+        "classes",
+        "task_timeout_seconds",
+        "observation_timeout_seconds",
+        "max_events_per_read",
+        "expected_point_id",
+        "expectation",
+        "require_timestamp",
+        "trigger_instructions"
+      ],
+      "properties": {
+        "scenario_id": { "$ref": "#/$defs/identifier" },
+        "enabled": { "type": "boolean" },
+        "classes": { "$ref": "#/$defs/classes" },
+        "task_timeout_seconds": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 60
+        },
+        "observation_timeout_seconds": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 300
+        },
+        "max_events_per_read": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "expected_point_id": { "$ref": "#/$defs/identifier" },
+        "expectation": { "$ref": "#/$defs/expectation" },
+        "require_timestamp": { "type": "boolean" },
+        "trigger_instructions": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "notes": { "$ref": "#/$defs/notes" }
+      }
+    },
+    "crobCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "index",
+        "operation",
+        "trip_close",
+        "clear",
+        "count",
+        "on_time_ms",
+        "off_time_ms"
+      ],
+      "properties": {
+        "type": { "const": "crob" },
+        "index": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "operation": {
+          "enum": ["pulse_on", "pulse_off", "latch_on", "latch_off"]
+        },
+        "trip_close": { "enum": ["null", "close", "trip"] },
+        "clear": { "type": "boolean" },
+        "count": { "type": "integer", "minimum": 1, "maximum": 255 },
+        "on_time_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "off_time_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      }
+    },
+    "analogCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "index", "value"],
+      "properties": {
+        "type": {
+          "enum": [
+            "analog_output_int16",
+            "analog_output_int32",
+            "analog_output_float32",
+            "analog_output_double64"
+          ]
+        },
+        "index": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "value": { "type": "number" }
+      }
+    },
+    "command": {
+      "oneOf": [
+        { "$ref": "#/$defs/crobCommand" },
+        { "$ref": "#/$defs/analogCommand" }
+      ]
+    },
+    "controlScenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_id",
+        "enabled",
+        "authorization_reference",
+        "control_mode",
+        "command",
+        "feedback_point_id",
+        "precondition",
+        "postcondition",
+        "restore_command",
+        "restore_expectation",
+        "command_timeout_seconds",
+        "feedback_timeout_seconds",
+        "feedback_poll_interval_seconds"
+      ],
+      "properties": {
+        "scenario_id": { "$ref": "#/$defs/identifier" },
+        "enabled": { "type": "boolean" },
+        "authorization_reference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "control_mode": {
+          "enum": ["select_and_operate", "direct_operate"]
+        },
+        "command": { "$ref": "#/$defs/command" },
+        "feedback_point_id": { "$ref": "#/$defs/identifier" },
+        "precondition": { "$ref": "#/$defs/expectation" },
+        "postcondition": { "$ref": "#/$defs/expectation" },
+        "restore_command": { "$ref": "#/$defs/command" },
+        "restore_expectation": { "$ref": "#/$defs/expectation" },
+        "command_timeout_seconds": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 60
+        },
+        "feedback_timeout_seconds": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 300
+        },
+        "feedback_poll_interval_seconds": {
+          "type": "number",
+          "minimum": 0.05,
+          "maximum": 10
+        },
+        "notes": { "$ref": "#/$defs/notes" }
+      }
+    }
+  }
+}

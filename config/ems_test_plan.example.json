@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "poll_scenarios": [
+    {
+      "scenario_id": "integrity-baseline",
+      "enabled": true,
+      "poll_type": "integrity",
+      "classes": [],
+      "timeout_seconds": 5.0,
+      "max_measurements": 10000,
+      "minimum_measurements": 0,
+      "expected_point_ids": [],
+      "notes": "完整性扫描；如要验证确定点位，请把私有点表中的 point_id 填入 expected_point_ids"
+    },
+    {
+      "scenario_id": "class-1-read",
+      "enabled": true,
+      "poll_type": "class",
+      "classes": [1],
+      "timeout_seconds": 5.0,
+      "max_measurements": 10000,
+      "minimum_measurements": 0,
+      "expected_point_ids": [],
+      "notes": "允许空响应，以兼容当前 EMS 操作约定；若厂商确认可读事件，请配置期望点"
+    },
+    {
+      "scenario_id": "class-2-read",
+      "enabled": true,
+      "poll_type": "class",
+      "classes": [2],
+      "timeout_seconds": 5.0,
+      "max_measurements": 10000,
+      "minimum_measurements": 0,
+      "expected_point_ids": [],
+      "notes": "允许空响应，以兼容当前 EMS 操作约定；若厂商确认可读事件，请配置期望点"
+    },
+    {
+      "scenario_id": "class-3-read",
+      "enabled": true,
+      "poll_type": "class",
+      "classes": [3],
+      "timeout_seconds": 5.0,
+      "max_measurements": 10000,
+      "minimum_measurements": 0,
+      "expected_point_ids": [],
+      "notes": "允许空响应；只有正式 PICS 声明支持后才会通过 pytest 门禁"
+    }
+  ],
+  "unsolicited_scenarios": [
+    {
+      "scenario_id": "binary-input-change",
+      "enabled": false,
+      "classes": [1],
+      "task_timeout_seconds": 5.0,
+      "observation_timeout_seconds": 30.0,
+      "max_events_per_read": 256,
+      "expected_point_id": "BI_DEMO_0001",
+      "expectation": {
+        "value": true,
+        "absolute_tolerance": 0.0
+      },
+      "require_timestamp": true,
+      "trigger_instructions": "启用主动上报后，由批准的独立信号源把该遥信变为 true；不要通过本测试发送控制来制造事件",
+      "notes": "复制为 ems_test_plan.local.json，替换点号和触发步骤，确认后再改 enabled"
+    },
+    {
+      "scenario_id": "analog-input-change",
+      "enabled": false,
+      "classes": [2],
+      "task_timeout_seconds": 5.0,
+      "observation_timeout_seconds": 30.0,
+      "max_events_per_read": 256,
+      "expected_point_id": "AI_DEMO_0001",
+      "expectation": {
+        "value": 220.0,
+        "absolute_tolerance": 0.1
+      },
+      "require_timestamp": true,
+      "trigger_instructions": "启用主动上报后，由批准的独立信号源把遥测调整到期望值附近",
+      "notes": "默认关闭；必须先确认事件死区、Class 和 G32 Variation"
+    }
+  ],
+  "control_scenarios": [
+    {
+      "scenario_id": "binary-output-latch-cycle",
+      "enabled": false,
+      "authorization_reference": "FILL_ME_APPROVED_CHANGE_TICKET",
+      "control_mode": "direct_operate",
+      "command": {
+        "type": "crob",
+        "index": 0,
+        "operation": "latch_on",
+        "trip_close": "null",
+        "clear": false,
+        "count": 1,
+        "on_time_ms": 0,
+        "off_time_ms": 0
+      },
+      "feedback_point_id": "BO_DEMO_0001",
+      "precondition": {
+        "value": false,
+        "absolute_tolerance": 0.0
+      },
+      "postcondition": {
+        "value": true,
+        "absolute_tolerance": 0.0
+      },
+      "restore_command": {
+        "type": "crob",
+        "index": 0,
+        "operation": "latch_off",
+        "trip_close": "null",
+        "clear": false,
+        "count": 1,
+        "on_time_ms": 0,
+        "off_time_ms": 0
+      },
+      "restore_expectation": {
+        "value": false,
+        "absolute_tolerance": 0.0
+      },
+      "command_timeout_seconds": 10.0,
+      "feedback_timeout_seconds": 10.0,
+      "feedback_poll_interval_seconds": 0.5,
+      "notes": "默认关闭；索引、控制模型、反馈点、联锁、工单和回退均确认后才可启用"
+    },
+    {
+      "scenario_id": "analog-output-float32-cycle",
+      "enabled": false,
+      "authorization_reference": "FILL_ME_APPROVED_CHANGE_TICKET",
+      "control_mode": "select_and_operate",
+      "command": {
+        "type": "analog_output_float32",
+        "index": 0,
+        "value": 1.0
+      },
+      "feedback_point_id": "AO_DEMO_0001",
+      "precondition": {
+        "value": 0.0,
+        "absolute_tolerance": 0.01
+      },
+      "postcondition": {
+        "value": 1.0,
+        "absolute_tolerance": 0.01
+      },
+      "restore_command": {
+        "type": "analog_output_float32",
+        "index": 0,
+        "value": 0.0
+      },
+      "restore_expectation": {
+        "value": 0.0,
+        "absolute_tolerance": 0.01
+      },
+      "command_timeout_seconds": 10.0,
+      "feedback_timeout_seconds": 10.0,
+      "feedback_poll_interval_seconds": 0.5,
+      "notes": "默认关闭；示例使用 IEEE G41V3，实际 Variation 必须以 EMS PICS 为准"
+    }
+  ],
+  "notes": "示例中的全部控制和主动上报场景默认关闭；真实点表、PICS、工单和业务值不得提交到公开仓库"
+}

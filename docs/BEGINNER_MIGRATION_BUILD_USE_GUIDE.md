@@ -2,7 +2,7 @@
 
 本文面向不熟悉 C++ 的测试开发人员。正常使用时，你只需要写 Python/pytest；C++ 已封装在 `dnp3-master-host.exe` 中，不需要在测试代码里调用 OpenDNP3，也不需要理解 C++ 指针或编译器细节。
 
-> 当前版本：0.3.0，目标平台 Windows x64，固定协议栈 OpenDNP3 3.1.2。当前实现已完成本机 TCP、Read/Class Poll、主动上报、测量值/IIN、CROB 和四种 Analog Output 控制的同栈回归，但尚未代表真实 EMS 互操作或 IEEE 一致性认证。
+> 当前版本：0.4.0，目标平台 Windows x64，固定协议栈 OpenDNP3 3.1.2。当前实现已完成本机 TCP、Read/Class Poll、主动上报、测量值/IIN、CROB 和四种 Analog Output 控制的同栈回归，并提供可复制的严格 EMS pytest 场景套件，但尚未代表真实 EMS 互操作或 IEEE 一致性认证。
 
 ## 1. 先理解四个目录
 
@@ -10,8 +10,8 @@
 |---|---|---|
 | `python/src/dnp3_master/` | 给 pytest 使用的 Python 包、fixture、数据模型 | 通常只调用，不修改 |
 | `bin/dnp3-master-host.exe` | Python 与 DNP3 网络之间的 C++ 宿主进程 | 不修改 |
-| `config/` | 能力矩阵和 EMS PICS 示例 | 复制示例并填写本地值 |
-| `schemas/` | JSON 协议和 EMS Profile 格式校验 | 不修改 |
+| `config/` | 能力矩阵及 EMS PICS、点表、场景计划示例 | 复制示例并填写本地值 |
+| `schemas/` | JSON 协议和 EMS 配置格式校验 | 不修改 |
 
 > 路径约定：源码仓库构建出的 EXE 位于 `out\build\windows-msvc-release\bin\`；上表中的 `bin\` 是第 5 章生成的可移植包目录。不要把整个 `out\build\windows-msvc-release` 当作可移植包复制。
 
@@ -55,12 +55,12 @@ cd D:\Work\Code\EMS_DNP3
 产物位于：
 
 ```text
-out\package\ems-dnp3-pytest-0.3.0\
-out\package\ems-dnp3-pytest-0.3.0.zip
-out\package\ems-dnp3-pytest-0.3.0.zip.sha256
+out\package\ems-dnp3-pytest-0.4.0\
+out\package\ems-dnp3-pytest-0.4.0.zip
+out\package\ems-dnp3-pytest-0.4.0.zip.sha256
 ```
 
-打包过程会在临时目录解开 ZIP、逐文件验证 `package-manifest.json`，再执行一次 DNP3 读写回环自检。将 ZIP 和 `.sha256` 一起传入内网；传输后先用 `Get-FileHash -Algorithm SHA256` 与旁车文件第一列比对，再解压。包中包含主程序、只用于本机自检的测试从站、Python 源码、Schema、能力矩阵、严格点表示例、只读 pytest 示例、依赖锁、许可证和本文档，不包含 IEEE 标准 PDF、EMS 本地配置、抓包或密钥。
+打包过程会在临时目录解开 ZIP、逐文件验证 `package-manifest.json`，再执行一次 DNP3 读写回环自检。将 ZIP 和 `.sha256` 一起传入内网；传输后先用 `Get-FileHash -Algorithm SHA256` 与旁车文件第一列比对，再解压。包中包含主程序、只用于本机自检的测试从站、Python 源码、Schema、能力矩阵、严格点表/场景计划示例、可复制 EMS pytest 套件、依赖锁、许可证和本文档，不包含 IEEE 标准 PDF、EMS 本地配置、抓包或密钥。
 
 内网目标机器若不安装 Build Tools，通常仍需安装 Microsoft Visual C++ 2015–2022 Redistributable x64 和 Python 3.10 或更高版本。
 
@@ -180,7 +180,7 @@ out\build\windows-msvc-release\bin\dnp3-local-test-outstation.exe
 两条路线最终都应得到以下可移植内容：
 
 ```text
-ems-dnp3-pytest-0.3.0\
+ems-dnp3-pytest-0.4.0\
   bin\dnp3-master-host.exe
   python\
   config\
@@ -208,7 +208,7 @@ New-Item -ItemType Directory `
   -Path (Join-Path $targetProject 'third_party') `
   -Force | Out-Null
 Copy-Item `
-  -LiteralPath '.\out\package\ems-dnp3-pytest-0.3.0' `
+  -LiteralPath '.\out\package\ems-dnp3-pytest-0.4.0' `
   -Destination $packageRoot `
   -Recurse
 ```
@@ -218,7 +218,7 @@ Copy-Item `
 ```powershell
 $targetProject = 'D:\Automation\MyPytest'
 $packageRoot = Join-Path $targetProject 'third_party\ems_dnp3'
-$zip = (Resolve-Path '.\ems-dnp3-pytest-0.3.0.zip').Path
+$zip = (Resolve-Path '.\ems-dnp3-pytest-0.4.0.zip').Path
 $expectedHash = (
   (Get-Content -LiteralPath "$zip.sha256" -Raw).Trim() -split '\s+'
 )[0].ToLowerInvariant()
@@ -310,7 +310,9 @@ bin\build-info.json
 config\capability_matrix.csv
 config\ems_profile.example.json
 config\points.example.csv
+config\ems_test_plan.example.json
 schemas\
+examples\pytest_ems\
 dependency-locks\
 licenses\
 NOTICE.txt
@@ -338,6 +340,7 @@ THIRD_PARTY_LICENSES.txt
 ```powershell
 Copy-Item .\config\ems_profile.example.json .\config\ems.local.json
 Copy-Item .\config\points.example.csv .\config\points.local.csv
+Copy-Item .\config\ems_test_plan.example.json .\config\ems_test_plan.local.json
 ```
 
 如果已经按第 5 章接入**另一个 pytest 项目**，在目标项目根目录执行：
@@ -350,9 +353,14 @@ Copy-Item `
 Copy-Item `
   '.\third_party\ems_dnp3\config\points.example.csv' `
   '.\config\points.local.csv'
+Copy-Item `
+  '.\third_party\ems_dnp3\config\ems_test_plan.example.json' `
+  '.\config\ems_test_plan.local.json'
 ```
 
-`points.local.csv` 必须保持示例中的精确列名。加载器会拒绝未知/缺失列、重复 point ID、重复“点类型+索引”、非法对象变体、非法 Class、非有限量程和错误布尔值。该表只驱动只读断言；控制点危险等级、反馈关系和批准值应留在内部受控控制清单中，不能擅自在 CSV 中添加列。
+`points.local.csv` 必须保持示例中的精确列名。加载器会拒绝未知/缺失列、重复 point ID、重复“点类型+索引”、非法对象变体、非法 Class、非有限量程和错误布尔值。该表只描述可读对象，不能擅自增加控制列。
+
+`ems_test_plan.local.json` 单独描述完整性/Class、主动上报和控制闭环。它会与点表交叉校验；主动上报和控制示例默认关闭。真实控制的危险等级、批准工单、操作/恢复值和反馈关系只放在内部受控的本地计划，不得提交到公开仓库。
 
 只根据正式 Device Profile/PICS 或经批准的项目决定，把每项填写为：
 
@@ -390,6 +398,7 @@ def test_ems_integrity_read(connected_master):
   --dnp3-host-exe ".\third_party\ems_dnp3\bin\dnp3-master-host.exe" `
   --dnp3-pics-file ".\config\ems.local.json" `
   --dnp3-points-file ".\config\points.local.csv" `
+  --dnp3-ems-plan ".\config\ems_test_plan.local.json" `
   --dnp3-evidence-dir ".\evidence\local" `
   --dnp3-unknown-policy error `
   --dnp3-outstation-host "192.0.2.10" `
@@ -406,9 +415,9 @@ def test_ems_integrity_read(connected_master):
 
 将示例 IP 和地址换成实验 EMS 的真实参数。`--dnp3-unknown-policy error` 适合正式执行，可防止因 PICS 漏填而悄悄跳过。
 
-如不想从零写用例，可把包内 `examples\pytest_ems` 复制进既有框架。未提供点表时示例会安全跳过；提供严格点表后，它只执行 Static Read 和范围断言，不包含控制。点表会同时校验点类型、Group、合法 Variation、索引位宽和事件字段组合；每个参数化用例还会自动附加精确的对象能力 ID，以便 PICS 在连接 DUT 前完成门控。
+如不想从零写用例，可把包内 `examples\pytest_ems` 整体复制进既有框架。未提供配置时示例会安全跳过；提供严格点表和场景计划后，可直接收集逐点 Static Read、完整性/Class、主动上报和控制闭环用例。主动上报与控制默认关闭，控制还必须逐次精确选择。每个参数化用例会自动附加所需功能码、Group/Variation 等能力 ID，以便 PICS 在连接 DUT 前完成门控。
 
-`--dnp3-evidence-dir` 会为每次运行创建独立目录，生成脱敏 `manifest.json` 和 `pytest-results.json`，只记录 PICS/点表/矩阵的文件名、大小和 SHA-256，不复制私有原文。记录器会替换已知的项目、测试、host、输入和证据绝对路径，并遮盖常见密钥字段；但任意第三方库输出可能包含记录器不了解的业务数据，因此证据对外传递前仍必须人工复核。
+`--dnp3-evidence-dir` 会为每次运行创建独立目录，生成脱敏 `manifest.json` 和 `pytest-results.json`，只记录 PICS、点表、场景计划和矩阵的文件名、大小和 SHA-256，不复制私有原文。记录器会替换已知的项目、测试、host、输入和证据绝对路径，并遮盖常见密钥字段；但任意第三方库输出可能包含记录器不了解的业务数据，因此证据对外传递前仍必须人工复核。
 
 范围读取示例：
 
@@ -439,6 +448,8 @@ connected_master.disable_unsolicited((1, 2), timeout=5.0)
 
 队列默认最多保留 4096 条并采用 drop-oldest；`dropped_total > 0` 必须判失败并保存证据。当前已完成 FC20/FC21、G60V2/V3/V4 和 G2V2/G32V7 的本机同栈验证；Confirm 丢失、序号回绕、重发/重复等原始时序仍需独立故障注入和真实 EMS 验证。
 
+推荐直接使用 `examples\pytest_ems\test_unsolicited_scenarios.py`：先在私有计划填写准确点号、Event Class/目标值和外部触发步骤，再把对应场景 `enabled` 改为 `true`。模板不会发送遥控来制造事件，会循环执行有界等待、精确匹配类型/索引/Event Group/Variation/值/可选时间戳，并保证在 `finally` 中 Disable。观察窗口内由批准的独立信号源按 `trigger_instructions` 改变输入。
+
 ## 7. 控制用例：默认永久锁住，只有实验室可解锁
 
 遥控和模拟量输出会改变设备状态。必须同时满足以下条件：
@@ -447,38 +458,23 @@ connected_master.disable_unsolicited((1, 2), timeout=5.0)
 2. PICS 中相关能力为 `SUPPORTED`。
 3. 命令行显式加入 `--dnp3-allow-state-changing`。
 4. 提供可审计的 `--dnp3-operator-id` 和 `--dnp3-dut-id`。
-5. 目标是获批的隔离实验 EMS，点号和值已经人工确认。
-6. 厂商已确认每个 CROB 点的控制模型以及 FC3/FC4 Select-Operate 支持状态；不要把名称含糊的 “Activation Model” 自动解释成布尔锁存。
+5. 私有场景计划中的准确场景已 `enabled=true`，`authorization_reference` 是真实批准工单，不是占位符。
+6. 命令行用 `--dnp3-control-scenario` 精确选择本次唯一场景。
+7. 目标是获批的隔离实验 EMS，点号、操作前值、目标值、反馈点和恢复值已经人工确认。
+8. 厂商已确认每个 CROB 点的控制模型以及 FC3/FC4 Select-Operate 支持状态；不要把名称含糊的 “Activation Model” 自动解释成布尔锁存。
 
-示例仅展示写法，`CONTROL_POINT_FROM_APPROVED_POINT_LIST` 必须替换为获批点表中的点号：
-
-```python
-import pytest
-from dnp3_master import CrobCommand
-
-
-@pytest.mark.dnp3_dut
-@pytest.mark.dnp3_capability("APP.FC.03.SELECT")
-@pytest.mark.dnp3_capability("APP.FC.04.OPERATE")
-@pytest.mark.dnp3_state_changing
-def test_authorized_crob_sbo(connected_master):
-    point = CONTROL_POINT_FROM_APPROVED_POINT_LIST
-    result = connected_master.select_and_operate(
-        [CrobCommand(index=point, operation="latch_on")],
-        timeout=10.0,
-    )
-    assert result.task_status == "SUCCESS"
-    assert result.all_success
-    assert all(item.status == "SUCCESS" for item in result.point_results)
-```
+优先使用 `examples\pytest_ems\test_control_scenarios.py`，不要让新手直接复制无读回的单条控制代码。严格计划要求操作和恢复使用相同命令类型/索引，恢复期望必须等于基线；CROB 和四种 Group 41 类型会自动映射到准确的 PICS 能力 ID。
 
 运行命令除第 6 节参数外，还需：
 
 ```powershell
+--dnp3-control-scenario "exact-approved-scenario-id" `
 --dnp3-allow-state-changing `
 --dnp3-operator-id "your-name-or-ticket" `
 --dnp3-dut-id "lab-ems-asset-id"
 ```
+
+`--dnp3-control-scenario` 故意没有环境变量替代项，避免旧终端残留值意外选中控制；一次 pytest 调用只能选择一个场景。模板顺序固定为：操作前 Static Read -> 发送一次命令 -> 检查每点 Command Status -> 轮询业务反馈 -> 发送一次预批准恢复 -> 再次读回基线。只有操作后状态已经确认才发送恢复；状态不明时停止并要求人工读回，不会盲目恢复。插件会拒绝已授权的 pytest-xdist 状态改变测试，模板会拒绝同进程 rerun/repeat；外部仍必须保证没有第二个主站。
 
 连接成功时 C++ host 生成一次性会话令牌，Python 客户端只在内存中保存，断开或进程退出即失效。它是防误操作联锁，不是身份认证、访问控制或 Secure Authentication 的替代品。
 
@@ -488,7 +484,7 @@ pytest 默认把锁放在 `evidence/local/safety-incidents`。直接使用 `Dnp3
 
 ## 8. 常用环境变量
 
-命令行参数均可用环境变量替代：
+除安全设计上要求逐次输入的 `--dnp3-control-scenario` 外，常用命令行参数可用环境变量替代：
 
 | 环境变量 | 含义 |
 |---|---|
@@ -496,6 +492,7 @@ pytest 默认把锁放在 `evidence/local/safety-incidents`。直接使用 `Dnp3
 | `DNP3_PICS_FILE` | 本地 EMS PICS JSON |
 | `DNP3_CAPABILITY_MATRIX` | 能力矩阵路径（无法自动找到时使用） |
 | `DNP3_POINTS_FILE` | 严格只读点表 CSV |
+| `DNP3_EMS_PLAN` | 严格 EMS 场景计划 JSON |
 | `DNP3_EVIDENCE_DIR` | 脱敏 pytest 证据输出根目录 |
 | `DNP3_SAFETY_INCIDENT_DIR` | 不确定控制结果的持久事故锁目录 |
 | `DNP3_UNKNOWN_POLICY` | `xfail`、`skip` 或 `error` |
@@ -505,6 +502,8 @@ pytest 默认把锁放在 `evidence/local/safety-incidents`。直接使用 `Dnp3
 | `DNP3_RETRY_MIN` / `DNP3_RETRY_MAX` | 自动重连退避（秒） |
 | `DNP3_ALLOW_STATE_CHANGING` | `1/true/yes/on` 才解锁收集阶段 |
 | `DNP3_OPERATOR_ID` / `DNP3_DUT_ID` | 控制操作审计标识 |
+
+控制场景选择没有 `DNP3_CONTROL_SCENARIO` 环境变量；必须在每次获批运行的命令行中显式提供。
 
 敏感环境变量不要打印进日志。执行后可关闭当前 PowerShell，或显式删除本进程环境变量。
 
@@ -521,11 +520,14 @@ pytest 默认把锁放在 `evidence/local/safety-incidents`。直接使用 `Dnp3
 | `NOT_CONNECTED` | fixture 是否成功连接；是否已提前断开或 host 已退出 |
 | 用例显示 `xfailed` | PICS 未提供、能力缺失或为 `UNKNOWN`；查看 `-ra` 原因 |
 | 正向用例被跳过 | PICS 将能力声明为 `NOT_SUPPORTED` |
+| `invalid DNP3 EMS test plan` | 检查未知/重复字段、点号、Event Class、timeout、控制恢复基线和授权占位符；配置错误发生在连接 EMS 前 |
+| 控制用例显示 `no control selected` | 这是默认安全状态；只有获批后才传 `--dnp3-control-scenario <精确ID>` |
 | `SAFETY_INTERLOCK` | 未按第 7 节完成全部解锁条件，或令牌已因断开而过期 |
 | `SafetyIncidentConfigurationError` | 直接调用控制时未配置持久事故目录；配置后重试，原命令尚未发出 |
 | `UnresolvedSafetyIncidentError` | 该 DUT 有未关闭的不确定结果；只读核对并按事故手册显式确认，禁止删锁或重发 |
 | `SafetyIncidentPersistenceError` | 锁无法可靠落盘/读取；停止全部控制，保留现场并修复存储 |
 | 命令返回但 `all_success=False` | 检查每个 `point_results[i].status`，不能只看整个批次 |
+| 控制成功但反馈未到目标值 | 不要重发或盲目恢复；停止后续控制、人工读回设备实际状态并保存证据 |
 | `QUEUE_OVERFLOW` | 提高经评审的 `max_measurements`，或改用 `return_mode="summary"`；不要忽略数据丢失 |
 | `OBJECT_UNKNOWN` IIN | PICS/对象组/变体可能与 EMS 不一致；保存原始 IIN 并停止扩大测试范围 |
 
@@ -538,6 +540,7 @@ pytest 默认把锁放在 `evidence/local/safety-incidents`。直接使用 `Dnp3
 ```text
 config\ems.local.json
 config\points.local.csv
+config\ems_test_plan.local.json
 evidence\local\
 secrets\
 ```

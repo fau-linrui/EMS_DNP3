@@ -12,6 +12,7 @@ from typing import Iterator, Mapping
 import pytest
 
 from .client import Dnp3MasterClient
+from .ems_test_plan import EmsTestPlan, EmsTestPlanError, load_ems_test_plan
 from .evidence import EvidenceRecorder
 from .errors import HostCommandError
 from .models import HostProcessConfig, LabSafetyConfig, TcpConnectionConfig
@@ -90,6 +91,26 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store",
         default=None,
         help="Private strict point-table CSV (or set DNP3_POINTS_FILE)",
+    )
+    group.addoption(
+        "--dnp3-ems-plan",
+        action="store",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Strict EMS poll/event/control scenario plan JSON (or set "
+            "DNP3_EMS_PLAN)"
+        ),
+    )
+    group.addoption(
+        "--dnp3-control-scenario",
+        action="store",
+        default=None,
+        metavar="SCENARIO_ID",
+        help=(
+            "Exact enabled control scenario ID to run; intentionally has no "
+            "environment-variable fallback"
+        ),
     )
     group.addoption(
         "--dnp3-evidence-dir",
@@ -326,8 +347,10 @@ def pytest_configure(config: pytest.Config) -> None:
     for marker in (
         "dnp3_capability(name): trace a test to one capability-matrix identifier",
         "dnp3_dut: apply PICS capability gating before touching a real DUT",
-        "dnp3_unsupported_behavior: run only when at least one declared DUT capability is NOT_SUPPORTED",
-        "dnp3_state_changing: require explicit authorization because the test may change DUT state",
+        "dnp3_unsupported_behavior: run only when at least one declared DUT "
+        "capability is NOT_SUPPORTED",
+        "dnp3_state_changing: require explicit authorization because the test "
+        "may change DUT state",
     ):
         config.addinivalue_line("markers", marker)
 
@@ -374,6 +397,43 @@ def pytest_configure(config: pytest.Config) -> None:
     setattr(config, "_dnp3_point_table", point_table)
     setattr(config, "_dnp3_points_path", points_path)
 
+    configured_plan = config.getoption("--dnp3-ems-plan") or os.environ.get(
+        "DNP3_EMS_PLAN"
+    )
+    ems_plan: EmsTestPlan | None = None
+    ems_plan_path: Path | None = None
+    if configured_plan:
+        if point_table is None:
+            raise pytest.UsageError(
+                "a DNP3 EMS test plan requires --dnp3-points-file or "
+                "DNP3_POINTS_FILE so every point reference can be validated"
+            )
+        ems_plan_path = Path(configured_plan).expanduser().resolve(strict=False)
+        try:
+            ems_plan = load_ems_test_plan(ems_plan_path, point_table)
+        except EmsTestPlanError as error:
+            raise pytest.UsageError(f"invalid DNP3 EMS test plan: {error}") from error
+    selected_control_id = config.getoption("--dnp3-control-scenario")
+    selected_control = None
+    if selected_control_id:
+        if ems_plan is None:
+            raise pytest.UsageError(
+                "--dnp3-control-scenario requires --dnp3-ems-plan/DNP3_EMS_PLAN"
+            )
+        selected_control = ems_plan.control_by_id.get(selected_control_id)
+        if selected_control is None:
+            raise pytest.UsageError(
+                "--dnp3-control-scenario does not exactly match a configured "
+                f"scenario_id: {selected_control_id!r}"
+            )
+        if not selected_control.enabled:
+            raise pytest.UsageError(
+                f"control scenario {selected_control_id!r} is disabled in the EMS plan"
+            )
+    setattr(config, "_dnp3_ems_test_plan", ems_plan)
+    setattr(config, "_dnp3_ems_plan_path", ems_plan_path)
+    setattr(config, "_dnp3_selected_control_scenario", selected_control)
+
     evidence_recorder: EvidenceRecorder | None = None
     configured_evidence = config.getoption("--dnp3-evidence-dir") or os.environ.get(
         "DNP3_EVIDENCE_DIR"
@@ -406,6 +466,7 @@ def pytest_configure(config: pytest.Config) -> None:
                     "capability_matrix": evidence_matrix,
                     "pics": pics_path,
                     "point_table": points_path,
+                    "ems_test_plan": ems_plan_path,
                 },
                 runner={"pytest_version": pytest.__version__},
             )
@@ -493,6 +554,13 @@ def _state_changing_authorized(config: pytest.Config) -> bool:
     return os.environ.get("DNP3_ALLOW_STATE_CHANGING", "").strip().lower() in _TRUE_VALUES
 
 
+def _xdist_active(config: pytest.Config) -> bool:
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        return True
+    workers = config.getoption("numprocesses", default=None)
+    return workers not in {None, 0, "0"}
+
+
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
@@ -505,6 +573,19 @@ def pytest_collection_modifyitems(
     policy = _unknown_policy(config)
     state_changing_authorized = _state_changing_authorized(config)
     collection_errors: list[str] = []
+
+    if (
+        state_changing_authorized
+        and _xdist_active(config)
+        and any(
+            item.get_closest_marker("dnp3_state_changing") is not None
+            for item in items
+        )
+    ):
+        raise pytest.UsageError(
+            "authorized dnp3_state_changing tests must run without pytest-xdist; "
+            "use one process and one master for the DUT"
+        )
 
     for item in items:
         state_changing_test = item.get_closest_marker("dnp3_state_changing") is not None
@@ -641,6 +722,13 @@ def dnp3_point_table(pytestconfig: pytest.Config) -> PointTable | None:
     """Return the validated private point table, if one was configured."""
 
     return getattr(pytestconfig, "_dnp3_point_table", None)
+
+
+@pytest.fixture(scope="session")
+def dnp3_ems_test_plan(pytestconfig: pytest.Config) -> EmsTestPlan | None:
+    """Return the validated EMS scenario plan, if one was configured."""
+
+    return getattr(pytestconfig, "_dnp3_ems_test_plan", None)
 
 
 @pytest.fixture(scope="session")
