@@ -13,6 +13,8 @@
 | `config/` | 能力矩阵和 EMS PICS 示例 | 复制示例并填写本地值 |
 | `schemas/` | JSON 协议和 EMS Profile 格式校验 | 不修改 |
 
+> 路径约定：源码仓库构建出的 EXE 位于 `out\build\windows-msvc-release\bin\`；上表中的 `bin\` 是第 5 章生成的可移植包目录。不要把整个 `out\build\windows-msvc-release` 当作可移植包复制。
+
 工作链路是：
 
 ```text
@@ -23,9 +25,23 @@ pytest 用例 -> dnp3_master Python 包 -> dnp3-master-host.exe -> TCP/DNP3 -> E
 
 ## 2. 两种使用路线
 
+先区分两个位置：
+
+- **源码仓库**：本项目克隆后的 `EMS_DNP3` 目录，用于构建和维护 C++/Python 代码。
+- **目标 pytest 项目**：你原有的自动化测试框架，最终从这里运行业务用例。
+
+| 你的目标 | 选择 | 后续章节 |
+|---|---|---|
+| 直接在本源码仓库编写并运行 pytest | 路线 A | 完成第 3～4 章，跳过第 5 章，直接进入第 6 章 |
+| 在内网从源码构建，再接入另一个 pytest 框架 | 路线 A | 完成第 3～4 章，再按第 5 章生成并复制可移植包 |
+| 构建机与内网 pytest 机器分离 | 路线 B | 构建机在本章生成包；目标机器从第 5 章的复制与接入步骤继续 |
+
 ### 路线 A：在内网从源码构建
 
-适合内网允许安装 Visual Studio Build Tools，并且后续需要修改 C++ 的情况。按第 3～6 节操作。
+适合内网允许安装 Visual Studio Build Tools，并且后续需要修改 C++ 的情况。先按第 3～4 章完成环境准备、构建、测试和本机自检。
+
+- 如果当前源码仓库本身就是你的 pytest 项目，不需要复制任何目录，也不需要执行第 5 章；第 6 章使用 `out\build\windows-msvc-release\bin\dnp3-master-host.exe`。
+- 如果还要把能力接入另一个既有 pytest 框架，继续执行第 5 章。第 5 章会把已经通过测试的 Release 构建整理成正确的可移植目录。
 
 ### 路线 B：在外网构建可移植包，再拷入内网
 
@@ -47,6 +63,8 @@ out\package\ems-dnp3-pytest-0.3.0.zip.sha256
 打包过程会在临时目录解开 ZIP、逐文件验证 `package-manifest.json`，再执行一次 DNP3 读写回环自检。将 ZIP 和 `.sha256` 一起传入内网；传输后先用 `Get-FileHash -Algorithm SHA256` 与旁车文件第一列比对，再解压。包中包含主程序、只用于本机自检的测试从站、Python 源码、Schema、能力矩阵、严格点表示例、只读 pytest 示例、依赖锁、许可证和本文档，不包含 IEEE 标准 PDF、EMS 本地配置、抓包或密钥。
 
 内网目标机器若不安装 Build Tools，通常仍需安装 Microsoft Visual C++ 2015–2022 Redistributable x64 和 Python 3.10 或更高版本。
+
+路线 B 在目标 pytest 机器上不需要重复第 3～4 章的 C++ 构建；把 ZIP 校验并解压后，直接按第 5 章完成 Python 接入和包内自检。
 
 ## 3. 源码构建前的准备工作
 
@@ -140,25 +158,107 @@ out\build\windows-msvc-release\bin\dnp3-local-test-outstation.exe
 .\scripts\test-lifecycle.ps1 -Preset windows-msvc-release -Iterations 1000
 ```
 
-## 5. 最简单的移植方式：整包复制
+## 5. 接入另一个 pytest 自动化框架
 
-建议把第 2 节生成的整个目录复制到既有框架，例如：
+本章只适用于“把 DNP3 能力接入另一个 pytest 项目”。如果你准备直接在当前源码仓库中编写和运行用例，请跳过本章并进入第 6 章。
+
+### 5.1 先取得可移植包
+
+**路线 A：你刚刚在第 4 章完成了 Release 构建和测试。** 在源码仓库根目录执行：
+
+```powershell
+.\scripts\package.ps1 `
+  -Preset windows-msvc-release `
+  -SkipBuild `
+  -Force
+```
+
+`-SkipBuild` 表示复用第 4 章已经验证的构建；打包脚本仍会执行安装、清单生成、确定性 ZIP、解包校验和包内回环自检。如果 `out\build\windows-msvc-release` 不存在、源码在构建后又发生了变化，去掉 `-SkipBuild` 让脚本重新构建。
+
+**路线 B：你已经在第 2 章的外部构建机生成并传输了 ZIP。** 在目标机器核对 `.zip.sha256` 后，把 ZIP 解压到目标 pytest 项目的 `third_party\ems_dnp3\`，不需要再次执行 `package.ps1`。
+
+两条路线最终都应得到以下可移植内容：
+
+```text
+ems-dnp3-pytest-0.3.0\
+  bin\dnp3-master-host.exe
+  python\
+  config\
+  schemas\
+  tools\dnp3-local-test-outstation.exe
+  self-test.ps1
+  package-manifest.json
+  ...
+```
+
+不要复制整个 `out\build\windows-msvc-release`。它包含 CMake 缓存、中间文件和开发测试程序，不是受支持的移植边界。
+
+### 5.2 把整个包放进目标项目
+
+假设原有 pytest 项目位于 `D:\Automation\MyPytest`，推荐把整个可移植目录复制并命名为 `third_party\ems_dnp3`：
+
+```powershell
+# 当前目录仍是 EMS_DNP3 源码仓库；目标 ems_dnp3 目录应尚不存在。
+$targetProject = 'D:\Automation\MyPytest'
+$packageRoot = Join-Path $targetProject 'third_party\ems_dnp3'
+if (Test-Path -LiteralPath $packageRoot) {
+  throw "目标目录已存在，请先人工确认旧包如何归档或替换：$packageRoot"
+}
+New-Item -ItemType Directory `
+  -Path (Join-Path $targetProject 'third_party') `
+  -Force | Out-Null
+Copy-Item `
+  -LiteralPath '.\out\package\ems-dnp3-pytest-0.3.0' `
+  -Destination $packageRoot `
+  -Recurse
+```
+
+路线 B 若传输的是 ZIP，则在校验 SHA-256 后直接解压：
+
+```powershell
+$targetProject = 'D:\Automation\MyPytest'
+$packageRoot = Join-Path $targetProject 'third_party\ems_dnp3'
+$zip = (Resolve-Path '.\ems-dnp3-pytest-0.3.0.zip').Path
+$expectedHash = (
+  (Get-Content -LiteralPath "$zip.sha256" -Raw).Trim() -split '\s+'
+)[0].ToLowerInvariant()
+$actualHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualHash -ne $expectedHash) {
+  throw '可移植 ZIP 的 SHA-256 与旁车文件不一致，停止解压。'
+}
+if (Test-Path -LiteralPath $packageRoot) {
+  throw "目标目录已存在，请先人工确认旧包如何归档或替换：$packageRoot"
+}
+New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+Expand-Archive `
+  -LiteralPath $zip `
+  -DestinationPath $packageRoot
+```
+
+完成后的目标项目结构应为：
 
 ```text
 你的自动化项目\
+  conftest.py
+  tests\
   third_party\ems_dnp3\
     bin\dnp3-master-host.exe
-    python\src\dnp3_master\
+    python\
     config\
     schemas\
+    tools\dnp3-local-test-outstation.exe
+    self-test.ps1
     examples\pytest_ems\
     package-manifest.json
     ...
 ```
 
-然后在既有框架的虚拟环境中安装 Python 层：
+### 5.3 安装 Python 层并启用 pytest 插件
+
+切换到目标 pytest 项目根目录，然后在它自己的虚拟环境中安装 Python 层：
 
 ```powershell
+cd D:\Automation\MyPytest
 .\.venv\Scripts\python.exe -m pip install -e ".\third_party\ems_dnp3\python"
 ```
 
@@ -176,7 +276,30 @@ pytest_plugins = ("dnp3_master.pytest_plugin",)
 
 如果已有 `pytest_plugins`，把字符串追加到原元组中，不要再定义第二个同名变量。
 
-### 5.1 最小复制清单
+### 5.4 指定 Host 并先做包内自检
+
+仍在目标 pytest 项目根目录执行：
+
+```powershell
+$packageRoot = (Resolve-Path '.\third_party\ems_dnp3').Path
+& (Join-Path $packageRoot 'self-test.ps1') `
+  -PythonExecutable '.\.venv\Scripts\python.exe'
+
+$env:DNP3_MASTER_HOST_EXE = (
+  Resolve-Path (Join-Path $packageRoot 'bin\dnp3-master-host.exe')
+).Path
+```
+
+`self-test.ps1` 只启动包内本机测试从站，不连接真实 EMS。它通过后，再确认 pytest 已加载 DNP3 参数：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest --help |
+  Select-String 'dnp3-host-exe'
+```
+
+到这里，第 5 章才算完成。接下来进入第 6 章，准备私有 PICS、点表和只读连接参数。
+
+### 5.5 最小复制清单
 
 若不能整包复制，至少保留：
 
@@ -210,11 +333,23 @@ THIRD_PARTY_LICENSES.txt
 
 仓库中的 `docs/standards/ems_device_profile.md` 已记录目前取得的“DNP3 操作约定”。它只是部分输入，不是正式 PICS：其中事件 Read、FC6 响应、SBO、CROB 点模型、广播和“遥脉同遥测”仍有冲突或歧义。先取得该文档 D01～D09 的厂商书面答复；未关闭的能力必须保留 `UNKNOWN`，不要通过连接真实设备试错来猜遥控含义。
 
-复制 PICS 示例到被 Git 忽略的本地文件：
+如果在**源码仓库**中直接运行，复制 PICS 示例到被 Git 忽略的本地文件：
 
 ```powershell
 Copy-Item .\config\ems_profile.example.json .\config\ems.local.json
 Copy-Item .\config\points.example.csv .\config\points.local.csv
+```
+
+如果已经按第 5 章接入**另一个 pytest 项目**，在目标项目根目录执行：
+
+```powershell
+New-Item -ItemType Directory -Path '.\config' -Force | Out-Null
+Copy-Item `
+  '.\third_party\ems_dnp3\config\ems_profile.example.json' `
+  '.\config\ems.local.json'
+Copy-Item `
+  '.\third_party\ems_dnp3\config\points.example.csv' `
+  '.\config\points.local.csv'
 ```
 
 `points.local.csv` 必须保持示例中的精确列名。加载器会拒绝未知/缺失列、重复 point ID、重复“点类型+索引”、非法对象变体、非法 Class、非有限量程和错误布尔值。该表只驱动只读断言；控制点危险等级、反馈关系和批准值应留在内部受控控制清单中，不能擅自在 CSV 中添加列。
@@ -248,7 +383,7 @@ def test_ems_integrity_read(connected_master):
     assert result.summary["received_total"] == len(result.measurements)
 ```
 
-运行时显式传入本地参数：
+下面的命令以“已经按第 5 章接入另一个 pytest 项目”为例，运行时显式传入本地参数：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest .\tests\test_ems_read.py -v `
@@ -261,6 +396,12 @@ def test_ems_integrity_read(connected_master):
   --dnp3-outstation-port 20000 `
   --dnp3-master-address 1 `
   --dnp3-outstation-address 1024
+```
+
+如果直接在源码仓库中运行路线 A，把 `--dnp3-host-exe` 改为：
+
+```powershell
+--dnp3-host-exe ".\out\build\windows-msvc-release\bin\dnp3-master-host.exe"
 ```
 
 将示例 IP 和地址换成实验 EMS 的真实参数。`--dnp3-unknown-policy error` 适合正式执行，可防止因 PICS 漏填而悄悄跳过。
