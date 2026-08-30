@@ -92,8 +92,8 @@ finally {
 # Resolve every removal target below the already validated staging directory.
 $dnp3StagePrefix = $dnp3Stage.TrimEnd('\') + '\'
 foreach ($dnp3CacheDirectory in @(
-    Get-ChildItem -LiteralPath $dnp3Stage -Directory -Recurse -Force `
-    | Where-Object { $_.Name -eq '__pycache__' }
+    Get-ChildItem -LiteralPath $dnp3Stage -Directory -Recurse -Force |
+        Where-Object { $_.Name -eq '__pycache__' }
 )) {
     $dnp3CachePath = [System.IO.Path]::GetFullPath($dnp3CacheDirectory.FullName)
     if (-not $dnp3CachePath.StartsWith($dnp3StagePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -102,8 +102,8 @@ foreach ($dnp3CacheDirectory in @(
     Remove-Item -LiteralPath $dnp3CachePath -Recurse -Force
 }
 foreach ($dnp3BytecodeFile in @(
-    Get-ChildItem -LiteralPath $dnp3Stage -File -Recurse -Force `
-    | Where-Object { $_.Extension -in @('.pyc', '.pyo') }
+    Get-ChildItem -LiteralPath $dnp3Stage -File -Recurse -Force |
+        Where-Object { $_.Extension -in @('.pyc', '.pyo') }
 )) {
     $dnp3BytecodePath = [System.IO.Path]::GetFullPath($dnp3BytecodeFile.FullName)
     if (-not $dnp3BytecodePath.StartsWith($dnp3StagePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {

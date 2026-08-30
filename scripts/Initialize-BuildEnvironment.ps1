@@ -7,16 +7,16 @@ function Initialize-Dnp3BuildEnvironment {
     # launching cl.exe when both spellings are present. Merge them into one
     # process-local variable before loading the Visual Studio environment.
     $dnp3PathValues = @(
-        [System.Environment]::GetEnvironmentVariables().GetEnumerator()
-        | Where-Object { ([string]$_.Key) -ieq 'PATH' }
-        | ForEach-Object { [string]$_.Value }
+        [System.Environment]::GetEnvironmentVariables().GetEnumerator() |
+            Where-Object { ([string]$_.Key) -ieq 'PATH' } |
+            ForEach-Object { [string]$_.Value }
     )
     if ($dnp3PathValues.Count -gt 1) {
         $dnp3MergedPathEntries = @(
-            $dnp3PathValues
-            | ForEach-Object { $_ -split ';' }
-            | Where-Object { $_ }
-            | Select-Object -Unique
+            $dnp3PathValues |
+                ForEach-Object { $_ -split ';' } |
+                Where-Object { $_ } |
+                Select-Object -Unique
         )
         $dnp3MergedPath = $dnp3MergedPathEntries -join ';'
         Remove-Item -LiteralPath Env:Path -ErrorAction SilentlyContinue

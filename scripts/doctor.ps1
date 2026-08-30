@@ -116,8 +116,8 @@ $dnp3RequiredSources = @(
     'third_party\opendnp3-dependencies.lock.json'
 )
 $dnp3MissingSources = @(
-    $dnp3RequiredSources
-    | Where-Object { -not (Test-Path -LiteralPath (Join-Path $dnp3RepoRoot $_)) }
+    $dnp3RequiredSources |
+        Where-Object { -not (Test-Path -LiteralPath (Join-Path $dnp3RepoRoot $_)) }
 )
 if ($dnp3MissingSources.Count -eq 0) {
     Add-Dnp3DoctorCheck 'Offline source bundle' 'PASS' 'OpenDNP3 3.1.2 and all required build dependencies are present.'
@@ -128,26 +128,44 @@ else {
 
 if (-not $SkipSourceIntegrity -and $dnp3Python -and $dnp3MissingSources.Count -eq 0) {
     try {
-        $dnp3DependencyOutput = & $dnp3Python `
-            (Join-Path $dnp3RepoRoot 'scripts\validate_dependencies.py') `
-            (Join-Path $dnp3RepoRoot 'third_party\opendnp3-dependencies.lock.json') `
-            --project-root $dnp3RepoRoot
-        if ($LASTEXITCODE -ne 0) {
-            throw ($dnp3DependencyOutput -join [Environment]::NewLine)
+        $dnp3DependencyOutput = @(
+            & $dnp3Python `
+                (Join-Path $dnp3RepoRoot 'scripts\validate_dependencies.py') `
+                (Join-Path $dnp3RepoRoot 'third_party\opendnp3-dependencies.lock.json') `
+                --project-root $dnp3RepoRoot 2>&1
+        )
+        $dnp3DependencyExitCode = $LASTEXITCODE
+        $dnp3DependencyDetail = (
+            $dnp3DependencyOutput | ForEach-Object { $_.ToString() }
+        ) -join ' '
+        if ($dnp3DependencyExitCode -ne 0) {
+            if ([string]::IsNullOrWhiteSpace($dnp3DependencyDetail)) {
+                $dnp3DependencyDetail = "Dependency validation failed with exit code $dnp3DependencyExitCode."
+            }
+            throw $dnp3DependencyDetail
         }
-        Add-Dnp3DoctorCheck 'Vendored dependency hashes' 'PASS' ($dnp3DependencyOutput -join ' ')
+        Add-Dnp3DoctorCheck 'Vendored dependency hashes' 'PASS' $dnp3DependencyDetail
     }
     catch {
         Add-Dnp3DoctorCheck 'Vendored dependency hashes' 'FAIL' $_.Exception.Message
     }
     try {
-        $dnp3CapabilityOutput = & $dnp3Python `
-            (Join-Path $dnp3RepoRoot 'scripts\validate_capabilities.py') `
-            (Join-Path $dnp3RepoRoot 'config\capability_matrix.csv')
-        if ($LASTEXITCODE -ne 0) {
-            throw ($dnp3CapabilityOutput -join [Environment]::NewLine)
+        $dnp3CapabilityOutput = @(
+            & $dnp3Python `
+                (Join-Path $dnp3RepoRoot 'scripts\validate_capabilities.py') `
+                (Join-Path $dnp3RepoRoot 'config\capability_matrix.csv') 2>&1
+        )
+        $dnp3CapabilityExitCode = $LASTEXITCODE
+        $dnp3CapabilityDetail = (
+            $dnp3CapabilityOutput | ForEach-Object { $_.ToString() }
+        ) -join ' '
+        if ($dnp3CapabilityExitCode -ne 0) {
+            if ([string]::IsNullOrWhiteSpace($dnp3CapabilityDetail)) {
+                $dnp3CapabilityDetail = "Capability validation failed with exit code $dnp3CapabilityExitCode."
+            }
+            throw $dnp3CapabilityDetail
         }
-        Add-Dnp3DoctorCheck 'Capability matrix' 'PASS' ($dnp3CapabilityOutput -join ' ')
+        Add-Dnp3DoctorCheck 'Capability matrix' 'PASS' $dnp3CapabilityDetail
     }
     catch {
         Add-Dnp3DoctorCheck 'Capability matrix' 'FAIL' $_.Exception.Message
