@@ -1,4 +1,4 @@
-# Python 子进程客户端与 pytest 集成（0.5.0）
+# Python 子进程客户端与 pytest 集成（0.5.1）
 
 `dnp3_master` 核心只依赖 Python 标准库。它启动 `dnp3-master-host.exe`、自动完成 hello、串行化单个在途请求、持续排空 stdout/stderr、验证严格响应、处理超时/异常退出，并在 Windows Job Object 中拥有整个子进程树。
 
@@ -13,6 +13,22 @@ from dnp3_master import (
     ReadHeader,
     TcpConnectionConfig,
 )
+
+
+_REQUEST_ERROR_IIN_BITS = frozenset(
+    {
+        "IIN2.0.NO_FUNC_CODE_SUPPORT",
+        "IIN2.1.OBJECT_UNKNOWN",
+        "IIN2.2.PARAMETER_ERROR",
+    }
+)
+
+
+def assert_read_accepted(result):
+    assert result.task_status == "SUCCESS"
+    assert _REQUEST_ERROR_IIN_BITS.isdisjoint(result.iin["bits"])
+    assert result.iin["observation_window_dropped"] == 0
+
 
 process = HostProcessConfig(
     executable=Path("bin/dnp3-master-host.exe"),
@@ -38,17 +54,25 @@ with Dnp3MasterClient(process) as master:
         [ReadHeader.range16(30, 0, 0, 9)],
         timeout=5.0,
     )
-    assert integrity.task_status == "SUCCESS"
+    assert_read_accepted(integrity)
+    assert_read_accepted(analog)
     assert all(item.kind == "analog_input" for item in analog.measurements)
 
     events = master.class_poll((1, 2, 3), return_mode="summary")
+    assert_read_accepted(events)
     stats = master.get_stats()
     master.disconnect()
 ```
 
+直接调用客户端不会自动加载私有 PICS，也不会像 pytest marker 一样做 DUT/框架能力选择；调用方必须先完成离线预检，并保证所请求功能码、对象和 Qualifier 都已由目标设备声明支持。真实 EMS 用例优先使用下文 pytest 插件和捆绑场景模板。
+
+启动握手会校验 host 版本；pytest 插件还会计算本次 `capability_matrix.csv` 的 SHA-256，并要求 host 内嵌哈希完全一致，防止复制/升级时混用 Python、host 和能力矩阵。`request()` 只保留给尚无类型化 API 的扩展命令；`connect/read/control/disconnect/shutdown` 等已实现命令禁止原始调用，必须走对应高层方法，避免绕过会话状态、结果校验或安全事故锁。
+
 `ReadHeader` 提供 `all_objects`、`range8/range16`、`count8/count16` 工厂。一次 `read` 接受 1～64 个 Header。结果为不可变 `ReadTaskResult`，含 `measurements`、`summary`、`fragments`、`iin`、`timings` 和原始映射；`measurements_of_kind()` 可按统一 kind 过滤。
 
-`return_mode="summary"` 不在结果中保留或返回逐点对象，适合大响应；`max_measurements` 仍是完整性上限，超过时 host 返回 `QUEUE_OVERFLOW`。
+`return_mode="summary"` 不在结果中保留或返回逐点对象，适合大响应；`max_measurements` 仍是完整性上限。测量溢出、超过 4096 个分片，或当前任务窗口内超过 1024 条 IIN 观测导致丢失时，host 都返回 `QUEUE_OVERFLOW`。Python 还会校验 summary/IIN 计数、原始字节和存储上限的一致性。
+
+OpenDNP3 task `SUCCESS` 不等于对象请求成功。真实 EMS 场景会额外拒绝 IIN2.0 `NO_FUNC_CODE_SUPPORT`、IIN2.1 `OBJECT_UNKNOWN` 和 IIN2.2 `PARAMETER_ERROR`，所以配置为“允许空响应”的 Class 场景也不会把错误响应当作通过。
 
 ## 主动上送 API
 
@@ -56,8 +80,13 @@ with Dnp3MasterClient(process) as master:
 
 ```python
 enabled = master.enable_unsolicited((1, 2), timeout=5.0)
-batch = master.wait_unsolicited(wait_timeout=10.0, max_events=256)
-master.disable_unsolicited((1, 2), timeout=5.0)
+try:
+    assert enabled.task_status == "SUCCESS"
+    batch = master.wait_unsolicited(wait_timeout=10.0, max_events=256)
+    assert batch.summary["dropped_total"] == 0
+finally:
+    disabled = master.disable_unsolicited((1, 2), timeout=5.0)
+    assert disabled.task_status == "SUCCESS"
 ```
 
 每条 `MeasurementRecord` 包含 `source="unsolicited"`、`session_id`、分片和接收顺序。持久队列默认上限 4096，满时 drop-oldest 并增加 `dropped_total`；调用方不能忽略丢弃计数。断开会结束收集并清队列。本机已覆盖启停、G2V2/G32V7、禁用后无新事件和队列溢出；Confirm 丢失、重发/重复、序号回绕等原始时序仍保持未验证。
@@ -98,11 +127,11 @@ assert result.all_success
 assert all(point.status == "SUCCESS" for point in result.point_results)
 ```
 
-还提供 `AnalogOutputCommand.int32/float32/double64` 和 `direct_operate()`。每点结果保留原始/解析 CommandPointState、CommandStatus 和请求关联。调用方不能只检查 `all_success` 而忽略每点状态。
+还提供 `AnalogOutputCommand.int32/float32/double64` 和 `direct_operate()`。每点结果保留 CommandPointState、结构化 CommandStatus 和请求关联。Python 会验证 mode、批次数、summary 计数、header/index 唯一性以及每个 request ordinal/type/index 与原请求完全对应。`point.status` 是基于 OpenDNP3 解码值生成的 IEEE 1815-2012 Table 11-7 视图；`status_raw` 是后端解码枚举值，`status_edition` 固定为 `IEEE1815-2012`，后端后续版本名称只通过 `status_backend` 暴露。固定栈可区分 13～18 并将其规范化为 2012 `RESERVED`，但会把未识别的线上 19～125 折叠成 127；此时 `status_wire_raw_unambiguous` 为 false，不能断言线上原值一定是 `UNDEFINED`。
 
 Python 客户端只在内存保存 host 返回的一次性令牌，不提供公开 token 属性；高层 `connect()` 返回值会移除令牌并标记 `token_exposed=False`，诊断尾部也会过滤令牌。disconnect/close 后清除。令牌不是认证或 SAv5。
 
-状态改变 API 还要求 `HostProcessConfig.safety_incident_directory`。控制 timeout、host 通信失败、非法控制结果或 `execution_uncertain=true` 后，客户端先按 DUT 哈希持久化事故锁，再清令牌并终止 host。新进程可继续只读，但控制会抛出 `UnresolvedSafetyIncidentError`；完成独立读回后用 `active_safety_incident()` 和 `acknowledge_safety_incident()` 显式归档。不能删除锁或自动重试，详见 `docs/SAFETY_INCIDENT_RUNBOOK.md`。Direct Operate 的 `response_mode="no_response"` 当前稳定返回 `UNSUPPORTED_BY_BACKEND`。
+状态改变 API 还要求 `HostProcessConfig.safety_incident_directory`。控制 timeout、host 通信失败、非法/错配控制结果、`execution_uncertain=true`，或点级 `TIMEOUT`、2012 保留状态、raw 127 歧义出现后，客户端先按 DUT 哈希持久化事故锁，再清令牌并终止 host。新进程可继续只读，但控制会抛出 `UnresolvedSafetyIncidentError`；完成独立读回后用 `active_safety_incident()` 和 `acknowledge_safety_incident()` 显式归档。不能删除锁或自动重试，详见 `docs/SAFETY_INCIDENT_RUNBOOK.md`。Direct Operate 的 `response_mode="no_response"` 当前稳定返回 `UNSUPPORTED_BY_BACKEND`。
 
 ## 嵌入现有 pytest
 
@@ -133,6 +162,8 @@ pytest-xdist 每个 worker 会创建独立 host/session；若 EMS 只允许一�
 
 - JSON 最多 1 MiB，拒绝重复键、未知字段、非标准数字和重复场景 ID。
 - 所有 point ID 必须存在且启用；Class/unsolicited 场景还必须与点表中的 Event Class、Group 和 Variation 一致。
+- PICS 的 `SUPPORTED` 不能覆盖框架缺口：每个 marker 还必须在能力矩阵中处于 `IMPLEMENTED_UNVERIFIED` 或 `VERIFIED_*`；否则收集阶段会在接触 DUT 前跳过。
+- 场景依赖包含实际请求限定符：逐点 range8/range16 为 Q00/Q01，Class/Integrity 和 unsolicited 控制为 Q06，控制索引前缀为 Q17/Q28。Q02/Q09/Q39 在固定后端中明确不可用。
 - timeout、测量/事件上限和期望值均有界，布尔点只能使用布尔期望，数值点只能使用有限数值期望。
 - 控制的操作和恢复必须使用相同命令类型/索引但载荷不同，恢复期望必须等于操作前基线。
 - 已启用控制不能保留 `FILL_ME/TODO/TBD/PLACEHOLDER/EXAMPLE` 授权引用。
@@ -146,9 +177,13 @@ pytest-xdist 每个 worker 会创建独立 host/session；若 EMS 只允许一�
 ```python
 @pytest.mark.dnp3_dut
 @pytest.mark.dnp3_capability("APP.FC.01.READ")
-def test_real_ems_read(connected_master):
+@pytest.mark.dnp3_capability("OBJ.G30.V5")
+@pytest.mark.dnp3_capability("QUAL.Q01.REVIEW")
+def test_real_ems_analog_range_read(connected_master):
     ...
 ```
+
+每个 marker 只能接收一个能力 ID，手写用例必须重复声明实际功能码、对象和 Qualifier；上例代表 G30V5 的 16-bit range 读取。完整性扫描还需要 G60V1～V4、`APP.CLASS.EVENTS` 和 Q06。推荐使用 `examples/pytest_ems`，由点表/计划自动推导依赖，避免漏标。
 
 通过 `--dnp3-pics-file` 或 `DNP3_PICS_FILE` 传入 `config/ems_profile.example.json` 格式的本地副本。解析器拒绝重复键、未知根字段、非法设备字段、非法 ID/状态，以及能力矩阵中不存在的 ID，防止 PICS 和 marker 同时拼错后误运行。插件通常会自动找到同一源码包中的 `config/capability_matrix.csv`；目录布局不同可用 `--dnp3-capability-matrix` 或 `DNP3_CAPABILITY_MATRIX` 指定。
 
@@ -178,13 +213,13 @@ python -m dnp3_master.preflight `
 
 可能修改 DUT 的 pytest 用例还必须带：
 
-```python
+```text
 @pytest.mark.dnp3_state_changing
 ```
 
 默认收集后直接 skip。只有命令行同时加入下列参数才会运行，并让 `connected_master` 创建 `LabSafetyConfig`：
 
-```powershell
+```text
 --dnp3-allow-state-changing `
 --dnp3-operator-id "<OPERATOR_OR_TICKET>" `
 --dnp3-dut-id "<LAB_ASSET_ID>"

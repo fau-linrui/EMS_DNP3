@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
     dnp3_master_test_framework
-    VERSION 0.5.0
+    VERSION 0.5.1
     DESCRIPTION "Windows DNP3 master automation test framework"
     LANGUAGES CXX
 )

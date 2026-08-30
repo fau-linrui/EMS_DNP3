@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import time
 
 from dnp3_master import (
@@ -18,6 +19,28 @@ def assert_read_task_success(result: object, scenario_id: str) -> None:
         f"{scenario_id}: DNP3 read task status is {task_status!r}"
     )
     assert task_started is True, f"{scenario_id}: DNP3 read task did not start"
+    iin = getattr(result, "iin", None)
+    assert isinstance(iin, Mapping), (
+        f"{scenario_id}: read result has no validated IIN"
+    )
+    bits = iin.get("bits")
+    assert isinstance(bits, (list, tuple)) and all(
+        isinstance(bit, str) for bit in bits
+    ), f"{scenario_id}: read result IIN bits are malformed"
+    request_errors = tuple(
+        bit
+        for bit in bits
+        if bit.startswith(("IIN2.0.", "IIN2.1.", "IIN2.2."))
+    )
+    assert not request_errors, (
+        f"{scenario_id}: DUT rejected or could not interpret the READ request; "
+        f"IIN request-error bits={request_errors!r}"
+    )
+    dropped = iin.get("observation_window_dropped", 0)
+    assert type(dropped) is int and dropped == 0, (
+        f"{scenario_id}: IIN observations were lost in this task window; "
+        f"dropped={dropped!r}"
+    )
 
 
 def read_exact_static_point(

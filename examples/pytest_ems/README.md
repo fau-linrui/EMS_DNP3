@@ -93,7 +93,7 @@ Copy-Item .\config\ems_test_plan.example.json .\config\ems_test_plan.local.json
 
 即使场景已启用，仍不会自动运行。命令行必须同时提供：
 
-```powershell
+```text
 --dnp3-control-scenario "<EXACT_SCENARIO_ID>" `
 --dnp3-allow-state-changing `
 --dnp3-operator-id "<APPROVED_OPERATOR_OR_TICKET>" `

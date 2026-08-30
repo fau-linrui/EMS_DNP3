@@ -63,7 +63,11 @@ def measurement(
     )
 
 
-def read_result(item: MeasurementRecord) -> ReadTaskResult:
+def read_result(
+    item: MeasurementRecord,
+    *,
+    iin_bits: tuple[str, ...] = (),
+) -> ReadTaskResult:
     return ReadTaskResult(
         task_id=1,
         task_status="SUCCESS",
@@ -73,7 +77,7 @@ def read_result(item: MeasurementRecord) -> ReadTaskResult:
         measurements=(item,),
         summary={"received_total": 1},
         fragments=(),
-        iin={"bits": [], "raw_hex": "0000"},
+        iin={"bits": list(iin_bits), "raw_hex": "0000"},
         timings={},
         raw={},
     )
@@ -138,6 +142,43 @@ def test_poll_template_checks_configured_point(example_inputs: object) -> None:
             )
 
     run_poll_scenario(PollClient(), points, scenario)
+
+
+@pytest.mark.parametrize(
+    "iin_bit",
+    (
+        "IIN2.0.NO_FUNC_CODE_SUPPORT",
+        "IIN2.1.OBJECT_UNKNOWN",
+        "IIN2.2.PARAMETER_ERROR",
+    ),
+)
+def test_poll_template_rejects_success_task_with_request_error_iin(
+    example_inputs: object,
+    iin_bit: str,
+) -> None:
+    points, plan = example_inputs
+    scenario = replace(
+        plan.poll_scenarios[0],
+        minimum_measurements=0,
+        expected_point_ids=(),
+    )
+
+    class PollClient:
+        def integrity_poll(self, **kwargs: object) -> ReadTaskResult:
+            return read_result(
+                measurement(
+                    kind="binary_input",
+                    group=1,
+                    variation=2,
+                    value=True,
+                    is_event=False,
+                    source="solicited",
+                ),
+                iin_bits=(iin_bit,),
+            )
+
+    with pytest.raises(AssertionError, match="IIN request-error"):
+        run_poll_scenario(PollClient(), points, scenario)
 
 
 def test_unsolicited_template_always_disables_on_queue_loss(

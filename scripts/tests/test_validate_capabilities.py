@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 from pathlib import Path
 
 from scripts.validate_capabilities import EXPECTED_HEADER, validate_matrix
@@ -40,7 +41,12 @@ def _write_matrix(path: Path, rows: list[dict[str, str]]) -> None:
 
 def _issue_codes(path: Path, *, tests_root: Path | None = None) -> set[str]:
     roots = (tests_root,) if tests_root else ()
-    result = validate_matrix(path, test_roots=roots, require_baseline=False)
+    result = validate_matrix(
+        path,
+        project_root=path.parent,
+        test_roots=roots,
+        require_baseline=False,
+    )
     return {issue.code for issue in result.issues}
 
 
@@ -99,6 +105,7 @@ def test_verified_row_requires_real_test_and_evidence_files(tmp_path: Path) -> N
     evidence = tmp_path / "evidence" / "manifest.json"
     evidence.parent.mkdir()
     evidence.write_text("{}\n", encoding="utf-8")
+    evidence_sha256 = hashlib.sha256(evidence.read_bytes()).hexdigest()
     tests_root = tmp_path / "tests"
     tests_root.mkdir()
     (tests_root / "test_read.py").write_text(
@@ -116,7 +123,7 @@ def test_verified_row_requires_real_test_and_evidence_files(tmp_path: Path) -> N
                 backend_status="VERIFIED_UNIT",
                 framework_status="VERIFIED_UNIT",
                 test_case_ids="TC_APP_FC01_READ_001",
-                evidence="evidence/manifest.json",
+                evidence=f"evidence/manifest.json#sha256={evidence_sha256}",
             )
         ],
     )
@@ -129,6 +136,62 @@ def test_verified_row_requires_real_test_and_evidence_files(tmp_path: Path) -> N
     )
 
     assert result.ok, [issue.render() for issue in result.issues]
+
+
+def test_verified_evidence_requires_and_checks_sha256(tmp_path: Path) -> None:
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text("{}\n", encoding="utf-8")
+    matrix = tmp_path / "capability_matrix.csv"
+    _write_matrix(
+        matrix,
+        [
+            _valid_row(
+                std_reference="IEEE 1815-2012 4.4.2",
+                framework_status="VERIFIED_UNIT",
+                test_case_ids="TC_APP_FC01_READ_001",
+                evidence="evidence.json",
+            )
+        ],
+    )
+    assert "MISSING_EVIDENCE_SHA256" in _issue_codes(matrix)
+
+    _write_matrix(
+        matrix,
+        [
+            _valid_row(
+                std_reference="IEEE 1815-2012 4.4.2",
+                framework_status="VERIFIED_UNIT",
+                test_case_ids="TC_APP_FC01_READ_001",
+                evidence=f"evidence.json#sha256={'0' * 64}",
+            )
+        ],
+    )
+    assert "EVIDENCE_SHA256_MISMATCH" in _issue_codes(matrix)
+
+
+def test_fixed_2012_function_direction_is_enforced(tmp_path: Path) -> None:
+    matrix = tmp_path / "capability_matrix.csv"
+    _write_matrix(
+        matrix,
+        [_valid_row(capability_id="APP.FC.00.CONFIRM", direction="BIDIRECTIONAL")],
+    )
+
+    assert "INCORRECT_STANDARD_DIRECTION" in _issue_codes(matrix)
+
+
+def test_dut_state_is_rejected_from_the_canonical_framework_matrix(
+    tmp_path: Path,
+) -> None:
+    matrix = tmp_path / "capability_matrix.csv"
+    _write_matrix(matrix, [_valid_row(dut_pics_status="SUPPORTED")])
+
+    assert "DUT_STATE_IN_CANONICAL_MATRIX" in _issue_codes(matrix)
+
+    _write_matrix(
+        matrix,
+        [_valid_row(backend_status="NOT_APPLICABLE_BY_PICS")],
+    )
+    assert "DUT_STATE_IN_CANONICAL_MATRIX" in _issue_codes(matrix)
 
 
 def test_unknown_pytest_capability_marker_is_rejected(tmp_path: Path) -> None:

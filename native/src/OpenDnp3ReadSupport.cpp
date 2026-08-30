@@ -1,4 +1,5 @@
 #include "dnp3host/OpenDnp3ReadSupport.h"
+#include "dnp3host/Ieee1815_2012.h"
 
 #include <opendnp3/app/IINField.h>
 #include <opendnp3/app/MeasurementTypes.h>
@@ -40,6 +41,7 @@ namespace dnp3host {
 namespace {
 
 constexpr std::size_t kIinObservationCapacity = 1024;
+constexpr std::size_t kFragmentRecordCapacity = 4096;
 
 std::uint64_t monotonic_ns() noexcept
 {
@@ -108,7 +110,9 @@ public:
     }
 
     std::vector<IinObservation> after(
-        const std::uint64_t sequence, std::uint64_t& dropped) const
+        const std::uint64_t sequence,
+        std::uint64_t& dropped_total,
+        std::uint64_t& window_dropped) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
         std::vector<IinObservation> result;
@@ -117,7 +121,13 @@ public:
                 result.push_back(observation);
             }
         }
-        dropped = dropped_;
+        dropped_total = dropped_;
+        const auto window_total = last_sequence_ >= sequence
+            ? last_sequence_ - sequence
+            : 0U;
+        window_dropped = window_total > result.size()
+            ? window_total - result.size()
+            : 0U;
         return result;
     }
 
@@ -155,27 +165,9 @@ private:
 
 Json iin_json(
     const std::vector<IinObservation>& observations,
-    const std::uint64_t dropped_total)
+    const std::uint64_t dropped_total,
+    const std::uint64_t window_dropped)
 {
-    static constexpr const char* lsb_names[] = {
-        "BROADCAST",
-        "CLASS1_EVENTS",
-        "CLASS2_EVENTS",
-        "CLASS3_EVENTS",
-        "NEED_TIME",
-        "LOCAL_CONTROL",
-        "DEVICE_TROUBLE",
-        "DEVICE_RESTART"};
-    static constexpr const char* msb_names[] = {
-        "FUNC_NOT_SUPPORTED",
-        "OBJECT_UNKNOWN",
-        "PARAM_ERROR",
-        "EVENT_BUFFER_OVERFLOW",
-        "ALREADY_EXECUTING",
-        "CONFIG_CORRUPT",
-        "RESERVED_1",
-        "RESERVED_2"};
-
     std::uint8_t aggregate_lsb = 0;
     std::uint8_t aggregate_msb = 0;
     auto serialized = Json::array();
@@ -194,11 +186,11 @@ Json iin_json(
     for (std::uint8_t bit = 0; bit < 8; ++bit) {
         if ((aggregate_lsb & static_cast<std::uint8_t>(1U << bit)) != 0U) {
             bits.push_back(std::string{"IIN1."} + std::to_string(bit) + "."
-                           + lsb_names[bit]);
+                           + std::string{kIin1Names2012[bit]});
         }
         if ((aggregate_msb & static_cast<std::uint8_t>(1U << bit)) != 0U) {
             bits.push_back(std::string{"IIN2."} + std::to_string(bit) + "."
-                           + msb_names[bit]);
+                           + std::string{kIin2Names2012[bit]});
         }
     }
 
@@ -209,7 +201,9 @@ Json iin_json(
         {"raw_hex", byte_hex(aggregate_lsb) + byte_hex(aggregate_msb)},
         {"bits", std::move(bits)},
         {"observations", std::move(serialized)},
-        {"observation_store_dropped_total", dropped_total}};
+        {"observation_store_dropped_total", dropped_total},
+        {"observation_window_dropped", window_dropped},
+        {"observation_store_capacity", kIinObservationCapacity}};
 }
 
 class TrackingMasterApplication final : public opendnp3::IMasterApplication {
@@ -337,6 +331,11 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         current_fragment_index_ = fragment_count_++;
         current_unsolicited_ = info.unsolicited;
+        current_fragment_recorded_ = fragments_.size() < kFragmentRecordCapacity;
+        if (!current_fragment_recorded_) {
+            ++fragment_overflow_;
+            return;
+        }
         fragments_.push_back(Json{
             {"fragment_index", current_fragment_index_},
             {"source", info.unsolicited ? "unsolicited" : "solicited"},
@@ -349,10 +348,11 @@ public:
     void end_fragment(const opendnp3::ResponseInfo&)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!fragments_.empty()) {
+        if (current_fragment_recorded_ && !fragments_.empty()) {
             fragments_.back()["ended"] = true;
             fragments_.back()["end_monotonic_ns"] = monotonic_ns();
         }
+        current_fragment_recorded_ = false;
     }
 
     void record(
@@ -428,7 +428,8 @@ public:
 
     BackendOperationResult outcome(
         const std::vector<IinObservation>& iin_observations,
-        const std::uint64_t iin_dropped_total) const
+        const std::uint64_t iin_dropped_total,
+        const std::uint64_t iin_window_dropped) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!done_ || !completion_) {
@@ -465,6 +466,10 @@ public:
              Json{{"received_total", received_total_},
                   {"stored_detail", measurements_.size()},
                   {"overflow", overflow_},
+                  {"fragments_received", fragment_count_},
+                  {"fragments_stored", fragments_.size()},
+                  {"fragment_overflow", fragment_overflow_},
+                  {"max_fragments", kFragmentRecordCapacity},
                   {"max_measurements", options_.max_measurements},
                   {"first_receive_seq",
                    first_receive_sequence_ ? Json(*first_receive_sequence_) : Json(nullptr)},
@@ -473,7 +478,9 @@ public:
                   {"by_kind", std::move(by_kind)},
                   {"by_group_variation", std::move(by_group_variation)}}},
             {"fragments", fragments_},
-            {"iin", iin_json(iin_observations, iin_dropped_total)},
+            {"iin",
+             iin_json(
+                 iin_observations, iin_dropped_total, iin_window_dropped)},
             {"timings",
              Json{{"submitted_monotonic_ns", submitted_monotonic_ns_},
                   {"started_monotonic_ns",
@@ -481,12 +488,14 @@ public:
                   {"completed_monotonic_ns", completed_at},
                   {"duration_ms", static_cast<double>(duration_ns) / 1000000.0}}}};
 
-        if (overflow_ > 0) {
+        if (overflow_ > 0 || fragment_overflow_ > 0 || iin_window_dropped > 0) {
             return BackendOperationResult::failure(
                 ErrorCode::QueueOverflow,
-                "measurement result exceeded the configured bounded capacity",
+                "read result metadata exceeded a bounded collection capacity",
                 Json{{"task_id", task_id_},
                      {"overflow", overflow_},
+                     {"fragment_overflow", fragment_overflow_},
+                     {"iin_observation_window_dropped", iin_window_dropped},
                      {"operation_result", std::move(result)}});
         }
         if (*completion_ == opendnp3::TaskCompletion::SUCCESS) {
@@ -531,10 +540,12 @@ private:
     std::uint64_t fragment_count_{0};
     std::uint64_t current_fragment_index_{0};
     bool current_unsolicited_{false};
+    bool current_fragment_recorded_{false};
     Json fragments_{Json::array()};
     Json measurements_{Json::array()};
     std::uint64_t received_total_{0};
     std::uint64_t overflow_{0};
+    std::uint64_t fragment_overflow_{0};
     std::optional<std::uint64_t> first_receive_sequence_;
     std::optional<std::uint64_t> last_receive_sequence_;
     std::map<std::string, std::uint64_t> by_kind_;
@@ -759,6 +770,8 @@ public:
         const opendnp3::ICollection<opendnp3::Indexed<opendnp3::BinaryCommandEvent>>& values) override
     {
         values.ForeachItem([this, &info](const auto& item) {
+            const auto status_raw = static_cast<std::uint8_t>(
+                opendnp3::CommandStatusSpec::to_type(item.value.status));
             operation_->record(
                 info,
                 item.index,
@@ -766,10 +779,15 @@ public:
                 Json(item.value.value),
                 item.value.GetFlags().value,
                 item.value.time,
-                Json{{"command_status",
+                Json{{"command_status", std::string{command_status_name_2012(status_raw)}},
+                     {"command_status_raw", status_raw},
+                     {"command_status_edition", std::string{kTargetProtocolEdition}},
+                     {"command_status_backend",
                       opendnp3::CommandStatusSpec::to_string(item.value.status)},
-                     {"command_status_raw",
-                      opendnp3::CommandStatusSpec::to_type(item.value.status)}});
+                     {"command_status_reserved_2012",
+                      command_status_is_reserved_2012(status_raw)},
+                     {"command_status_wire_raw_unambiguous",
+                      command_status_wire_raw_unambiguous(status_raw)}});
         });
     }
 
@@ -778,9 +796,18 @@ public:
         const opendnp3::ICollection<opendnp3::Indexed<opendnp3::AnalogCommandEvent>>& values) override
     {
         values.ForeachItem([this, &info](const auto& item) {
+            const auto status_raw = static_cast<std::uint8_t>(
+                opendnp3::CommandStatusSpec::to_type(item.value.status));
             Json extra{
-                {"command_status", opendnp3::CommandStatusSpec::to_string(item.value.status)},
-                {"command_status_raw", opendnp3::CommandStatusSpec::to_type(item.value.status)}};
+                {"command_status", std::string{command_status_name_2012(status_raw)}},
+                {"command_status_raw", status_raw},
+                {"command_status_edition", std::string{kTargetProtocolEdition}},
+                {"command_status_backend",
+                 opendnp3::CommandStatusSpec::to_string(item.value.status)},
+                {"command_status_reserved_2012",
+                 command_status_is_reserved_2012(status_raw)},
+                {"command_status_wire_raw_unambiguous",
+                 command_status_wire_raw_unambiguous(status_raw)}};
             auto value = finite_number(item.value.value, extra);
             operation_->record(
                 info,
@@ -897,9 +924,11 @@ struct OpenDnp3ReadSupport::Impl final {
 
         operation->wait_for_completion();
         std::uint64_t iin_dropped = 0;
+        std::uint64_t iin_window_dropped = 0;
         const auto observations = iin->after(
-            operation->iin_start_sequence(), iin_dropped);
-        auto result = operation->outcome(observations, iin_dropped);
+            operation->iin_start_sequence(), iin_dropped, iin_window_dropped);
+        auto result = operation->outcome(
+            observations, iin_dropped, iin_window_dropped);
         if (operation->is_done()) {
             clear_if_active(operation);
         }

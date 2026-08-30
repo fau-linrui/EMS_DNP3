@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 
 $dnp3RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $dnp3PackageRoot = Join-Path $dnp3RepoRoot 'out\package'
-$dnp3PackageVersion = '0.5.0'
+$dnp3PackageVersion = '0.5.1'
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $dnp3PackageRoot "ems-dnp3-pytest-$dnp3PackageVersion"
 }
@@ -83,6 +83,7 @@ try {
     }
     Copy-Item -LiteralPath 'docs\standards' -Destination $dnp3DocsStage -Recurse
     Copy-Item -LiteralPath 'README.md' -Destination $dnp3Stage
+    Copy-Item -LiteralPath 'CHANGELOG.md' -Destination $dnp3Stage
     Copy-Item -LiteralPath 'scripts\run-local-self-test.ps1' `
         -Destination (Join-Path $dnp3Stage 'self-test.ps1')
 }

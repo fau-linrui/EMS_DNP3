@@ -1,6 +1,6 @@
 # DNP3 Windows Master Automation Test Framework
 
-面向 Windows x64、IEEE 1815-2012 和 pytest 的可移植 DNP3 主站自动化测试框架。当前版本 0.5.0，固定使用 OpenDNP3 3.1.2，并支持完全离线的 C++ 构建。
+面向 Windows x64、IEEE 1815-2012 和 pytest 的可移植 DNP3 主站自动化测试框架。当前版本 0.5.1，固定使用 OpenDNP3 3.1.2，并支持完全离线的 C++ 构建。
 
 普通测试开发只使用 Python/pytest；C++ 协议栈封装在独立的 `dnp3-master-host.exe` 中：
 
@@ -15,14 +15,15 @@ pytest -> dnp3_master Python package -> NDJSON -> dnp3-master-host.exe
 - 总召、Class 1/2/3 Poll、范围/计数/最多 64 Header 的 Read。
 - BI、DBBI、BOS、Counter、Frozen Counter、Analog、AOS、Octet String、Time-and-Interval 等公开测量回调的类型化交付。
 - EMS 约定所需 G1V2/G2V2、G30V5/G32V7、G10V2、G40V3 和 G60V1～V4 的精确本机覆盖。
-- 索引、原始 flags、时间、接收顺序、IIN 原始值/解析位、任务状态/耗时和 detail/summary 有界结果。
+- 索引、原始 flags、时间、接收顺序、IIN 原始值/解析位、任务状态/耗时和 detail/summary 有界结果；测量、分片或当前任务 IIN 丢失都会明确失败。
 - 显式 Enable/Disable Unsolicited、跨请求持续接收、会话/分片/顺序标识和 4096 条 drop-oldest 有界队列。
-- CROB Select-Before-Operate、有响应 Direct Operate、四种 Analog Output 和逐点 Command Status。
-- pytest PICS 三态选择、严格点表、严格 EMS 场景计划、脱敏证据清单和状态改变安全门。
+- CROB Select-Before-Operate、有响应 Direct Operate、四种 Analog Output 和逐点 IEEE 1815-2012 Command Status 视图；固定栈对未知线上状态 19～125 的折叠会以歧义标志显式暴露。
+- pytest PICS 三态选择与框架能力双门禁、严格点表、实际限定符依赖、严格 EMS 场景计划、脱敏证据清单和状态改变安全门。
 - 可整体复制的真实 EMS pytest 套件：逐点 Static Read、完整性/Class Poll、外部触发的主动上报观察，以及控制前后读回和恢复闭环。
 - 只监听 `127.0.0.1` 的可编程有状态测试从站，以及经过真实 Python/native/OpenDNP3 链路的 Static/Poll/Unsolicited/Control 场景回归。
 - PICS、点表、EMS 场景计划和能力矩阵的离线交叉预检；输出逐能力 blocker、输入 SHA-256 和机器可读 JSON，且不会连接 DUT。
-- 不确定控制结果的跨进程 DUT 事故锁、只读核对和显式读回确认归档。
+- 不确定控制结果的跨进程 DUT 事故锁、只读核对和显式读回确认归档；点级 TIMEOUT、2012 保留状态、raw 127 歧义或结果错配均会销毁会话。
+- Python/host 版本、固定 OpenDNP3 版本及 pytest 能力矩阵 SHA-256 启动握手，防止混用旧产物。
 - 环境体检、确定性 ZIP/SHA-256/逐文件清单、解包回环自检、Debug/Release/ASan 和 1,000 次生命周期验收入口。
 
 控制默认锁住。只有获批实验室运行显式提供允许开关、operator ID、DUT ID，并连接时取得一次性会话令牌后才能调用。控制超时不会自动重试；任何不确定结果都会销毁会话并留下持久事故锁，必须独立读回和显式确认。当前 `DIRECT_OPERATE_NR` 明确返回 `UNSUPPORTED_BY_BACKEND`。
@@ -65,7 +66,7 @@ out\build\windows-msvc-release\bin\build-info.json
 .\scripts\package.ps1 -Preset windows-msvc-release -Force
 ```
 
-产物目录、确定性 ZIP 和 SHA-256 校验文件位于 `out\package\ems-dnp3-pytest-0.5.0*`。包不会包含本地 IEEE 标准 PDF、EMS PICS、点表、场景计划、PCAP 或密钥。
+产物目录、确定性 ZIP 和 SHA-256 校验文件位于 `out\package\ems-dnp3-pytest-0.5.1*`。包不会包含本地 IEEE 标准 PDF、EMS PICS、点表、场景计划、PCAP 或密钥。
 
 ## 集成到现有 pytest
 
@@ -81,13 +82,31 @@ pytest_plugins = ("dnp3_master.pytest_plugin",)
 import pytest
 
 
+_REQUEST_ERROR_IIN_BITS = frozenset(
+    {
+        "IIN2.0.NO_FUNC_CODE_SUPPORT",
+        "IIN2.1.OBJECT_UNKNOWN",
+        "IIN2.2.PARAMETER_ERROR",
+    }
+)
+
+
 @pytest.mark.dnp3_dut
 @pytest.mark.dnp3_capability("APP.FC.01.READ")
+@pytest.mark.dnp3_capability("APP.CLASS.EVENTS")
+@pytest.mark.dnp3_capability("QUAL.Q06.REVIEW")
+@pytest.mark.dnp3_capability("OBJ.G60.V1")
+@pytest.mark.dnp3_capability("OBJ.G60.V2")
+@pytest.mark.dnp3_capability("OBJ.G60.V3")
+@pytest.mark.dnp3_capability("OBJ.G60.V4")
 def test_integrity(connected_master):
     result = connected_master.integrity_poll(timeout=10.0)
     assert result.task_status == "SUCCESS"
-    assert result.iin["raw_hex"]
+    assert _REQUEST_ERROR_IIN_BITS.isdisjoint(result.iin["bits"])
+    assert result.iin["observation_window_dropped"] == 0
 ```
+
+手写 DUT 用例必须为实际功能码、对象和 Qualifier 分别声明全部能力 ID；插件不会从任意测试函数体中猜测依赖。上例的完整性扫描实际请求 G60V1～V4/Q06，因此不能只标记 FC1。优先复制 `examples/pytest_ems`，其参数化场景会从严格点表/计划自动附加准确依赖。
 
 可直接复制 `examples/pytest_ems`，再从 `config/ems_test_plan.example.json` 建立私有计划。计划内的完整性/Class 场景可只读执行；主动上报和控制示例默认关闭。控制即使在计划中启用，也必须逐次用 `--dnp3-control-scenario` 精确点名，并同时通过 PICS、pytest 状态改变授权和 host 会话令牌门。
 
@@ -105,6 +124,7 @@ def test_integrity(connected_master):
 
 ## 文档入口
 
+- [版本变更记录](CHANGELOG.md)
 - [小白拉取、构建、移植与使用指南](docs/BEGINNER_MIGRATION_BUILD_USE_GUIDE.md)
 - [内网交接与剩余任务卡](docs/INTRANET_HANDOFF_REMAINING_TASKS.md)
 - [Python 客户端与 pytest 集成](docs/python_client.md)

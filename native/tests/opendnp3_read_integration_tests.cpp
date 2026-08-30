@@ -49,6 +49,8 @@ constexpr const char* TC_APP_MEASUREMENT_TYPES_LOCAL_001 =
     "TC_APP_MEASUREMENT_TYPES_LOCAL_001";
 constexpr const char* TC_APP_MEASUREMENT_OVERFLOW_LOCAL_001 =
     "TC_APP_MEASUREMENT_OVERFLOW_LOCAL_001";
+constexpr const char* TC_APP_READ_METADATA_BOUNDS_LOCAL_001 =
+    "TC_APP_READ_METADATA_BOUNDS_LOCAL_001";
 constexpr const char* TC_APP_CLASS_POLL_LOCAL_001 =
     "TC_APP_CLASS_POLL_LOCAL_001";
 constexpr const char* TC_APP_EMS_PROFILE_VARIATIONS_LOCAL_001 =
@@ -278,6 +280,7 @@ void run_read_integration()
     check(TC_APP_IIN_OBJECT_UNKNOWN_LOCAL_001 != nullptr, "stable test ID must exist");
     check(TC_APP_MEASUREMENT_TYPES_LOCAL_001 != nullptr, "stable test ID must exist");
     check(TC_APP_MEASUREMENT_OVERFLOW_LOCAL_001 != nullptr, "stable test ID must exist");
+    check(TC_APP_READ_METADATA_BOUNDS_LOCAL_001 != nullptr, "stable test ID must exist");
     check(TC_APP_CLASS_POLL_LOCAL_001 != nullptr, "stable class-poll test ID must exist");
     check(
         TC_APP_EMS_PROFILE_VARIATIONS_LOCAL_001 != nullptr,
@@ -377,6 +380,23 @@ void run_read_integration()
             integrity.result.at("summary").at("received_total").get<std::uint64_t>()
                 >= kinds.size(),
             "summary count must cover all detailed measurements");
+        const auto& summary = integrity.result.at("summary");
+        check(
+            summary.at("max_fragments") == 4096,
+            "read result must expose the fixed fragment-record capacity");
+        check(
+            summary.at("fragments_stored") == integrity.result.at("fragments").size(),
+            "stored fragment count must match the bounded fragment array");
+        check(
+            summary.at("fragment_overflow") == 0,
+            "ordinary integrity read must not overflow fragment metadata");
+        const auto& iin = integrity.result.at("iin");
+        check(
+            iin.at("observation_store_capacity") == 1024,
+            "read result must expose the fixed IIN observation capacity");
+        check(
+            iin.at("observation_window_dropped") == 0,
+            "ordinary integrity read must retain its complete IIN window");
     }
 
     dnp3host::ReadConfig analog_read;

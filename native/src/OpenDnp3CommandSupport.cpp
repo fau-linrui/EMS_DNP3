@@ -1,4 +1,5 @@
 #include "dnp3host/OpenDnp3CommandSupport.h"
+#include "dnp3host/Ieee1815_2012.h"
 
 #include <opendnp3/app/AnalogOutput.h>
 #include <opendnp3/app/ControlRelayOutputBlock.h>
@@ -23,6 +24,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -324,13 +326,22 @@ public:
     {
         auto serialized = Json::array();
         std::size_t success_count = 0;
+        std::size_t manual_readback_count = 0;
+        std::size_t correlation_error_count = 0;
+        std::set<std::uint64_t> returned_keys;
         std::map<std::string, std::size_t> by_status;
         std::map<std::string, std::size_t> by_state;
         result.ForeachItem([&](const opendnp3::CommandPointResult& point) {
             const auto state_name = std::string{
                 opendnp3::CommandPointStateSpec::to_string(point.state)};
-            const auto status_name = std::string{
+            const auto status_raw = static_cast<std::uint8_t>(
+                opendnp3::CommandStatusSpec::to_type(point.status));
+            const auto backend_status_name = std::string{
                 opendnp3::CommandStatusSpec::to_string(point.status)};
+            const auto status_name = std::string{command_status_name_2012(status_raw)};
+            if (command_status_requires_manual_readback_2012(status_raw)) {
+                ++manual_readback_count;
+            }
             ++by_state[state_name];
             ++by_status[status_name];
             if (point.state == opendnp3::CommandPointState::SUCCESS
@@ -343,8 +354,17 @@ public:
                 {"state", state_name},
                 {"state_raw", opendnp3::CommandPointStateSpec::to_type(point.state)},
                 {"status", status_name},
-                {"status_raw", opendnp3::CommandStatusSpec::to_type(point.status)}};
-            const auto metadata = metadata_.find(point_key(point.headerIndex, point.index));
+                {"status_raw", status_raw},
+                {"status_edition", std::string{kTargetProtocolEdition}},
+                {"status_backend", backend_status_name},
+                {"status_reserved_2012", command_status_is_reserved_2012(status_raw)},
+                {"status_wire_raw_unambiguous",
+                 command_status_wire_raw_unambiguous(status_raw)}};
+            const auto key = point_key(point.headerIndex, point.index);
+            const auto metadata = metadata_.find(key);
+            if (metadata == metadata_.end() || !returned_keys.insert(key).second) {
+                ++correlation_error_count;
+            }
             item["requested"] = metadata == metadata_.end()
                 ? Json(nullptr)
                 : metadata->second;
@@ -367,6 +387,8 @@ public:
         task_completion_ = result.summary;
         point_results_ = std::move(serialized);
         success_count_ = success_count;
+        manual_readback_count_ = manual_readback_count;
+        correlation_error_count_ = correlation_error_count;
         by_status_ = std::move(statuses);
         by_state_ = std::move(states);
         completed_monotonic_ns_ = monotonic_ns();
@@ -420,9 +442,10 @@ public:
             && success_count_ == expected_points_;
         const auto task_failed =
             *task_completion_ != opendnp3::TaskCompletion::SUCCESS || cancelled_;
-        const auto execution_uncertain = started_ && task_failed;
+        const auto execution_uncertain = (started_ && task_failed)
+            || manual_readback_count_ > 0 || correlation_error_count_ > 0;
         const auto all_success = *task_completion_ == opendnp3::TaskCompletion::SUCCESS
-            && all_points_success && !cancelled_;
+            && all_points_success && !cancelled_ && correlation_error_count_ == 0;
         const auto completed_at = completed_monotonic_ns_.value_or(monotonic_ns());
         const auto duration_ns = completed_at >= submitted_monotonic_ns_
             ? completed_at - submitted_monotonic_ns_
@@ -446,6 +469,8 @@ public:
                   {"returned_points", returned_points},
                   {"successful_points", success_count_},
                   {"failed_points", returned_points - success_count_},
+                  {"manual_readback_points", manual_readback_count_},
+                  {"correlation_errors", correlation_error_count_},
                   {"by_status", by_status_},
                   {"by_state", by_state_}}},
             {"timings",
@@ -471,14 +496,15 @@ public:
                      {"operation_result", std::move(result)},
                      {"automatic_retry_safe", false}});
         }
-        if (returned_points != expected_points_) {
+        if (returned_points != expected_points_ || correlation_error_count_ > 0) {
             result["execution_uncertain"] = true;
             return BackendOperationResult::failure(
                 ErrorCode::ProtocolError,
-                "DNP3 command result did not contain every requested point",
+                "DNP3 command result could not be correlated to every requested point",
                 Json{{"task_id", task_id_},
                      {"requested_points", expected_points_},
                      {"returned_points", returned_points},
+                     {"correlation_errors", correlation_error_count_},
                      {"execution_uncertain", true},
                      {"may_still_execute", true},
                      {"operation_result", std::move(result)},
@@ -507,6 +533,8 @@ private:
     std::optional<std::uint64_t> completed_monotonic_ns_;
     Json point_results_{Json::array()};
     std::size_t success_count_{0};
+    std::size_t manual_readback_count_{0};
+    std::size_t correlation_error_count_{0};
     Json by_status_{Json::object()};
     Json by_state_{Json::object()};
 };
@@ -578,6 +606,8 @@ struct OpenDnp3CommandSupport::Impl final {
                     ErrorCode::AlreadyExecuting,
                     "a previous state-changing DNP3 command may still be executing",
                     Json{{"active_task_id", active->task_id()},
+                         {"execution_uncertain", true},
+                         {"may_still_execute", true},
                          {"automatic_retry_safe", false}});
             }
             active.reset();
@@ -618,6 +648,8 @@ struct OpenDnp3CommandSupport::Impl final {
                 "OpenDNP3 rejected the command task submission",
                 Json{{"task_id", operation->task_id()},
                      {"backend_message", error.what()},
+                     {"execution_uncertain", true},
+                     {"may_still_execute", true},
                      {"automatic_retry_safe", false}});
         }
         catch (...) {
@@ -627,6 +659,8 @@ struct OpenDnp3CommandSupport::Impl final {
                 ErrorCode::InternalError,
                 "OpenDNP3 rejected the command task submission",
                 Json{{"task_id", operation->task_id()},
+                     {"execution_uncertain", true},
+                     {"may_still_execute", true},
                      {"automatic_retry_safe", false}});
         }
 

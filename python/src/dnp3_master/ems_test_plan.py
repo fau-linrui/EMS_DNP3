@@ -146,7 +146,7 @@ class PollScenario:
 
     @property
     def capability_ids(self) -> tuple[str, ...]:
-        capabilities = ["APP.FC.01.READ", "APP.CLASS.EVENTS"]
+        capabilities = ["APP.FC.01.READ", "APP.CLASS.EVENTS", "QUAL.Q06.REVIEW"]
         if self.poll_type == "integrity":
             capabilities.extend(f"OBJ.G60.V{variation}" for variation in range(1, 5))
         else:
@@ -192,6 +192,7 @@ class UnsolicitedScenario:
             "APP.FC.14.ENABLE_UNSOLICITED",
             "APP.FC.15.DISABLE_UNSOLICITED",
             "APP.FC.82.UNSOLICITED_RESPONSE",
+            "QUAL.Q06.REVIEW",
             *(f"OBJ.G60.V{class_number + 1}" for class_number in self.classes),
             event_capability,
         )
@@ -255,6 +256,12 @@ class ControlCommand:
             "analog_output_double64": 4,
         }
         return f"OBJ.G41.V{variations[self.command_type]}"
+
+    @property
+    def qualifier_capability_id(self) -> str:
+        """Return the OpenDNP3 command index-prefix qualifier for this index."""
+
+        return "QUAL.Q17.REVIEW" if self.index <= 0xFF else "QUAL.Q28.REVIEW"
 
     def to_command(self) -> CrobCommand | AnalogOutputCommand:
         if self.command_type == "crob":
@@ -322,12 +329,19 @@ class ControlScenario:
             if self.control_mode == "select_and_operate"
             else ("APP.FC.05.DIRECT_OPERATE",)
         )
-        return (
-            "APP.COMMAND_STATUS.CATALOG",
-            *operation_capabilities,
-            self.command.capability_id,
-            "APP.FC.01.READ",
-            feedback_point.capability_id,
+        return tuple(
+            dict.fromkeys(
+                (
+                    "APP.COMMAND_STATUS.CATALOG",
+                    *operation_capabilities,
+                    self.command.capability_id,
+                    self.command.qualifier_capability_id,
+                    self.restore_command.qualifier_capability_id,
+                    "APP.FC.01.READ",
+                    feedback_point.capability_id,
+                    feedback_point.read_qualifier_capability_id,
+                )
+            )
         )
 
     def to_mapping(self) -> dict[str, object]:

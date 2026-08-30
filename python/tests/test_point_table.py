@@ -58,6 +58,7 @@ def test_example_point_table_loads_and_generates_exact_headers() -> None:
     analog = table.by_id["AI_DEMO_0001"]
     assert analog.capability_id == "OBJ.G30.V5"
     assert analog.event_capability_id == "OBJ.G32.V7"
+    assert analog.read_qualifier_capability_id == "QUAL.Q01.REVIEW"
     assert analog.read_header().to_params() == {
         "group": 30,
         "variation": 5,

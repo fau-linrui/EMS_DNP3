@@ -6,7 +6,31 @@ from dataclasses import dataclass
 from copy import deepcopy
 import math
 from pathlib import Path
+import re
 from typing import Any, Mapping
+
+
+_COMMAND_STATUS_2012_NAMES = {
+    0: "SUCCESS",
+    1: "TIMEOUT",
+    2: "NO_SELECT",
+    3: "FORMAT_ERROR",
+    4: "NOT_SUPPORTED",
+    5: "ALREADY_ACTIVE",
+    6: "HARDWARE_ERROR",
+    7: "LOCAL",
+    8: "TOO_MANY_OBJS",
+    9: "NOT_AUTHORIZED",
+    10: "AUTOMATION_INHIBIT",
+    11: "PROCESSING_LIMITED",
+    12: "OUT_OF_RANGE",
+    126: "NON_PARTICIPATING",
+    127: "UNDEFINED",
+}
+
+
+def _command_status_name_2012(raw: int) -> str:
+    return _COMMAND_STATUS_2012_NAMES.get(raw, "RESERVED")
 
 
 @dataclass(frozen=True, slots=True)
@@ -435,12 +459,18 @@ class ReadTaskResult:
             raise ValueError("read result task_status must be a string")
         if type(value["task_started"]) is not bool or type(value["task_destroyed"]) is not bool:
             raise ValueError("read result task flags must be boolean")
+        if value["task_status"] != "SUCCESS" or value["task_started"] is not True:
+            raise ValueError(
+                "successful read envelope must report a started SUCCESS task"
+            )
         if value["return_mode"] not in {"detail", "summary"}:
             raise ValueError("read result return_mode is invalid")
         if not isinstance(value["measurements"], list):
             raise ValueError("read result measurements must be an array")
         if not isinstance(value["fragments"], list):
             raise ValueError("read result fragments must be an array")
+        if not all(isinstance(item, Mapping) for item in value["fragments"]):
+            raise ValueError("read result fragments must contain only objects")
         for field_name in ("summary", "iin", "timings"):
             if not isinstance(value[field_name], Mapping):
                 raise ValueError(f"read result {field_name} must be an object")
@@ -453,6 +483,86 @@ class ReadTaskResult:
             raise ValueError("read result contains a non-object measurement")
         if value["return_mode"] == "summary" and measurements:
             raise ValueError("summary read result must not contain measurement details")
+        summary = value["summary"]
+        for field_name in (
+            "received_total",
+            "stored_detail",
+            "overflow",
+            "fragments_received",
+            "fragments_stored",
+            "fragment_overflow",
+            "max_fragments",
+            "max_measurements",
+        ):
+            count = summary.get(field_name)
+            if type(count) is not int or count < 0:
+                raise ValueError(
+                    f"read summary field {field_name!r} must be non-negative"
+                )
+        if summary["stored_detail"] != len(measurements):
+            raise ValueError(
+                "read summary stored_detail does not match measurements"
+            )
+        if value["return_mode"] == "detail" and summary["stored_detail"] != summary[
+            "received_total"
+        ]:
+            raise ValueError("complete detail read did not retain every measurement")
+        if summary["overflow"] or summary["fragment_overflow"]:
+            raise ValueError("successful read result reports bounded-storage overflow")
+        if summary["fragments_stored"] > summary["max_fragments"]:
+            raise ValueError("read summary fragments_stored exceeds max_fragments")
+        if summary["fragments_stored"] != len(value["fragments"]):
+            raise ValueError("read summary fragments_stored does not match fragments")
+        if summary["fragments_received"] < summary["fragments_stored"]:
+            raise ValueError("read summary fragment counts are inconsistent")
+        if summary["received_total"] > summary["max_measurements"]:
+            raise ValueError("successful read received_total exceeds max_measurements")
+
+        iin = value["iin"]
+        required_iin = {
+            "lsb",
+            "msb",
+            "raw_hex",
+            "bits",
+            "observations",
+            "observation_store_dropped_total",
+            "observation_window_dropped",
+            "observation_store_capacity",
+        }
+        missing_iin = required_iin.difference(iin)
+        if missing_iin:
+            raise ValueError(
+                "read result IIN is missing fields: "
+                + ", ".join(sorted(missing_iin))
+            )
+        for field_name in ("lsb", "msb"):
+            if type(iin[field_name]) is not int or not 0 <= iin[field_name] <= 255:
+                raise ValueError(f"read IIN {field_name} must be an octet")
+        expected_raw_hex = f"{iin['lsb']:02X}{iin['msb']:02X}"
+        if iin["raw_hex"] != expected_raw_hex:
+            raise ValueError("read IIN raw_hex is inconsistent with lsb/msb")
+        if not isinstance(iin["bits"], list) or not all(
+            isinstance(bit, str) and bit for bit in iin["bits"]
+        ):
+            raise ValueError("read IIN bits must be a string array")
+        if not isinstance(iin["observations"], list) or not all(
+            isinstance(item, Mapping) for item in iin["observations"]
+        ):
+            raise ValueError("read IIN observations must be an object array")
+        for field_name in (
+            "observation_store_dropped_total",
+            "observation_window_dropped",
+            "observation_store_capacity",
+        ):
+            count = iin[field_name]
+            if type(count) is not int or count < 0:
+                raise ValueError(f"read IIN {field_name} must be non-negative")
+        if iin["observation_store_capacity"] < 1:
+            raise ValueError("read IIN observation_store_capacity must be positive")
+        if len(iin["observations"]) > iin["observation_store_capacity"]:
+            raise ValueError("read IIN observations exceed their bounded capacity")
+        if iin["observation_window_dropped"]:
+            raise ValueError("successful read result reports lost IIN observations")
 
         return cls(
             task_id=value["task_id"],
@@ -461,9 +571,9 @@ class ReadTaskResult:
             task_destroyed=value["task_destroyed"],
             return_mode=value["return_mode"],
             measurements=measurements,
-            summary=deepcopy(dict(value["summary"])),
+            summary=deepcopy(dict(summary)),
             fragments=tuple(deepcopy(item) for item in value["fragments"]),
-            iin=deepcopy(dict(value["iin"])),
+            iin=deepcopy(dict(iin)),
             timings=deepcopy(dict(value["timings"])),
             raw=deepcopy(dict(value)),
         )
@@ -741,7 +851,7 @@ class AnalogOutputCommand:
 
 @dataclass(frozen=True, slots=True)
 class CommandPointResult:
-    """Per-point command state and complete DNP3 Command Status."""
+    """Per-point command state with an IEEE 1815-2012 status view."""
 
     header_index: int
     index: int
@@ -752,6 +862,34 @@ class CommandPointResult:
     requested: Mapping[str, Any] | None
     raw: Mapping[str, Any]
 
+    @property
+    def status_edition(self) -> str:
+        return str(self.raw.get("status_edition", "IEEE1815-2012"))
+
+    @property
+    def status_backend(self) -> str:
+        return str(self.raw.get("status_backend", self.status))
+
+    @property
+    def status_reserved_2012(self) -> bool:
+        return 13 <= self.status_raw <= 125
+
+    @property
+    def status_wire_raw_unambiguous(self) -> bool:
+        return bool(
+            self.raw.get("status_wire_raw_unambiguous", self.status_raw != 127)
+        )
+
+    @property
+    def requires_manual_readback(self) -> bool:
+        """Return the fail-closed 2012 safety decision for this point status."""
+
+        return (
+            self.status_raw == 1
+            or self.status_reserved_2012
+            or not self.status_wire_raw_unambiguous
+        )
+
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> CommandPointResult:
         required = {
@@ -761,6 +899,10 @@ class CommandPointResult:
             "state_raw",
             "status",
             "status_raw",
+            "status_edition",
+            "status_backend",
+            "status_reserved_2012",
+            "status_wire_raw_unambiguous",
             "requested",
         }
         missing = required.difference(value)
@@ -776,6 +918,31 @@ class CommandPointResult:
         for field_name in ("state", "status"):
             if not isinstance(value[field_name], str) or not value[field_name]:
                 raise ValueError(f"command point field {field_name!r} must be a string")
+        if value["status_raw"] > 127:
+            raise ValueError("command point status_raw must be between 0 and 127")
+        expected_status = _command_status_name_2012(value["status_raw"])
+        if value["status"] != expected_status:
+            raise ValueError(
+                "command point status does not match IEEE 1815-2012: "
+                f"raw={value['status_raw']}, expected={expected_status!r}"
+            )
+        if value["status_edition"] != "IEEE1815-2012":
+            raise ValueError("command point status_edition must be IEEE1815-2012")
+        if not isinstance(value["status_backend"], str) or not value["status_backend"]:
+            raise ValueError("command point status_backend must be a string")
+        if type(value["status_reserved_2012"]) is not bool or value[
+            "status_reserved_2012"
+        ] != (13 <= value["status_raw"] <= 125):
+            raise ValueError(
+                "command point status_reserved_2012 is inconsistent with status_raw"
+            )
+        if type(value["status_wire_raw_unambiguous"]) is not bool or value[
+            "status_wire_raw_unambiguous"
+        ] != (value["status_raw"] != 127):
+            raise ValueError(
+                "command point status_wire_raw_unambiguous is inconsistent with "
+                "the OpenDNP3 3.1.2 decoded status"
+            )
         requested = value["requested"]
         if requested is not None and not isinstance(requested, Mapping):
             raise ValueError("command point requested field must be an object or null")
@@ -812,6 +979,7 @@ class CommandTaskResult:
         required = {
             "task_id",
             "mode",
+            "response_mode",
             "task_status",
             "task_started",
             "task_destroyed",
@@ -831,6 +999,8 @@ class CommandTaskResult:
         for field_name in ("mode", "task_status"):
             if not isinstance(value[field_name], str) or not value[field_name]:
                 raise ValueError(f"command field {field_name!r} must be a string")
+        if value["response_mode"] != "response":
+            raise ValueError("command response_mode must be 'response'")
         for field_name in (
             "task_started",
             "task_destroyed",
@@ -851,6 +1021,50 @@ class CommandTaskResult:
         )
         if len(points) != len(value["point_results"]):
             raise ValueError("command result contains a non-object point result")
+        summary = value["summary"]
+        summary_counts: dict[str, int] = {}
+        for field_name in (
+            "requested_points",
+            "returned_points",
+            "successful_points",
+            "failed_points",
+        ):
+            count = summary.get(field_name)
+            if type(count) is not int or count < 0:
+                raise ValueError(
+                    f"command summary field {field_name!r} must be non-negative"
+                )
+            summary_counts[field_name] = count
+        if summary_counts["returned_points"] != len(points):
+            raise ValueError(
+                "command summary returned_points does not match point_results"
+            )
+        if (
+            summary_counts["successful_points"]
+            + summary_counts["failed_points"]
+            != summary_counts["returned_points"]
+        ):
+            raise ValueError(
+                "command summary successful/failed counts are inconsistent"
+            )
+        successful_points = sum(
+            point.state == "SUCCESS" and point.status_raw == 0 for point in points
+        )
+        if successful_points != summary_counts["successful_points"]:
+            raise ValueError(
+                "command summary successful_points does not match point_results"
+            )
+        expected_all_success = (
+            value["task_status"] == "SUCCESS"
+            and value["task_started"] is True
+            and summary_counts["requested_points"] == len(points)
+            and successful_points == len(points)
+        )
+        if value["all_success"] != expected_all_success:
+            raise ValueError("command all_success is inconsistent with task/point results")
+        point_keys = {(point.header_index, point.index) for point in points}
+        if len(point_keys) != len(points):
+            raise ValueError("command result repeats a header/index point result")
         return cls(
             task_id=value["task_id"],
             mode=value["mode"],
@@ -880,6 +1094,8 @@ class HostProcessConfig:
     shutdown_timeout: float = 2.0
     diagnostic_tail_bytes: int = 64 * 1024
     max_response_bytes: int = 16 * 1024 * 1024
+    expected_host_version: str | None = "0.5.1"
+    expected_capability_matrix_sha256: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -937,6 +1153,29 @@ class HostProcessConfig:
             or self.max_response_bytes < 64
         ):
             raise ValueError("max_response_bytes must be at least 64")
+        if self.expected_host_version is not None and (
+            not isinstance(self.expected_host_version, str)
+            or not self.expected_host_version.strip()
+        ):
+            raise ValueError("expected_host_version must be a non-empty string or None")
+        if self.expected_capability_matrix_sha256 is not None:
+            if (
+                not isinstance(self.expected_capability_matrix_sha256, str)
+                or re.fullmatch(
+                    r"[0-9a-fA-F]{64}",
+                    self.expected_capability_matrix_sha256,
+                )
+                is None
+            ):
+                raise ValueError(
+                    "expected_capability_matrix_sha256 must be 64 hexadecimal "
+                    "characters or None"
+                )
+            object.__setattr__(
+                self,
+                "expected_capability_matrix_sha256",
+                self.expected_capability_matrix_sha256.lower(),
+            )
 
 
 @dataclass(frozen=True, slots=True)

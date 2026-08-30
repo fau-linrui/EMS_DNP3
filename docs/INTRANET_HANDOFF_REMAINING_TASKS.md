@@ -4,7 +4,7 @@
 
 ## 1. 当前已经完成什么
 
-截至 0.5.0，仓库已完成指导书 T00～T12 中可在本机可靠闭环的核心部分：
+截至 0.5.1，仓库已完成指导书 T00～T12 中可在本机可靠闭环的核心部分：
 
 - Windows x64 CMake/Visual Studio 工程、固定 OpenDNP3 3.1.2 和全部离线构建依赖。
 - C++ host 的严格 NDJSON 协议、Schema、错误码、重复请求 ID 防护、请求大小/深度限制和有序清理。
@@ -13,22 +13,23 @@
 - `integrity_poll`、Class 1/2/3 Poll、严格范围/计数/多 Header `read`。
 - EMS 约定中的 G1V2/G2V2、G30V5/G32V7、G10V2、G40V3 和 G60V1～V4 已有精确本机对象覆盖。
 - OpenDNP3 公开 SOE 回调中的 BI、DBBI、BOS、Counter、Frozen Counter、Analog、AOS、Octet String、Time-and-Interval 等类型归一化；保留索引、原始 flags、时间、接收顺序、分片摘要和有界结果。
-- 原始两字节 IIN 和解析位；已覆盖 IIN2.1 `OBJECT_UNKNOWN`。
-- 读任务开始/完成、状态、耗时、失败详情、取消和溢出失败模型。
+- 原始两字节 IIN 和解析位；已覆盖 IIN2.1 `OBJECT_UNKNOWN`。EMS 场景会拒绝 IIN2.0/2.1/2.2，不能因 OpenDNP3 task `SUCCESS` 或允许空响应而误通过。
+- 读任务开始/完成、状态、耗时、失败详情、取消和溢出失败模型；Measurement、最多 4096 条分片记录和最多 1024 条 IIN 观测均有界，当前任务窗口发生丢失即 `QUEUE_OVERFLOW`。
 - CROB 的 Select-Before-Operate 和有响应 Direct Operate。
-- Group 41 的 int16、int32、float32、double64 四种 Analog Output，以及混合批次的逐点结果和完整 Command Status。
+- Group 41 的 int16、int32、float32、double64 四种 Analog Output，以及混合批次的逐点结果。Command Status 已按 IEEE 1815-2012 Table 11-7 显式适配，同时保留后端解码值、2012 保留区标记、OpenDNP3 别名和原始线上值歧义标志；19～125 被固定栈折叠成 127 的限制没有被伪装成无损支持。
 - 控制默认锁定；只有显式 LAB、允许状态改变、operator ID 和 DUT ID 同时存在时才生成一次性会话令牌。Python 不公开/回显令牌，诊断会脱敏，令牌在断开/退出时失效。
 - FC20/FC21 显式 Enable/Disable Unsolicited、跨请求 ISOE 收集、G2V2/G32V7、会话/分片/顺序字段及 4096 条 drop-oldest 有界队列；启动时仍默认关闭。
-- 控制超时、host 交换失败、非法控制结果或结果自报不确定时，框架不自动重试；Python 会先按 DUT 哈希写入跨进程事故锁，再清除令牌并终止 host。新进程只读可用，控制必须在独立读回和显式事故确认后恢复。
+- 控制超时、host 交换/提交失败、非法或错配控制结果、结果自报不确定，或点级 `TIMEOUT`、2012 保留状态、decoded 127 歧义时，框架不自动重试；Python 会先按 DUT 哈希写入跨进程事故锁，再清除令牌并终止 host。新进程只读可用，控制必须在独立读回和显式事故确认后恢复。
 - `DIRECT_OPERATE_NR` 明确返回 `UNSUPPORTED_BY_BACKEND`，不会模拟成功。
-- PICS 三态门禁、能力 ID 与 389 行矩阵交叉校验、严格只读点表加载器、严格 EMS 场景计划，以及 `dnp3_dut`、`dnp3_unsupported_behavior`、`dnp3_state_changing` 风险门禁。
+- PICS 三态门禁、能力 ID 与 426 行公共框架矩阵交叉校验、严格只读点表加载器、严格 EMS 场景计划，以及 `dnp3_dut`、`dnp3_unsupported_behavior`、`dnp3_state_changing` 风险门禁。PICS 的 `SUPPORTED` 不能覆盖框架 `BLOCKED`/`UNSUPPORTED_BY_BACKEND`；场景依赖已包含 Q00/Q01/Q06/Q17/Q28，Q02/Q09/Q39 明确受固定后端限制。公共矩阵的 `dut_pics_status` 固定为 `UNKNOWN`，真实设备状态只存在于私有 PICS overlay。
 - 可整体复制的真实 EMS pytest 套件：逐点 Static Read、完整性/Class Poll、外部触发的 unsolicited 精确匹配，以及“前读回 -> 单次控制 -> 后读回 -> 单次恢复 -> 恢复读回”模板。主动上报和控制默认关闭；控制还必须逐次精确选择一个场景。
 - 只绑定 `127.0.0.1` 的可编程有状态测试从站：可制造带时间的 BI/AI 事件，CROB/G41 会更新 BOS/AOS 反馈，并记录 SBO/Direct/No-Ack 操作次数。真实 EMS 场景模板已通过 Python -> native host -> OpenDNP3 -> 测试从站的完整链路回归。
 - 共用严格 PICS 模型的离线预检：在不启动 host、不连接 DUT 的情况下交叉检查 PICS、点表、场景计划和能力矩阵，输出逐能力 blocker、输入 SHA-256、JSON 报告和明确退出码。
 - pytest 脱敏证据记录器：运行/测试阶段结果、构建身份及 PICS/点表/场景计划/矩阵文件名、大小、SHA-256；不复制私有输入内容，并替换已知本机绝对路径。任意 DUT/第三方输出仍须在外发前人工复核。
 - 有界 `stats`、环境体检、确定性 ZIP/SHA-256/逐文件清单、解包校验和不接真实 EMS 的本机一键读写自检。
 - `build-info.json` 记录 Git commit 和 clean/dirty/unavailable 工作区状态；正式证据只接受 clean 构建。
-- 389 行 IEEE 1815-2012 能力矩阵；已实现项均保持 `IMPLEMENTED_UNVERIFIED`，没有虚构 `VERIFIED_INTEROP/CONFORMANCE`。
+- Python 启动握手强制校验 0.5.1 host 版本；pytest 还校验当前能力矩阵 SHA-256。已实现命令禁止从公共原始 `request()` 绕过类型 API，避免安全令牌或客户端会话状态失步。
+- 426 行 IEEE 1815-2012 能力矩阵；已补齐 Table 4-6 的 22 个限定词代码、2012 精确 IIN/Command Status 名称、遗漏的 obsolete-but-assigned Counter 变体和 G70V0，并单列 OpenDNP3 对保留 Command Status 原始线上值的折叠缺口。已实现项均保持 `IMPLEMENTED_UNVERIFIED`，没有虚构 `VERIFIED_INTEROP/CONFORMANCE`。
 - 已把用户提供的“DNP3 操作约定”登记为部分输入，并在 `docs/standards/ems_device_profile.md` 记录 D01～D09；由于缺正式 PICS/固件身份且文档内部有冲突，DUT 状态仍全部为 `UNKNOWN`。
 
 主要实现入口：
@@ -68,7 +69,7 @@ examples/pytest_ems/
 - 特定 EMS 固件的 PICS 能力；
 - 生产网络的性能、稳定性或安全性。
 
-内网 agent 不得只因测试通过就把能力矩阵升级为 `VERIFIED_INTEROP` 或 `VERIFIED_CONFORMANCE`。升级状态至少需要不可变的运行清单、构建信息、配置哈希、独立端版本、PCAP/报告哈希和评审人。
+内网 agent 不得只因测试通过就把能力矩阵升级为 `VERIFIED_INTEROP` 或 `VERIFIED_CONFORMANCE`。升级状态至少需要不可变的运行清单、构建信息、配置哈希、独立端版本、PCAP/报告哈希和评审人；矩阵 `evidence` 必须使用 `relative/path#sha256=<64 hex>`，校验器会读取文件复算。
 
 本机 IEEE PDF 带第三方许可水印，仅用于本地条款复核，已被 Git 忽略；不得复制到发布包、GitHub、内网代码仓库或 agent 提示词附件。仓库只允许保存条款号、能力摘要和文件哈希。
 
@@ -82,11 +83,14 @@ examples/pytest_ems/
 - `stats` 只报告 host 请求计数、会话/通道/队列摘要；没有链路字节、网络字节、首字节/首对象时间、CPU、工作集、private bytes、句柄和线程历史。
 - `summary` 是单次 Read 的有界汇总，不是跨任务的持续 MeasurementStore。
 - 控制只支持 OpenDNP3 公共 API 可表达的有响应 SBO/Direct Operate；`DIRECT_OPERATE_NR` 不支持。
+- Read/命令公共 API 只支持 Q00/Q01/Q06/Q07/Q08/Q17/Q28 所覆盖的 8/16-bit 路径；Q02/Q09/Q39 的 32-bit qualifier 需要后端扩展或更换协议栈。
+- OpenDNP3 3.1.2 会把未识别的 Command Status 线上值 19～125 折叠成 127；框架会报告 `status_wire_raw_unambiguous=false`，但没有 raw decoder 前无法恢复真实字节。
 - 控制会话令牌只用于防误操作，不是用户认证、权限系统或 Secure Authentication v5。
 - 事故锁只对使用同一持久目录和完全相同 `dut_id` 的进程有效，不是多机分布式锁；真实控制必须保持单控制器、串行执行。
 - 未完成时间同步、Restart、Freeze、Assign Class、File/Data Set/VT、SAv5、Raw fault/fuzz 等能力。
 - 已有真实 EMS 点表/场景断言模板，但尚无目标 EMS 的实际运行结果、PICS 适用性结论、性能阈值、24 小时稳定性或独立互操作证据。
 - 已知 EMS 操作约定声称事件仅 unsolicited、支持 FC5/FC6、使用“Activation Model”式 LATCH_ON/OFF、TCP 不支持广播且遥脉同遥测；这些陈述存在标准差异/歧义，不能直接转成自动化断言。
+- 426 行矩阵是能力/对象目录，不是逐条 `shall/shall not/conditional` 的完整规范要求目录；在完成 requirement catalog 和双人标准复核前，不得宣称 IEEE 1815-2012 规范要求全覆盖。
 
 ## 4. 进入内网后必须取得的输入
 
@@ -129,12 +133,23 @@ examples/pytest_ems/
 .\scripts\build.ps1 -Preset windows-msvc-release
 .\scripts\test.ps1 -Preset windows-msvc-release
 .\scripts\run-local-self-test.ps1 -Preset windows-msvc-release
-.\.venv\Scripts\python.exe -m pytest -q python\tests\test_ems_native_scenarios.py
 git diff --check
 git status --short
 ```
 
+`test.ps1` 已设置 `DNP3_MASTER_HOST_EXE`/`DNP3_TEST_OUTSTATION_EXE` 并包含 `python\tests\test_ems_native_scenarios.py`；不要在未设置这两个变量时把该文件单独追加到命令清单。需要定向运行时，按 `docs/LOCAL_TEST_OUTSTATION.md` 的环境保存/恢复示例执行。
+
 ## 6. 剩余任务卡
+
+### H00（P0，可在无 DUT 环境继续）：逐条规范要求目录
+
+唯一目标：基于经授权的 IEEE 1815-2012 文本建立独立 requirement catalog，不修改线上协议行为，也不把能力目录行数当作标准要求覆盖率。
+
+要求：每条 `shall`、`shall not` 和条件性要求具有稳定 requirement ID、准确条款/表/图、主站适用性、前置条件、关联 capability ID、实现状态、测试 ID、证据和复核人；废止、保留、条件性及“不适用于主站”均需依据，不能直接删除。先定义 CSV/JSON Schema 和校验器，再分章导入并由第二人复核。受限标准原文不得复制进仓库，只保存必要摘要和条款定位。
+
+验收：目录去重/引用/枚举/条件闭环校验通过；每个 requirement 能追踪到能力或有正式不适用依据；覆盖率报告分别显示“能力目录”“规范要求”“框架实现”“DUT 适用项”，不合并成一个百分比。
+
+停止条件：标准授权、勘误版本或复核负责人不明确。此任务可以与 H01 和 H08a 并行，但在完成前不能使用“全标准要求已覆盖”的发布措辞。
 
 ### H01（P0）：导入并冻结 EMS PICS/连接基线
 
@@ -179,11 +194,11 @@ git status --short
 
 先读：`docs/BEGINNER_MIGRATION_BUILD_USE_GUIDE.md`、`examples/pytest_ems/README.md`、Read 模型/客户端、PICS、本地点表和本地场景计划。
 
-修改范围：0.5.0 已提供 `test_read_points.py` 和 `test_poll_scenarios.py`。先只填写私有点表/场景计划并运行，不改协议或控制代码；只有业务断言确实缺失时，才在内网复制目录中做最小扩展。
+修改范围：0.5.1 已提供 `test_read_points.py` 和 `test_poll_scenarios.py`。先只填写私有点表/场景计划并运行，不改协议或控制代码；只有业务断言确实缺失时，才在内网复制目录中做最小扩展。
 
 每个真实 DUT 用例必须同时带：
 
-```python
+```text
 @pytest.mark.dnp3_dut
 @pytest.mark.dnp3_capability("对应能力ID")
 ```
@@ -230,9 +245,9 @@ git status --short
 
 先读：PICS、批准点表/工单、回退方案、`examples/pytest_ems/README.md`、`ems_test_plan.py`、`test_control_scenarios.py`、`OpenDnp3CommandSupport.cpp`、Python 命令模型和开发指导书 4.4.4/4.4.5 对应内部条款索引。
 
-0.5.0 已提供单场景控制闭环模板，并已用本机有状态反馈从站验证完整调用链；不要先重写控制代码。把准确操作/恢复、反馈期望和真实 `authorization_reference` 写入私有计划，只启用本次获批场景。模板会自动附加 `dnp3_dut`、准确 capability ID 和 `dnp3_state_changing`。运行时必须同时提供：
+0.5.1 已提供单场景控制闭环模板，并已用本机有状态反馈从站验证完整调用链；不要先重写控制代码。把准确操作/恢复、反馈期望和真实 `authorization_reference` 写入私有计划，只启用本次获批场景。模板会自动附加 `dnp3_dut`、准确 capability ID 和 `dnp3_state_changing`。运行时必须同时提供：
 
-```powershell
+```text
 --dnp3-control-scenario "<EXACT_ENABLED_SCENARIO_ID>" `
 --dnp3-allow-state-changing `
 --dnp3-operator-id "<OPERATOR_OR_TICKET>" `
@@ -285,29 +300,45 @@ git status --short
 
 通用停止条件：EMS 负责人不能接受重启/计数冻结/Class 修改，或测试可能影响其他系统连接。
 
-### H08（P1，T15）：持续 MeasurementStore 与 capture API
+### H08a（P1，T15a～T15d，可现在开发）：持续 MeasurementStore 与 capture API
 
-唯一目标：在已有单次 detail/summary 基础上实现 `capture.begin/progress/end` 和持续有界汇总。
+唯一目标：在已有单次 detail/summary 基础上，用捆绑的回环从站实现 `capture.begin/progress/end`、持续有界汇总和完整协议/Python/打包合同；不连接真实 DUT。
 
-先读：`HostController.cpp` 中当前 `stats`、Read 支持、指导书 M4。当前 `capture.begin` 是已知但明确不支持的命令，不要把它误当成已有功能。
+先读：`HostController.cpp` 中当前 `stats`、Read/Unsolicited 支持、指导书第 10 节/M4、Schema 和 fake host。当前 `capture.begin` 是已知但明确不支持的命令，不要把它误当成已有功能。
 
-设计必须先确定：capture ID、期望集合、唯一键、重复/缺失/错值样本上限、队列水位、取消/断开行为、结果大小和并发规则。v1 仍只允许一个 capture/一个会话。
+设计必须先确定：capture ID、状态机、source filter、期望集合、唯一键、重复/缺失/错值的“可证明/unknown”语义、样本上限、队列水位、deadline、取消/断开行为、结果大小和并发规则。v1 仍只允许一个 ACTIVE capture/一个会话。没有外部真值时不得输出伪造的 `missing=0`。
 
-验收：summary 不构造逐点 JSON；detail/样本均有硬上限；进度单调；断开/超时清理；故意溢出返回稳定错误并保留计数。
+本机验收：summary 不构造逐点 JSON；detail/样本均有硬上限；进度单调；begin/end 幂等规则明确；断开/超时/host shutdown 清理；故意溢出返回稳定终态并保留各层计数；native、Python、真实回环和解包 self-test 全通过。
 
-停止条件：EMS 点数/事件率/唯一键定义和报告需求未提供。
+停止条件：Capture v1 合同或各层 overflow/source/scope 定义尚未评审。EMS 的最终点数和事件率不是 H08a 的阻塞项，可先用确定性本机 Profile。
 
-### H09（P1，T16）：大数据、性能与 24 小时稳定性
+### H08b（P1，进入内网后）：目标 Profile 映射
 
-唯一目标：在 H08 完成后建立可重复基准，不在本卡新增协议能力。
+唯一目标：把 H08a 的通用 capture 合同映射到获批 EMS 点表、事件源、唯一键、真值/匹配规则和报告样本策略；原则上只改私有 Profile/计划，不新增协议能力。
 
-输入：目标点数、事件率、延迟/吞吐、CPU/内存上限和测试机规格。先测工具自身上限，再测 EMS。
+验收：Profile 哈希进入证据；每个完整性结论都有外部真值或明确为 `unknown`；目标负载仍在 H08a 已测工具容量和内存预算内。
 
-补齐指标：首字节、首对象、末对象、任务完成、网络字节、CPU、工作集、private bytes、句柄、线程和队列水位。报告 p50/p95/p99/max、完整性、溢出、构建/配置哈希。
+停止条件：点表、事件发生器、目标负载或真值规则不明确。
 
-验收：大总召、突发/持续事件、批量控制、重连补事件和 24 小时稳定性；内存不线性增长，`missing==0`、`queue_overflow==0`。
+### H09a（P1，T16a～T16d，可现在开发）：本机性能与稳定性工具链
 
-停止条件：没有阈值、采集会干扰 DUT、H08 未完成或测试环境不能独占。
+唯一目标：在 H08a 完成后，用可扩展回环从站建立确定性发生器、Windows 资源采样、性能 Profile/报告、短时 benchmark/soak 和可中断 24 小时 runner；不新增协议能力，不形成 EMS 性能结论。
+
+补齐指标：task submit、首分片、首对象、末对象、task completion、CPU、工作集、private bytes、句柄、线程和各层队列水位。网络/wire 字节、DUT 资源或 wire first byte 没有批准数据源时必须为 `null`，不得估算。报告使用明确统计总体和 nearest-rank p50/p95/p99/max，并绑定构建、Profile、seed、真值清单和环境哈希。
+
+本机验收：大总召、突发/持续事件、只读重连和获批的回环控制负载；runner 支持 watchdog、原子检查点、磁盘/日志上限及中断后报告；故意泄漏/丢弃/真值缺失会稳定失败。缩短 soak 用于 CI，24 小时本机运行只验证工具生命周期，不代表目标 EMS。
+
+停止条件：H08a 未完成、发生器不能提供确定性真值、资源计数 source/scope 不清或 runner 会无界写盘。目标 EMS 阈值和独占环境不是 H09a 工具开发的阻塞项。
+
+### H09b（P1，T16e，仅目标环境）：正式大点表、性能与 24 小时证据
+
+唯一目标：在独立参考端和目标内网独占环境执行已评审的 H09a runner，只产出环境证据、阈值结论和已批准偏差，不顺带修改协议能力。
+
+输入：目标点数、事件率、延迟/吞吐、CPU/内存/句柄/线程阈值、测试机规格、电源计划、网卡、外部真值、允许重连策略、24 小时有效时长以及证据保留位置。
+
+验收：所有可证明场景 `missing==0`，所有层 overflow/drop 为 0，资源趋势和延迟/吞吐满足 Profile；不可观测指标为 `null` 并解释；独立端身份、PCAP/报告、构建、配置和环境均有 SHA-256。批量控制只有单独书面授权和安全门时才执行，否则从 Profile 删除。
+
+停止条件：没有批准阈值、采集会干扰 DUT、测试环境不能独占、参考端低于目标负载、真值不可证明或 H08b/H09a 未通过。
 
 ### H10（按 PICS，逐个任务）：Serial、UDP、TLS 或 TCP Server
 
@@ -319,7 +350,7 @@ TLS 还需批准的证书/密钥管理、协议版本/密码套件策略和无�
 
 ### H11（M5，每个能力族单独任务）：经典对象与公共 API 缺口
 
-候选项：Group 0；Group 31/33；Group 34；Group 13/43；Group 50V1/V2 和 Group 80；`DIRECT_OPERATE_NR`；广播/self-address；公共 Header 无法表达的限定词。
+候选项：Group 0；Group 31/33；Group 34；Group 50V1/V2 和 Group 80；`DIRECT_OPERATE_NR`；Command Status 19～125 的原始线上值保真；广播/self-address；公共 Header 无法表达的限定词。Group 13/43 的 solicited/unsolicited 回调归一化已经存在，当前任务是补变体级 golden vector 和独立互操作；只有测试证明 codec/API 真有缺口时才进入后端扩展，不能把它当成空白模块重写。
 
 每项先完成“codec、公共 Master API、回调、事务、独立互操作”五栏源码证据。优先使用固定公共 API；确有缺口时再建立小型 `ExtendedOpenDnp3Backend`/受控 fork，记录 fork commit。
 
@@ -345,24 +376,25 @@ TLS 还需批准的证书/密钥管理、协议版本/密码套件策略和无�
 
 发布阶段按 PICS 生成适用/不适用清单，与独立实现及批准的一致性工具执行适用用例，汇总证据、偏差和 waiver，生成 SBOM、许可证、签名包和可复现构建说明。
 
-最终门禁：宣称范围内不能有 `NOT_ANALYZED`、`PLANNED` 或 `IMPLEMENTED_UNVERIFIED`；每个 `VERIFIED_*` 都可追溯到不可变证据。做不到就缩小宣称范围，不得改状态掩盖缺口。
+最终门禁：宣称范围内不能有 `NOT_ANALYZED`、`PLANNED` 或 `IMPLEMENTED_UNVERIFIED`；每个 `VERIFIED_*` 都通过 `relative/path#sha256=<64 hex>` 追溯到实际不可变证据，并具备所需独立性元数据。做不到就缩小宣称范围，不得改状态掩盖缺口。
 
 ## 7. 推荐执行顺序
 
 ```text
-H01 PICS/点表
-  -> H02 真实 EMS 只读
-  -> H03 独立互操作/证据
-  -> H04 授权控制（若 PICS/项目需要）
-  -> H05/H06/H07（只做 PICS 需要的服务）
-  -> H08 capture
-  -> H09 性能/稳定性
-  -> H10/H11/H12（按 PICS 缺口逐项）
-  -> H13（仅安全批准后）
-  -> H14 最终健壮性/发布
+标准分支：H00 requirement catalog ───────────────────────────────┐
+                                                                  │
+DUT 分支：H01 PICS/点表 -> H02 只读 -> H03 独立证据              │
+                              ├-> H04 授权控制（按需）             │
+                              └-> H05/H06/H07（只做 PICS 所需）    │
+                                                                  ├-> H14 发布门
+工具分支：H08a 本机 capture -> H09a 本机 runner                   │
+              └-> H08b 目标 Profile -> H09b 正式性能/24h 证据 ───┘
+
+扩展分支：H10/H11/H12（按 PICS/发布 Profile 单项启动）
+安全分支：H13（仅全部安全前置条件满足后）
 ```
 
-对当前项目最有价值的下一张卡是 H01；没有准确 PICS 和点表时继续扩展协议功能，容易让内网 agent 在错误范围上耗费时间。
+进入内网后，对真实 EMS 最有价值的第一张卡仍是 H01。与此同时，外网/本机开发可独立推进 H00、H08a，随后推进 H09a；它们不应因尚未取得 EMS 点表阈值而停滞。H08b/H09b 才依赖目标点表、阈值和独占环境。
 
 ## 8. 每张卡的交付回复模板
 

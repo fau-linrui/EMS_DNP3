@@ -58,7 +58,12 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
                 [
                     pytest.param(
                         point,
-                        marks=pytest.mark.dnp3_capability(point.capability_id),
+                        marks=[
+                            pytest.mark.dnp3_capability(point.capability_id),
+                            pytest.mark.dnp3_capability(
+                                point.read_qualifier_capability_id
+                            ),
+                        ],
                         id=point.point_id,
                     )
                     for point in table.enabled_points

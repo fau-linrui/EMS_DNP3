@@ -27,10 +27,29 @@ pytest -> Python client -> dnp3-master-host.exe -> OpenDNP3 TCP
 源码仓库中先完成 Release 构建，然后运行：
 
 ```powershell
-.scripts\run-local-self-test.ps1 -Preset windows-msvc-release
+.\scripts\run-local-self-test.ps1 -Preset windows-msvc-release
+```
 
-..venv\Scripts\python.exe -m pytest -q `
-  .\python\tests\test_ems_native_scenarios.py
+如需只运行完整的 EMS native 场景测试，必须显式告诉测试代码两个已构建 EXE 的位置；`run-local-self-test.ps1` 会在结束时恢复进程环境，不能依赖它为下一条命令保留变量：
+
+```powershell
+$previousHostExe = $env:DNP3_MASTER_HOST_EXE
+$previousOutstationExe = $env:DNP3_TEST_OUTSTATION_EXE
+$env:DNP3_MASTER_HOST_EXE = (
+  Resolve-Path '.\out\build\windows-msvc-release\bin\dnp3-master-host.exe'
+).Path
+$env:DNP3_TEST_OUTSTATION_EXE = (
+  Resolve-Path '.\out\build\windows-msvc-release\bin\dnp3-local-test-outstation.exe'
+).Path
+
+try {
+  .\.venv\Scripts\python.exe -m pytest -q `
+    .\python\tests\test_ems_native_scenarios.py
+}
+finally {
+  $env:DNP3_MASTER_HOST_EXE = $previousHostExe
+  $env:DNP3_TEST_OUTSTATION_EXE = $previousOutstationExe
+}
 ```
 
 第一条是快速安装/调用链自检；第二条通过真实 native host 跑静态读取、Class Poll、主动上报和控制反馈恢复场景。四个稳定测试 ID 是：

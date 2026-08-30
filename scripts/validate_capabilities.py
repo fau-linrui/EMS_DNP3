@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import re
 import sys
@@ -156,6 +157,72 @@ REQUIRED_EXACT_IDS = frozenset(
             (0x83, "AUTHENTICATE_RESP"),
         )
     }
+    | {
+        f"QUAL.Q{code}.REVIEW"
+        for code in (
+            "00", "01", "02", "03", "04", "05", "06", "07", "08", "09",
+            "17", "18", "19", "27", "28", "29", "37", "38", "39", "4B",
+            "5B", "6B",
+        )
+    }
+    | {
+        "IIN.IIN2.0.NO_FUNC_CODE_SUPPORT",
+        "IIN.IIN2.2.PARAMETER_ERROR",
+        "COMMAND.STATUS.SUCCESS",
+        "COMMAND.STATUS.TIMEOUT",
+        "COMMAND.STATUS.NO_SELECT",
+        "COMMAND.STATUS.FORMAT_ERROR",
+        "COMMAND.STATUS.NOT_SUPPORTED",
+        "COMMAND.STATUS.ALREADY_ACTIVE",
+        "COMMAND.STATUS.HARDWARE_ERROR",
+        "COMMAND.STATUS.LOCAL",
+        "COMMAND.STATUS.TOO_MANY_OBJS",
+        "COMMAND.STATUS.NOT_AUTHORIZED",
+        "COMMAND.STATUS.AUTOMATION_INHIBIT",
+        "COMMAND.STATUS.PROCESSING_LIMITED",
+        "COMMAND.STATUS.OUT_OF_RANGE",
+        "COMMAND.STATUS.RESERVED_13_125",
+        "COMMAND.STATUS.NON_PARTICIPATING",
+        "COMMAND.STATUS.UNDEFINED",
+        "APP.COMMAND_STATUS.RESERVED_WIRE_RAW",
+        "OBJ.G20.V3",
+        "OBJ.G20.V4",
+        "OBJ.G20.V7",
+        "OBJ.G20.V8",
+        "OBJ.G21.V3",
+        "OBJ.G21.V4",
+        "OBJ.G21.V7",
+        "OBJ.G21.V8",
+        "OBJ.G21.V11",
+        "OBJ.G21.V12",
+        "OBJ.G22.V3",
+        "OBJ.G22.V4",
+        "OBJ.G22.V7",
+        "OBJ.G22.V8",
+        "OBJ.G23.V3",
+        "OBJ.G23.V4",
+        "OBJ.G23.V7",
+        "OBJ.G23.V8",
+        "OBJ.G70.V0",
+    }
+)
+
+REQUIRED_DIRECTIONS = {
+    "APP.FC.00.CONFIRM": "M2O",
+    "APP.FC.20.AUTHENTICATE_REQ": "M2O",
+    "APP.FC.21.AUTH_REQ_NO_ACK": "M2O",
+    "APP.FC.83.AUTHENTICATE_RESP": "O2M",
+}
+
+FORBIDDEN_LEGACY_IDS = frozenset(
+    {
+        "IIN.IIN2.0.FUNC_NOT_SUPPORTED",
+        "IIN.IIN2.2.PARAM_ERROR",
+        "COMMAND.STATUS.LOCAL_CONTROL",
+        "COMMAND.STATUS.TOO_MANY_OPERATIONS",
+        "COMMAND.STATUS.INHIBITED",
+        "COMMAND.STATUS.DOWNSTREAM",
+    }
 )
 
 REQUIRED_PREFIXES = tuple(
@@ -208,6 +275,14 @@ class ValidationResult:
 
 def _split_multi(value: str) -> list[str]:
     return [item.strip() for item in value.split("|") if item.strip()]
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _read_matrix(path: Path) -> tuple[list[dict[str, str]], list[ValidationIssue]]:
@@ -270,9 +345,19 @@ def _validate_evidence_reference(
     project_root: Path,
     row_number: int,
     capability_id: str,
+    require_digest: bool,
 ) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     path_text, separator, digest = reference.partition("#sha256=")
+    if not path_text or "\\" in path_text:
+        return [
+            ValidationIssue(
+                "UNSAFE_EVIDENCE_PATH",
+                "evidence must use a non-empty project-relative POSIX path",
+                row_number,
+                capability_id,
+            )
+        ]
     pure_path = PurePosixPath(path_text)
     if pure_path.is_absolute() or ".." in pure_path.parts:
         return [
@@ -285,11 +370,21 @@ def _validate_evidence_reference(
         ]
 
     evidence_path = project_root.joinpath(*pure_path.parts)
-    if not evidence_path.is_file():
+    evidence_exists = evidence_path.is_file()
+    if not evidence_exists:
         issues.append(
             ValidationIssue(
                 "MISSING_EVIDENCE_FILE",
                 f"evidence file does not exist: {path_text}",
+                row_number,
+                capability_id,
+            )
+        )
+    if require_digest and not separator:
+        issues.append(
+            ValidationIssue(
+                "MISSING_EVIDENCE_SHA256",
+                "VERIFIED_* evidence must append #sha256=<64 hexadecimal characters>",
                 row_number,
                 capability_id,
             )
@@ -303,6 +398,28 @@ def _validate_evidence_reference(
                 capability_id,
             )
         )
+    elif separator and evidence_exists:
+        try:
+            actual = _sha256_file(evidence_path)
+        except OSError as error:
+            issues.append(
+                ValidationIssue(
+                    "EVIDENCE_READ_ERROR",
+                    f"cannot hash evidence file {path_text}: {error}",
+                    row_number,
+                    capability_id,
+                )
+            )
+            return issues
+        if actual.lower() != digest.lower():
+            issues.append(
+                ValidationIssue(
+                    "EVIDENCE_SHA256_MISMATCH",
+                    f"evidence digest does not match file content: {path_text}",
+                    row_number,
+                    capability_id,
+                )
+            )
     return issues
 
 
@@ -385,6 +502,47 @@ def validate_matrix(
         reference = (row.get("std_reference") or "").strip()
         framework_status = (row.get("framework_status") or "").strip()
         backend_status = (row.get("backend_status") or "").strip()
+        direction = (row.get("direction") or "").strip()
+        expected_direction = REQUIRED_DIRECTIONS.get(capability_id)
+        if expected_direction is not None and direction != expected_direction:
+            issues.append(
+                ValidationIssue(
+                    "INCORRECT_STANDARD_DIRECTION",
+                    f"IEEE 1815-2012 requires direction={expected_direction}",
+                    index,
+                    capability_id,
+                )
+            )
+        if capability_id in FORBIDDEN_LEGACY_IDS:
+            issues.append(
+                ValidationIssue(
+                    "NONCANONICAL_2012_IDENTIFIER",
+                    "use the exact IEEE 1815-2012 identifier required by the baseline",
+                    index,
+                    capability_id,
+                )
+            )
+        if (row.get("dut_pics_status") or "").strip() != "UNKNOWN":
+            issues.append(
+                ValidationIssue(
+                    "DUT_STATE_IN_CANONICAL_MATRIX",
+                    "the framework catalog must keep dut_pics_status=UNKNOWN; store per-DUT applicability in the versioned PICS overlay",
+                    index,
+                    capability_id,
+                )
+            )
+        if (
+            framework_status == "NOT_APPLICABLE_BY_PICS"
+            or backend_status == "NOT_APPLICABLE_BY_PICS"
+        ):
+            issues.append(
+                ValidationIssue(
+                    "DUT_STATE_IN_CANONICAL_MATRIX",
+                    "NOT_APPLICABLE_BY_PICS belongs in a per-DUT result overlay, not an implementation-status column",
+                    index,
+                    capability_id,
+                )
+            )
         if reference in UNRESOLVED_REFERENCES and framework_status != "BLOCKED":
             issues.append(
                 ValidationIssue(
@@ -444,18 +602,10 @@ def validate_matrix(
                     project_root=root,
                     row_number=index,
                     capability_id=capability_id,
-                )
-            )
-
-        if framework_status == "NOT_APPLICABLE_BY_PICS" and (
-            row.get("dut_pics_status") or ""
-        ).strip() != "NOT_SUPPORTED":
-            issues.append(
-                ValidationIssue(
-                    "PICS_STATUS_CONFLICT",
-                    "NOT_APPLICABLE_BY_PICS requires dut_pics_status=NOT_SUPPORTED",
-                    index,
-                    capability_id,
+                    require_digest=(
+                        framework_status in VERIFIED_STATUSES
+                        or backend_status in VERIFIED_STATUSES
+                    ),
                 )
             )
 

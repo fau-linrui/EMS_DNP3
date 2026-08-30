@@ -14,7 +14,7 @@
 在源码仓库根目录：
 
 ```powershell
-..venv\Scripts\python.exe -m dnp3_master.preflight `
+.\.venv\Scripts\python.exe -m dnp3_master.preflight `
   --pics .\config\ems.local.json `
   --points .\config\points.local.csv `
   --plan .\config\ems_test_plan.local.json `
@@ -25,7 +25,7 @@
 
 ```powershell
 $packageRoot = (Resolve-Path '.\third_party\ems_dnp3').Path
-..venv\Scripts\python.exe -m dnp3_master.preflight `
+.\.venv\Scripts\python.exe -m dnp3_master.preflight `
   --pics .\config\ems.local.json `
   --points .\config\points.local.csv `
   --plan .\config\ems_test_plan.local.json `
@@ -53,6 +53,7 @@ $packageRoot = (Resolve-Path '.\third_party\ems_dnp3').Path
 - 每个启用 Integrity/Class 场景的 G60、Class 和期望 Event 对象；
 - 每个启用主动上报场景的 FC20、FC21、FC130、Class 和 Event 对象；
 - 每个启用控制场景的 FC3/FC4 或 FC5、G12/G41、反馈对象及 Command Status。
+- 每条实际请求的限定符：逐点 Q00/Q01、Integrity/Class/unsolicited 控制 Q06、命令索引 Q17/Q28。
 
 每项必须同时满足：
 
@@ -61,12 +62,14 @@ $packageRoot = (Resolve-Path '.\third_party\ems_dnp3').Path
 
 `UNKNOWN`、缺失、`NOT_SUPPORTED`、`PLANNED`、`BLOCKED` 或后端不支持都会形成 blocker。未启用主动上报或控制只产生 warning，因为先做纯只读测试是允许的。设备 vendor/model/firmware/profile revision 中仍含 `FILL_ME/TODO/TBD/PLACEHOLDER/EXAMPLE` 会形成 blocker。
 
+固定 OpenDNP3 3.1.2 公共 API 不支持 Q02/Q09/Q39 的 32-bit range/count/index；矩阵明确标为 `UNSUPPORTED_BY_BACKEND`。仅在 PICS 中写 `SUPPORTED` 不会解锁这些路径，也不会自动降级到 8/16-bit。
+
 ## JSON 报告与审计
 
 加入 `--json` 可得到机器可读报告：
 
 ```powershell
-..venv\Scripts\python.exe -m dnp3_master.preflight `
+.\.venv\Scripts\python.exe -m dnp3_master.preflight `
   --pics .\config\ems.local.json `
   --points .\config\points.local.csv `
   --plan .\config\ems_test_plan.local.json `

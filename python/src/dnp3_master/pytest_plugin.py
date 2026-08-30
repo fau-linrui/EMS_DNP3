@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -21,6 +22,23 @@ from .point_table import PointTable, PointTableError, load_point_table
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _CAPABILITY_ID_PATTERN = re.compile(r"^[A-Z0-9]+(?:[._-][A-Z0-9]+)*$")
+_FRAMEWORK_READY_STATUSES = frozenset(
+    {
+        "IMPLEMENTED_UNVERIFIED",
+        "VERIFIED_UNIT",
+        "VERIFIED_INTEROP",
+        "VERIFIED_CONFORMANCE",
+    }
+)
+_FRAMEWORK_STATUSES = _FRAMEWORK_READY_STATUSES | frozenset(
+    {
+        "NOT_ANALYZED",
+        "UNSUPPORTED_BY_BACKEND",
+        "PLANNED",
+        "NOT_APPLICABLE_BY_PICS",
+        "BLOCKED",
+    }
+)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -239,13 +257,54 @@ def _load_capability_ids(path: Path) -> frozenset[str]:
                 capability_ids.add(capability_id)
     except pytest.UsageError:
         raise
-    except (OSError, csv.Error) as error:
+    except (OSError, UnicodeError, csv.Error) as error:
         raise pytest.UsageError(
             f"cannot read DNP3 capability matrix {path}: {error}"
         ) from error
     if not capability_ids:
         raise pytest.UsageError("DNP3 capability matrix must not be empty")
     return frozenset(capability_ids)
+
+
+def _load_framework_statuses(path: Path) -> dict[str, str]:
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream)
+            required = {"capability_id", "framework_status"}
+            if reader.fieldnames is None or not required.issubset(reader.fieldnames):
+                raise pytest.UsageError(
+                    "DNP3 capability matrix must contain capability_id and "
+                    "framework_status columns"
+                )
+            statuses: dict[str, str] = {}
+            for line_number, row in enumerate(reader, start=2):
+                capability_id = row.get("capability_id", "")
+                status = row.get("framework_status", "")
+                if not _CAPABILITY_ID_PATTERN.fullmatch(capability_id):
+                    raise pytest.UsageError(
+                        "DNP3 capability matrix has an invalid capability_id at "
+                        f"line {line_number}: {capability_id!r}"
+                    )
+                if capability_id in statuses:
+                    raise pytest.UsageError(
+                        "DNP3 capability matrix repeats capability_id "
+                        f"{capability_id!r}"
+                    )
+                if status not in _FRAMEWORK_STATUSES:
+                    raise pytest.UsageError(
+                        "DNP3 capability matrix has an invalid framework_status at "
+                        f"line {line_number}: {status!r}"
+                    )
+                statuses[capability_id] = status
+    except pytest.UsageError:
+        raise
+    except (OSError, UnicodeError, csv.Error) as error:
+        raise pytest.UsageError(
+            f"cannot read DNP3 capability matrix {path}: {error}"
+        ) from error
+    if not statuses:
+        raise pytest.UsageError("DNP3 capability matrix must not be empty")
+    return statuses
 
 
 def _auto_capability_matrix_path() -> Path | None:
@@ -294,23 +353,27 @@ def pytest_configure(config: pytest.Config) -> None:
     pics_path: Path | None = None
     matrix_path: Path | None = None
     capability_ids: frozenset[str] | None = None
+    matrix_path = (
+        Path(configured_matrix).expanduser().resolve(strict=False)
+        if configured_matrix
+        else _auto_capability_matrix_path()
+    )
+    framework_statuses: dict[str, str] | None = None
+    if matrix_path is not None:
+        capability_ids = _load_capability_ids(matrix_path)
+        framework_statuses = _load_framework_statuses(matrix_path)
     if configured:
         pics_path = Path(configured).expanduser().resolve(strict=False)
-        matrix_path = (
-            Path(configured_matrix).expanduser().resolve(strict=False)
-            if configured_matrix
-            else _auto_capability_matrix_path()
-        )
         if matrix_path is None:
             raise pytest.UsageError(
                 "a DNP3 PICS file requires config/capability_matrix.csv; pass "
                 "--dnp3-capability-matrix or set DNP3_CAPABILITY_MATRIX"
             )
-        capability_ids = _load_capability_ids(matrix_path)
         capabilities = _load_pics_capabilities(pics_path, capability_ids)
     setattr(config, "_dnp3_pics_capabilities", capabilities)
     setattr(config, "_dnp3_pics_path", pics_path)
     setattr(config, "_dnp3_capability_ids", capability_ids)
+    setattr(config, "_dnp3_framework_statuses", framework_statuses)
     setattr(config, "_dnp3_capability_matrix_path", matrix_path)
 
     configured_points = config.getoption("--dnp3-points-file") or os.environ.get(
@@ -500,6 +563,9 @@ def pytest_collection_modifyitems(
     known_capability_ids: frozenset[str] | None = getattr(
         config, "_dnp3_capability_ids", None
     )
+    framework_statuses: Mapping[str, str] | None = getattr(
+        config, "_dnp3_framework_statuses", None
+    )
     policy = _unknown_policy(config)
     state_changing_authorized = _state_changing_authorized(config)
     collection_errors: list[str] = []
@@ -585,6 +651,33 @@ def pytest_collection_modifyitems(
         if not capability_ids:
             collection_errors.append(
                 f"{item.nodeid}: dnp3_dut tests require at least one dnp3_capability marker"
+            )
+            continue
+
+        framework_not_ready = {
+            capability_id: (
+                framework_statuses.get(capability_id, "MISSING")
+                if framework_statuses is not None
+                else "MISSING"
+            )
+            for capability_id in capability_ids
+            if framework_statuses is None
+            or framework_statuses.get(capability_id) not in _FRAMEWORK_READY_STATUSES
+        }
+        if framework_not_ready:
+            item.add_marker(
+                pytest.mark.skip(
+                    reason=(
+                        "framework capability is not ready, so the DUT must not be "
+                        "touched: "
+                        + ", ".join(
+                            f"{capability_id}={status}"
+                            for capability_id, status in sorted(
+                                framework_not_ready.items()
+                            )
+                        )
+                    )
+                )
             )
             continue
 
@@ -675,6 +768,19 @@ def dnp3_host_config(pytestconfig: pytest.Config) -> HostProcessConfig:
     ) or os.environ.get("DNP3_SAFETY_INCIDENT_DIR")
     if not incident_directory:
         incident_directory = Path.cwd() / "evidence" / "local" / "safety-incidents"
+    matrix_path: Path | None = getattr(
+        pytestconfig, "_dnp3_capability_matrix_path", None
+    )
+    try:
+        matrix_sha256 = (
+            hashlib.sha256(matrix_path.read_bytes()).hexdigest()
+            if matrix_path is not None
+            else None
+        )
+    except OSError as error:
+        raise pytest.UsageError(
+            f"cannot hash DNP3 capability matrix {matrix_path}: {error}"
+        ) from error
     return HostProcessConfig(
         executable=Path(configured),
         arguments=tuple(pytestconfig.getoption("--dnp3-host-arg")),
@@ -682,6 +788,7 @@ def dnp3_host_config(pytestconfig: pytest.Config) -> HostProcessConfig:
         startup_timeout=pytestconfig.getoption("--dnp3-startup-timeout"),
         request_timeout=pytestconfig.getoption("--dnp3-request-timeout"),
         shutdown_timeout=pytestconfig.getoption("--dnp3-shutdown-timeout"),
+        expected_capability_matrix_sha256=matrix_sha256,
     )
 
 

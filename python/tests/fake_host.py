@@ -44,15 +44,19 @@ def error(
 
 
 def hello_result(mode: str = "normal") -> dict[str, Any]:
-    tcp_api = mode == "tcp_api"
+    tcp_api = mode in {"tcp_api", "hello_backend_mismatch"}
     return {
-        "host_version": "test",
+        "host_version": "0.5.1" if mode != "hello_version_mismatch" else "9.9.9",
         "backend": "opendnp3" if tcp_api else "none",
-        "backend_version": "3.1.2" if tcp_api else None,
+        "backend_version": (
+            "9.9.9" if mode == "hello_backend_mismatch" else "3.1.2"
+        ) if tcp_api else None,
         "git_commit": "test",
         "platform": "windows-x64",
         "capability_matrix_version": "test",
-        "capability_matrix_sha256": "0" * 64,
+        "capability_matrix_sha256": (
+            "f" * 64 if mode == "hello_matrix_mismatch" else "0" * 64
+        ),
         "supported_commands": (
             [
                 "class_poll",
@@ -126,6 +130,10 @@ def read_result(params: dict[str, Any]) -> dict[str, Any]:
             "received_total": 1,
             "stored_detail": len(measurements),
             "overflow": 0,
+            "fragments_received": 1,
+            "fragments_stored": 1,
+            "fragment_overflow": 0,
+            "max_fragments": 4096,
             "max_measurements": params.get("max_measurements", 10_000),
             "by_kind": {"analog_input": 1},
         },
@@ -144,6 +152,9 @@ def read_result(params: dict[str, Any]) -> dict[str, Any]:
             "raw_hex": "0000",
             "bits": [],
             "observations": [],
+            "observation_store_dropped_total": 0,
+            "observation_window_dropped": 0,
+            "observation_store_capacity": 1024,
         },
         "timings": {"duration_ms": 1.0},
         "received": params,
@@ -161,6 +172,10 @@ def command_result(command: str, params: dict[str, Any]) -> dict[str, Any]:
                 "state_raw": 5,
                 "status": "SUCCESS",
                 "status_raw": 0,
+                "status_edition": "IEEE1815-2012",
+                "status_backend": "SUCCESS",
+                "status_reserved_2012": False,
+                "status_wire_raw_unambiguous": True,
                 "requested": {
                     "request_ordinal": ordinal,
                     **requested,
@@ -437,6 +452,51 @@ def main() -> int:
             elif request["params"]["commands"][0].get("index") == 65532:
                 result = command_result(command, request["params"])
                 result.pop("summary")
+                write_json(success(request_id, result))
+            elif request["params"]["commands"][0].get("index") == 65531:
+                result = command_result(command, request["params"])
+                point = result["point_results"][0]
+                point.update(
+                    {
+                        "state": "FAILURE",
+                        "state_raw": 6,
+                        "status": "TIMEOUT",
+                        "status_raw": 1,
+                        "status_backend": "TIMEOUT",
+                    }
+                )
+                result["all_success"] = False
+                result["summary"].update(
+                    {"successful_points": 0, "failed_points": 1}
+                )
+                write_json(success(request_id, result))
+            elif request["params"]["commands"][0].get("index") == 65530:
+                result = command_result(command, request["params"])
+                result["point_results"][0]["requested"]["index"] = 1
+                write_json(success(request_id, result))
+            elif request["params"]["commands"][0].get("index") in {65528, 65529}:
+                result = command_result(command, request["params"])
+                point = result["point_results"][0]
+                raw = (
+                    18
+                    if request["params"]["commands"][0]["index"] == 65529
+                    else 127
+                )
+                point.update(
+                    {
+                        "state": "FAILURE",
+                        "state_raw": 6,
+                        "status": "RESERVED" if raw == 18 else "UNDEFINED",
+                        "status_raw": raw,
+                        "status_backend": "BLOCKED" if raw == 18 else "UNDEFINED",
+                        "status_reserved_2012": raw == 18,
+                        "status_wire_raw_unambiguous": raw != 127,
+                    }
+                )
+                result["all_success"] = False
+                result["summary"].update(
+                    {"successful_points": 0, "failed_points": 1}
+                )
                 write_json(success(request_id, result))
             elif request["params"]["commands"][0].get("index") == 65535:
                 write_json(

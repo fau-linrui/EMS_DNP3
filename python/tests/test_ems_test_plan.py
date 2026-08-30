@@ -55,6 +55,7 @@ def test_example_plan_loads_and_controls_remain_disabled() -> None:
     assert plan.poll_scenarios[0].capability_ids == (
         "APP.FC.01.READ",
         "APP.CLASS.EVENTS",
+        "QUAL.Q06.REVIEW",
         "OBJ.G60.V1",
         "OBJ.G60.V2",
         "OBJ.G60.V3",
@@ -63,6 +64,14 @@ def test_example_plan_loads_and_controls_remain_disabled() -> None:
     binary_event = plan.unsolicited_scenarios[0]
     assert binary_event.capability_ids(points.by_id["BI_DEMO_0001"])[-1] == (
         "OBJ.G2.V2"
+    )
+    assert "QUAL.Q06.REVIEW" in binary_event.capability_ids(
+        points.by_id["BI_DEMO_0001"]
+    )
+    assert (
+        plan.control_by_id["binary-output-latch-cycle"]
+        .command.qualifier_capability_id
+        == "QUAL.Q17.REVIEW"
     )
     assert plan.control_by_id["binary-output-latch-cycle"].command.to_command() == (
         CrobCommand(

@@ -174,6 +174,11 @@ def _required_capabilities(
             point.capability_id,
             f"enabled point {point.point_id}",
         )
+        _add_requirement(
+            requirements,
+            point.read_qualifier_capability_id,
+            f"one-point READ qualifier for {point.point_id}",
+        )
 
     for scenario in plan.enabled_poll_scenarios:
         reason = f"enabled poll scenario {scenario.scenario_id}"

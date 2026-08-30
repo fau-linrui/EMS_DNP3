@@ -7,6 +7,7 @@ import pytest
 
 from dnp3_master.pytest_plugin import (
     _load_capability_ids,
+    _load_framework_statuses,
     _load_pics_capabilities,
 )
 
@@ -84,6 +85,16 @@ def test_example_profile_uses_only_capabilities_from_matrix() -> None:
     assert set(capabilities).issubset(capability_ids)
 
 
+def test_framework_status_loader_rejects_missing_status_column(
+    tmp_path: Path,
+) -> None:
+    matrix = tmp_path / "matrix.csv"
+    matrix.write_text("capability_id\nAPP.FC.01.READ\n", encoding="utf-8")
+
+    with pytest.raises(pytest.UsageError, match="framework_status"):
+        _load_framework_statuses(matrix)
+
+
 @pytest.mark.parametrize(
     "document, message",
     [
@@ -155,6 +166,40 @@ def test_unknown_dut_capability_does_not_run(pytester: pytest.Pytester) -> None:
     result = pytester.runpytest("-q")
 
     result.assert_outcomes(xfailed=1)
+
+
+def test_supported_pics_cannot_run_blocked_framework_capability(
+    pytester: pytest.Pytester,
+) -> None:
+    profile = write_profile(
+        pytester.path / "profile.json", {"APP.FC.01.READ": "SUPPORTED"}
+    )
+    matrix = pytester.path / "matrix.csv"
+    matrix.write_text(
+        "capability_id,framework_status\nAPP.FC.01.READ,BLOCKED\n",
+        encoding="utf-8",
+    )
+    configure_nested_test(
+        pytester,
+        """
+        import pytest
+
+        @pytest.mark.dnp3_dut
+        @pytest.mark.dnp3_capability("APP.FC.01.READ")
+        def test_must_not_touch_dut():
+            raise AssertionError("blocked framework capability must not execute")
+        """,
+    )
+
+    result = pytester.runpytest(
+        "-q",
+        "--dnp3-pics-file",
+        str(profile),
+        "--dnp3-capability-matrix",
+        str(matrix),
+    )
+
+    result.assert_outcomes(skipped=1)
 
 
 def test_not_supported_selects_only_negative_behavior(

@@ -1,6 +1,6 @@
 # dnp3-master-test-framework Python package
 
-This directory is the portable pytest-facing layer. Version 0.5.0 provides the
+This directory is the portable pytest-facing layer. Version 0.5.1 provides the
 synchronous `Dnp3MasterClient`, validated TCP/read/control models, typed task
 results, strict process/protocol exceptions, bounded diagnostics, PICS-aware
 selection, strict EMS scenario plans, an offline configuration preflight,

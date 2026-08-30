@@ -2,7 +2,7 @@
 
 本文面向不熟悉 C++ 的测试开发人员。正常使用时，你只需要写 Python/pytest；C++ 已封装在 `dnp3-master-host.exe` 中，不需要在测试代码里调用 OpenDNP3，也不需要理解 C++ 指针或编译器细节。
 
-> 当前版本：0.5.0，目标平台 Windows x64，固定协议栈 OpenDNP3 3.1.2。当前实现已完成本机 TCP、Read/Class Poll、主动上报、测量值/IIN、CROB 和四种 Analog Output 控制的同栈回归，并提供可编程回环从站、可复制的严格 EMS pytest 场景套件和不连接 DUT 的配置预检，但尚未代表真实 EMS 互操作或 IEEE 一致性认证。
+> 当前版本：0.5.1，目标平台 Windows x64，固定协议栈 OpenDNP3 3.1.2。当前实现已完成本机 TCP、Read/Class Poll、主动上报、测量值/IIN、CROB 和四种 Analog Output 控制的同栈回归，并提供可编程回环从站、可复制的严格 EMS pytest 场景套件和不连接 DUT 的配置预检，但尚未代表真实 EMS 互操作或 IEEE 一致性认证。
 
 ## 1. 先理解四个目录
 
@@ -55,9 +55,9 @@ cd D:\Work\Code\EMS_DNP3
 产物位于：
 
 ```text
-out\package\ems-dnp3-pytest-0.5.0\
-out\package\ems-dnp3-pytest-0.5.0.zip
-out\package\ems-dnp3-pytest-0.5.0.zip.sha256
+out\package\ems-dnp3-pytest-0.5.1\
+out\package\ems-dnp3-pytest-0.5.1.zip
+out\package\ems-dnp3-pytest-0.5.1.zip.sha256
 ```
 
 打包过程会在临时目录解开 ZIP、逐文件验证 `package-manifest.json`，再执行一次 DNP3 读写回环自检。将 ZIP 和 `.sha256` 一起传入内网；传输后先用 `Get-FileHash -Algorithm SHA256` 与旁车文件第一列比对，再解压。包中包含主程序、只用于本机自检的测试从站、Python 源码、Schema、能力矩阵、严格点表/场景计划示例、可复制 EMS pytest 套件、依赖锁、许可证和本文档，不包含 IEEE 标准 PDF、EMS 本地配置、抓包或密钥。
@@ -158,6 +158,8 @@ out\build\windows-msvc-release\bin\dnp3-local-test-outstation.exe
 .\scripts\test-lifecycle.ps1 -Preset windows-msvc-release -Iterations 1000
 ```
 
+脚本会先预热一次，再比较当前 pytest 进程的句柄和线程数。通过条件是线程数不增长，句柄最终值不超过预热基线加 8（给 Windows/pytest 的小幅系统噪声留余量），并且每个 host 都以返回码 0 退出且无需强制清理。看到类似 `handles=148->150` 并不自动等于泄漏，应以 pytest 最终是否通过为准；若失败，不要提高阈值掩盖问题，应保留完整输出并定位未关闭的进程、管道或 Job Object。
+
 ## 5. 接入另一个 pytest 自动化框架
 
 本章只适用于“把 DNP3 能力接入另一个 pytest 项目”。如果你准备直接在当前源码仓库中编写和运行用例，请跳过本章并进入第 6 章。
@@ -180,7 +182,8 @@ out\build\windows-msvc-release\bin\dnp3-local-test-outstation.exe
 两条路线最终都应得到以下可移植内容：
 
 ```text
-ems-dnp3-pytest-0.5.0\
+ems-dnp3-pytest-0.5.1\
+  CHANGELOG.md
   bin\dnp3-master-host.exe
   python\
   config\
@@ -208,7 +211,7 @@ New-Item -ItemType Directory `
   -Path (Join-Path $targetProject 'third_party') `
   -Force | Out-Null
 Copy-Item `
-  -LiteralPath '.\out\package\ems-dnp3-pytest-0.5.0' `
+  -LiteralPath '.\out\package\ems-dnp3-pytest-0.5.1' `
   -Destination $packageRoot `
   -Recurse
 ```
@@ -218,7 +221,7 @@ Copy-Item `
 ```powershell
 $targetProject = 'D:\Automation\MyPytest'
 $packageRoot = Join-Path $targetProject 'third_party\ems_dnp3'
-$zip = (Resolve-Path '.\ems-dnp3-pytest-0.5.0.zip').Path
+$zip = (Resolve-Path '.\ems-dnp3-pytest-0.5.1.zip').Path
 $expectedHash = (
   (Get-Content -LiteralPath "$zip.sha256" -Raw).Trim() -split '\s+'
 )[0].ToLowerInvariant()
@@ -242,6 +245,7 @@ Expand-Archive `
   conftest.py
   tests\
   third_party\ems_dnp3\
+    CHANGELOG.md
     bin\dnp3-master-host.exe
     python\
     config\
@@ -370,7 +374,7 @@ Copy-Item `
 
 不要为了让测试“变绿”而把 `UNKNOWN` 改成 `SUPPORTED`。
 
-插件会把 PICS 中的每个能力 ID 与 `config\capability_matrix.csv` 交叉检查，拼错或不存在的 ID 会在收集阶段直接报错。整包/推荐目录无需额外参数；如果你改变了目录布局，请同时传入 `--dnp3-capability-matrix ".\third_party\ems_dnp3\config\capability_matrix.csv"`。
+插件会把 PICS 中的每个能力 ID 与 `config\capability_matrix.csv` 交叉检查，拼错或不存在的 ID 会在收集阶段直接报错。PICS 写成 `SUPPORTED` 也不能覆盖框架的 `BLOCKED` 或 `UNSUPPORTED_BY_BACKEND`；此类用例会在接触 EMS 前跳过。插件还会把矩阵 SHA-256 与 host 握手值比较，防止复制时混入旧 EXE。整包/推荐目录无需额外参数；如果你改变了目录布局，请同时传入 `--dnp3-capability-matrix ".\third_party\ems_dnp3\config\capability_matrix.csv"`。
 
 ### 6.2 在任何 EMS 连接前执行离线预检
 
@@ -398,8 +402,23 @@ Copy-Item `
 import pytest
 
 
+_REQUEST_ERROR_IIN_BITS = frozenset(
+    {
+        "IIN2.0.NO_FUNC_CODE_SUPPORT",
+        "IIN2.1.OBJECT_UNKNOWN",
+        "IIN2.2.PARAMETER_ERROR",
+    }
+)
+
+
 @pytest.mark.dnp3_dut
 @pytest.mark.dnp3_capability("APP.FC.01.READ")
+@pytest.mark.dnp3_capability("APP.CLASS.EVENTS")
+@pytest.mark.dnp3_capability("QUAL.Q06.REVIEW")
+@pytest.mark.dnp3_capability("OBJ.G60.V1")
+@pytest.mark.dnp3_capability("OBJ.G60.V2")
+@pytest.mark.dnp3_capability("OBJ.G60.V3")
+@pytest.mark.dnp3_capability("OBJ.G60.V4")
 def test_ems_integrity_read(connected_master):
     result = connected_master.integrity_poll(
         timeout=10.0,
@@ -407,9 +426,12 @@ def test_ems_integrity_read(connected_master):
         return_mode="detail",
     )
     assert result.task_status == "SUCCESS"
-    assert result.iin["raw_hex"]
+    assert _REQUEST_ERROR_IIN_BITS.isdisjoint(result.iin["bits"])
+    assert result.iin["observation_window_dropped"] == 0
     assert result.summary["received_total"] == len(result.measurements)
 ```
+
+`raw_hex` 是必须存在的四位字符串，`"0000"` 也会让普通真值断言通过，因此不能用 `assert result.iin["raw_hex"]` 判断请求是否被 EMS 接受。手写用例还必须像上例一样声明全部实际依赖；插件不会解析函数体来推断 G60 或 Q06。推荐使用现成场景模板自动生成这些标记。
 
 下面的命令以“已经按第 5 章接入另一个 pytest 项目”为例，运行时显式传入本地参数：
 
@@ -429,41 +451,63 @@ def test_ems_integrity_read(connected_master):
 
 如果直接在源码仓库中运行路线 A，把 `--dnp3-host-exe` 改为：
 
-```powershell
+```text
 --dnp3-host-exe ".\out\build\windows-msvc-release\bin\dnp3-master-host.exe"
 ```
 
 将示例 IP 和地址换成实验 EMS 的真实参数。`--dnp3-unknown-policy error` 适合正式执行，可防止因 PICS 漏填而悄悄跳过。
 
-如不想从零写用例，可把包内 `examples\pytest_ems` 整体复制进既有框架。未提供配置时示例会安全跳过；提供严格点表和场景计划后，可直接收集逐点 Static Read、完整性/Class、主动上报和控制闭环用例。主动上报与控制默认关闭，控制还必须逐次精确选择。每个参数化用例会自动附加所需功能码、Group/Variation 等能力 ID，以便 PICS 在连接 DUT 前完成门控。
+如不想从零写用例，可把包内 `examples\pytest_ems` 整体复制进既有框架。未提供配置时示例会安全跳过；提供严格点表和场景计划后，可直接收集逐点 Static Read、完整性/Class、主动上报和控制闭环用例。主动上报与控制默认关闭，控制还必须逐次精确选择。每个参数化用例会自动附加所需功能码、Group/Variation 和 Q00/Q01/Q06/Q17/Q28 等实际限定符能力 ID，以便 PICS 与框架状态在连接 DUT 前共同门控。固定后端不能表达 Q02/Q09/Q39，不能用 16-bit 请求冒充。
 
 `--dnp3-evidence-dir` 会为每次运行创建独立目录，生成脱敏 `manifest.json` 和 `pytest-results.json`，只记录 PICS、点表、场景计划和矩阵的文件名、大小和 SHA-256，不复制私有原文。记录器会替换已知的项目、测试、host、输入和证据绝对路径，并遮盖常见密钥字段；但任意第三方库输出可能包含记录器不了解的业务数据，因此证据对外传递前仍必须人工复核。
 
 范围读取示例：
 
 ```python
+import pytest
+
 from dnp3_master import ReadHeader
 
 
+@pytest.mark.dnp3_dut
+@pytest.mark.dnp3_capability("APP.FC.01.READ")
+@pytest.mark.dnp3_capability("OBJ.G30.V5")
+@pytest.mark.dnp3_capability("QUAL.Q01.REVIEW")
 def test_one_analog_point(connected_master):
     result = connected_master.read(
-        [ReadHeader.range16(group=30, variation=0, start=0, stop=0)],
+        [ReadHeader.range16(group=30, variation=5, start=0, stop=0)],
         timeout=5.0,
     )
+    assert not {
+        "IIN2.0.NO_FUNC_CODE_SUPPORT",
+        "IIN2.1.OBJECT_UNKNOWN",
+        "IIN2.2.PARAMETER_ERROR",
+    }.intersection(result.iin["bits"])
+    assert result.iin["observation_window_dropped"] == 0
     analogs = result.measurements_of_kind("analog_input")
     assert len(analogs) == 1
     assert analogs[0].index == 0
 ```
+
+该例按当前 EMS 操作约定使用 G30V5 和 16-bit range/Q01。若真实 PICS/点表选择其他 Variation 或索引宽度，必须同时修改 Header、对象能力 ID 和 Qualifier 能力 ID，不能只改其中一处。
 
 还可调用 `class_poll((1, 2, 3))`，或一次向 `read([...])` 传入最多 64 个严格校验的 Header。大量点优先使用 `return_mode="summary"`，避免在结果中保留和传输巨大的逐点 JSON。当前 EMS 约定声称事件/Class 1～3 Read 恒为空，这与标准事件轮询存在差异；只有在“确认无事件”和“人工产生已知事件”两个场景都保存证据后，才能形成 DUT 结论。
 
 主动上送必须显式启停，不会在连接时偷偷开启：
 
 ```python
-connected_master.enable_unsolicited((1, 2), timeout=5.0)
-batch = connected_master.wait_unsolicited(wait_timeout=10.0, max_events=256)
-assert all(item.source == "unsolicited" for item in batch.measurements)
-connected_master.disable_unsolicited((1, 2), timeout=5.0)
+enabled = connected_master.enable_unsolicited((1, 2), timeout=5.0)
+try:
+    assert enabled.task_status == "SUCCESS"
+    batch = connected_master.wait_unsolicited(
+        wait_timeout=10.0,
+        max_events=256,
+    )
+    assert batch.summary["dropped_total"] == 0
+    assert all(item.source == "unsolicited" for item in batch.measurements)
+finally:
+    disabled = connected_master.disable_unsolicited((1, 2), timeout=5.0)
+    assert disabled.task_status == "SUCCESS"
 ```
 
 队列默认最多保留 4096 条并采用 drop-oldest；`dropped_total > 0` 必须判失败并保存证据。当前已完成 FC20/FC21、G60V2/V3/V4 和 G2V2/G32V7 的本机同栈验证；Confirm 丢失、序号回绕、重发/重复等原始时序仍需独立故障注入和真实 EMS 验证。
@@ -487,7 +531,7 @@ connected_master.disable_unsolicited((1, 2), timeout=5.0)
 
 运行命令除第 6 节参数外，还需：
 
-```powershell
+```text
 --dnp3-control-scenario "exact-approved-scenario-id" `
 --dnp3-allow-state-changing `
 --dnp3-operator-id "your-name-or-ticket" `
@@ -536,10 +580,10 @@ pytest 默认把锁放在 `evidence/local/safety-incidents`。直接使用 `Dnp3
 | EXE 无法启动/缺 DLL | 路径是否为 x64 Release 包；安装 VC++ 2015–2022 Redistributable x64；检查杀毒软件隔离记录 |
 | 卡在 `native.host_smoke` 超过 15 秒 | 当前版本会自动发送 `hello`/`shutdown`，并有 10 秒进程超时和 15 秒 CTest 上限；若仍卡住，通常是旧提交或旧 CTest 配置，先拉取最新代码并重新执行 `build.ps1`，不要用关闭终端输入作为长期方案 |
 | `CONNECTION_TIMEOUT` | EMS 是否作为 TCP Server 监听、IP/端口/路由/防火墙是否正确；先不要尝试控制 |
-| `DNP3_RESPONSE_TIMEOUT` | TCP 可能已通，但链路地址、请求对象、EMS 状态或超时配置不匹配 |
+| `RESPONSE_TIMEOUT` | TCP 可能已通，但链路地址、请求对象、EMS 状态或超时配置不匹配；控制出现该错误时还必须按不确定结果事故锁流程处置 |
 | `NOT_CONNECTED` | fixture 是否成功连接；是否已提前断开或 host 已退出 |
 | 用例显示 `xfailed` | PICS 未提供、能力缺失或为 `UNKNOWN`；查看 `-ra` 原因 |
-| 正向用例被跳过 | PICS 将能力声明为 `NOT_SUPPORTED` |
+| 正向用例被跳过 | PICS 将能力声明为 `NOT_SUPPORTED`，或能力矩阵中的框架状态仍为 `BLOCKED`/`UNSUPPORTED_BY_BACKEND`；用 `-ra` 查看准确原因 |
 | `invalid DNP3 EMS test plan` | 检查未知/重复字段、点号、Event Class、timeout、控制恢复基线和授权占位符；配置错误发生在连接 EMS 前 |
 | 控制用例显示 `no control selected` | 这是默认安全状态；只有获批后才传 `--dnp3-control-scenario <精确ID>` |
 | `SAFETY_INTERLOCK` | 未按第 7 节完成全部解锁条件，或令牌已因断开而过期 |
@@ -548,7 +592,7 @@ pytest 默认把锁放在 `evidence/local/safety-incidents`。直接使用 `Dnp3
 | `SafetyIncidentPersistenceError` | 锁无法可靠落盘/读取；停止全部控制，保留现场并修复存储 |
 | 命令返回但 `all_success=False` | 检查每个 `point_results[i].status`，不能只看整个批次 |
 | 控制成功但反馈未到目标值 | 不要重发或盲目恢复；停止后续控制、人工读回设备实际状态并保存证据 |
-| `QUEUE_OVERFLOW` | 提高经评审的 `max_measurements`，或改用 `return_mode="summary"`；不要忽略数据丢失 |
+| `QUEUE_OVERFLOW` | 先检查结构化 `error.details`，区分测量数、4096 条分片记录或 1024 条 IIN 观测窗口溢出。`summary` 只减少明细内存/JSON，不会取消 `max_measurements` 完整性上限；测量数不足时可经评审提高上限或拆分请求，分片/IIN 溢出时应缩小/拆分场景并保存诊断，任何情况都不能忽略数据丢失 |
 | `OBJECT_UNKNOWN` IIN | PICS/对象组/变体可能与 EMS 不一致；保存原始 IIN 并停止扩大测试范围 |
 
 排查顺序建议固定为：先运行本机自检，再只测 TCP 连接，再做一个只读范围点，最后才做总召/事件/控制。这样能快速定位是安装、网络、地址、PICS、点表还是 EMS 行为问题。

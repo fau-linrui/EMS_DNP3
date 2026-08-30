@@ -67,7 +67,7 @@ from .safety_incidents import (
     dut_identity_sha256,
 )
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 TARGET_STANDARD = "IEEE1815-2012"
 
 __all__ = [

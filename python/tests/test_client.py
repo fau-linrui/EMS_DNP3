@@ -11,6 +11,7 @@ from dnp3_master import (
     AnalogOutputCommand,
     ClientStateError,
     CommandTaskResult,
+    CommandPointResult,
     CrobCommand,
     Dnp3MasterClient,
     HostCommandError,
@@ -33,6 +34,132 @@ from dnp3_master.client import _TailBuffer
 
 
 FAKE_HOST = Path(__file__).with_name("fake_host.py")
+
+
+@pytest.mark.parametrize(
+    ("raw", "status"),
+    [
+        (0, "SUCCESS"),
+        (1, "TIMEOUT"),
+        (2, "NO_SELECT"),
+        (3, "FORMAT_ERROR"),
+        (4, "NOT_SUPPORTED"),
+        (5, "ALREADY_ACTIVE"),
+        (6, "HARDWARE_ERROR"),
+        (7, "LOCAL"),
+        (8, "TOO_MANY_OBJS"),
+        (9, "NOT_AUTHORIZED"),
+        (10, "AUTOMATION_INHIBIT"),
+        (11, "PROCESSING_LIMITED"),
+        (12, "OUT_OF_RANGE"),
+        (126, "NON_PARTICIPATING"),
+        (127, "UNDEFINED"),
+    ],
+)
+def test_command_status_exact_ieee_1815_2012_names(raw: int, status: str) -> None:
+    point = CommandPointResult.from_mapping(
+        {
+            "header_index": 0,
+            "index": 1,
+            "state": "SUCCESS" if raw == 0 else "FAILURE",
+            "state_raw": 5 if raw == 0 else 6,
+            "status": status,
+            "status_raw": raw,
+            "status_edition": "IEEE1815-2012",
+            "status_backend": status,
+            "status_reserved_2012": False,
+            "status_wire_raw_unambiguous": raw != 127,
+            "requested": None,
+        }
+    )
+
+    assert point.status == status
+
+
+def test_command_status_uses_the_ieee_1815_2012_catalog() -> None:
+    reserved = CommandPointResult.from_mapping(
+        {
+            "header_index": 0,
+            "index": 7,
+            "state": "FAILURE",
+            "state_raw": 6,
+            "status": "RESERVED",
+            "status_raw": 13,
+            "status_edition": "IEEE1815-2012",
+            "status_backend": "DOWNSTREAM_LOCAL",
+            "status_reserved_2012": True,
+            "status_wire_raw_unambiguous": True,
+            "requested": None,
+        }
+    )
+
+    assert reserved.status == "RESERVED"
+    assert reserved.status_backend == "DOWNSTREAM_LOCAL"
+    assert reserved.status_reserved_2012 is True
+    assert reserved.status_wire_raw_unambiguous is True
+
+
+def test_command_status_rejects_a_later_edition_name_in_2012_mode() -> None:
+    with pytest.raises(ValueError, match="does not match IEEE 1815-2012"):
+        CommandPointResult.from_mapping(
+            {
+                "header_index": 0,
+                "index": 7,
+                "state": "FAILURE",
+                "state_raw": 6,
+                "status": "DOWNSTREAM_LOCAL",
+                "status_raw": 13,
+                "status_edition": "IEEE1815-2012",
+                "status_backend": "DOWNSTREAM_LOCAL",
+                "status_reserved_2012": True,
+                "status_wire_raw_unambiguous": True,
+                "requested": None,
+            }
+        )
+
+
+def test_command_status_127_exposes_opendnp3_wire_ambiguity() -> None:
+    undefined = CommandPointResult.from_mapping(
+        {
+            "header_index": 0,
+            "index": 7,
+            "state": "FAILURE",
+            "state_raw": 6,
+            "status": "UNDEFINED",
+            "status_raw": 127,
+            "status_edition": "IEEE1815-2012",
+            "status_backend": "UNDEFINED",
+            "status_reserved_2012": False,
+            "status_wire_raw_unambiguous": False,
+            "requested": None,
+        }
+    )
+
+    assert undefined.status_wire_raw_unambiguous is False
+    assert undefined.requires_manual_readback is True
+
+
+def test_command_status_safety_policy_distinguishes_uncertain_from_rejected() -> None:
+    def point(raw: int, status: str) -> CommandPointResult:
+        return CommandPointResult.from_mapping(
+            {
+                "header_index": 0,
+                "index": 7,
+                "state": "FAILURE",
+                "state_raw": 6,
+                "status": status,
+                "status_raw": raw,
+                "status_edition": "IEEE1815-2012",
+                "status_backend": status,
+                "status_reserved_2012": 13 <= raw <= 125,
+                "status_wire_raw_unambiguous": raw != 127,
+                "requested": None,
+            }
+        )
+
+    assert point(1, "TIMEOUT").requires_manual_readback is True
+    assert point(18, "RESERVED").requires_manual_readback is True
+    assert point(2, "NO_SELECT").requires_manual_readback is False
 
 
 def test_diagnostic_tail_redacts_safety_tokens_across_chunks() -> None:
@@ -79,11 +206,38 @@ def test_context_manager_performs_hello_and_graceful_shutdown() -> None:
 
 def test_host_command_error_is_typed_and_process_remains_usable() -> None:
     with Dnp3MasterClient(fake_config("normal")) as client:
-        with pytest.raises(HostCommandError) as captured:
+        with pytest.raises(ClientStateError, match="raw request"):
             client.request("connect")
-        assert captured.value.code == "UNSUPPORTED_BY_BACKEND"
-        assert captured.value.details == {"source": "fake_host"}
         assert client.get_status()["state"] == "READY"
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        "hello",
+        "shutdown",
+        "connect",
+        "disconnect",
+        "read",
+        "direct_operate",
+        "select_and_operate",
+    ),
+)
+def test_public_raw_request_cannot_bypass_typed_state_and_safety(
+    command: str,
+) -> None:
+    with Dnp3MasterClient(fake_config("normal")) as client:
+        with pytest.raises(ClientStateError, match="typed"):
+            client.request(command)
+        assert client.is_running
+
+
+def test_public_raw_request_remains_available_for_unknown_extensions() -> None:
+    with Dnp3MasterClient(fake_config("normal")) as client:
+        with pytest.raises(HostCommandError) as captured:
+            client.request("vendor.read_only_extension")
+        assert captured.value.code == "INVALID_REQUEST"
+        assert client.is_running
 
 
 def test_tcp_helpers_use_validated_protocol_parameters() -> None:
@@ -552,6 +706,74 @@ def test_uncertain_or_invalid_success_result_creates_incident(
     client.close()
 
 
+@pytest.mark.parametrize(
+    ("index", "expected_exception"),
+    [
+        (65531, HostCommandError),
+        (65530, HostProtocolError),
+        (65529, HostCommandError),
+        (65528, HostCommandError),
+    ],
+)
+def test_unsafe_point_status_or_bad_correlation_destroys_session(
+    tmp_path: Path,
+    index: int,
+    expected_exception: type[Exception],
+) -> None:
+    connection = TcpConnectionConfig(
+        host="127.0.0.1",
+        safety=LabSafetyConfig(
+            operator_id="pytest-operator",
+            dut_id=f"point-result-dut-{index}",
+            allow_state_change=True,
+        ),
+    )
+    incident_directory = tmp_path / str(index)
+    client = Dnp3MasterClient(
+        fake_config("tcp_api", safety_incident_directory=incident_directory)
+    )
+    client.start()
+    client.connect(connection)
+
+    with pytest.raises(expected_exception) as captured:
+        client.direct_operate(
+            [CrobCommand(index=index, operation="latch_on")], timeout=0.25
+        )
+
+    assert getattr(captured.value, "incident_id", None) is not None or getattr(
+        captured.value, "details", {}
+    ).get("incident_id")
+    assert not client.is_running
+    assert len(tuple((incident_directory / "active").glob("*.json"))) == 1
+    client.close()
+
+
+def test_hello_rejects_mixed_host_version() -> None:
+    client = Dnp3MasterClient(fake_config("hello_version_mismatch"))
+    with pytest.raises(HostProtocolError, match="version does not match"):
+        client.start()
+    assert not client.is_running
+
+
+def test_hello_rejects_mixed_capability_matrix_hash() -> None:
+    client = Dnp3MasterClient(
+        fake_config(
+            "hello_matrix_mismatch",
+            expected_capability_matrix_sha256="0" * 64,
+        )
+    )
+    with pytest.raises(HostProtocolError, match="matrix hash"):
+        client.start()
+    assert not client.is_running
+
+
+def test_hello_rejects_unpinned_opendnp3_version() -> None:
+    client = Dnp3MasterClient(fake_config("hello_backend_mismatch"))
+    with pytest.raises(HostProtocolError, match="pinned 3.1.2"):
+        client.start()
+    assert not client.is_running
+
+
 def test_startup_timeout_terminates_process_and_preserves_diagnostics() -> None:
     client = Dnp3MasterClient(
         fake_config("silent", startup_timeout=0.1, shutdown_timeout=0.1)
@@ -683,6 +905,8 @@ def test_missing_executable_fails_before_process_creation(tmp_path: Path) -> Non
         ("diagnostic_tail_bytes", True),
         ("max_response_bytes", 63),
         ("max_response_bytes", True),
+        ("expected_host_version", ""),
+        ("expected_capability_matrix_sha256", "not-a-sha256"),
     ],
 )
 def test_process_config_rejects_invalid_limits(field: str, value: object) -> None:

@@ -141,6 +141,9 @@ def test_complete_private_configuration_reports_ready(tmp_path: Path) -> None:
         "OBJ.G12.V1",
         "OBJ.G32.V7",
         "OBJ.G41.V3",
+        "QUAL.Q01.REVIEW",
+        "QUAL.Q06.REVIEW",
+        "QUAL.Q17.REVIEW",
     }.issubset(capability_ids)
     assert all(item["ready"] for item in report["required_capabilities"])
 

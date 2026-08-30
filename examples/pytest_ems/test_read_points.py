@@ -4,6 +4,8 @@ import pytest
 
 from dnp3_master import Dnp3MasterClient, PointDefinition
 
+from ._scenario_helpers import assert_read_task_success
+
 
 pytestmark = [
     pytest.mark.dnp3_dut,
@@ -25,6 +27,7 @@ def test_configured_static_point_read(
         timeout=pytestconfig.getoption("--ems-point-read-timeout"),
         max_measurements=16,
     )
+    assert_read_task_success(result, ems_point.point_id)
     matches = ems_point.matching_measurements(result.measurements)
     assert len(matches) == 1, (
         f"{ems_point.point_id} expected exactly one "

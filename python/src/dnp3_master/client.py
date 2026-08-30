@@ -50,6 +50,25 @@ _DIAGNOSTIC_SAFETY_TOKEN_PATTERN = re.compile(
     r'("safety_token"\s*:\s*")[0-9a-fA-F]{32}(")'
 )
 _STDOUT_EOF = object()
+_TYPED_API_COMMANDS = frozenset(
+    {
+        "hello",
+        "shutdown",
+        "connect",
+        "disconnect",
+        "get_status",
+        "stats",
+        "wait_event",
+        "integrity_poll",
+        "class_poll",
+        "read",
+        "enable_unsolicited",
+        "disable_unsolicited",
+        "wait_unsolicited",
+        "select_and_operate",
+        "direct_operate",
+    }
+)
 
 
 class _State(Enum):
@@ -241,6 +260,27 @@ class Dnp3MasterClient:
         *,
         timeout: float | None = None,
     ) -> Any:
+        """Send an extension command that has no typed client API.
+
+        Commands implemented by this package must go through their typed method.
+        This keeps lifecycle state, safety tokens, result validation, and the
+        persistent uncertain-control lock synchronized with the native host.
+        """
+
+        if command in _TYPED_API_COMMANDS:
+            raise ClientStateError(
+                f"raw request for {command!r} is blocked; use the typed "
+                "Dnp3MasterClient method"
+            )
+        return self._request(command, params, timeout=timeout)
+
+    def _request(
+        self,
+        command: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> Any:
         with self._request_lock:
             if self._state is not _State.RUNNING:
                 state_name = "closed" if self._state in {_State.CLOSED, _State.BROKEN} else "not started"
@@ -261,7 +301,7 @@ class Dnp3MasterClient:
             return self._exchange(command, request_params, normalized_deadline)
 
     def get_status(self, *, timeout: float | None = None) -> Mapping[str, Any]:
-        result = self.request("get_status", timeout=timeout)
+        result = self._request("get_status", timeout=timeout)
         if not isinstance(result, dict):
             self._abort_process("get_status returned a non-object result")
             raise HostProtocolError(
@@ -273,7 +313,7 @@ class Dnp3MasterClient:
     def get_stats(self, *, timeout: float | None = None) -> Mapping[str, Any]:
         """Return bounded host/channel counters and an explicit scope statement."""
 
-        return self._mapping_result("stats", self.request("stats", timeout=timeout))
+        return self._mapping_result("stats", self._request("stats", timeout=timeout))
 
     def connect(
         self,
@@ -292,7 +332,7 @@ class Dnp3MasterClient:
         )
         result = self._mapping_result(
             "connect",
-            self.request("connect", config.to_params(), timeout=request_timeout),
+            self._request("connect", config.to_params(), timeout=request_timeout),
         )
         safety = result.get("safety")
         if not isinstance(safety, Mapping):
@@ -335,7 +375,7 @@ class Dnp3MasterClient:
 
         result = self._mapping_result(
             "disconnect",
-            self.request("disconnect", timeout=timeout),
+            self._request("disconnect", timeout=timeout),
         )
         self._safety_token = None
         return result
@@ -406,7 +446,7 @@ class Dnp3MasterClient:
         )
         return self._mapping_result(
             "wait_event",
-            self.request(
+            self._request(
                 "wait_event",
                 {"timeout_ms": wait_timeout_ms, "max_events": max_events},
                 timeout=exchange_timeout,
@@ -478,7 +518,7 @@ class Dnp3MasterClient:
         )
         result = self._mapping_result(
             "wait_unsolicited",
-            self.request(
+            self._request(
                 "wait_unsolicited",
                 {
                     "timeout_ms": round(normalized_wait_timeout * 1000),
@@ -679,7 +719,7 @@ class Dnp3MasterClient:
             "commands": command_payload["commands"],
         }
         try:
-            raw_result = self.request(command, params, timeout=exchange_timeout)
+            raw_result = self._request(command, params, timeout=exchange_timeout)
             result = self._mapping_result(command, raw_result)
         except HostCommandError as error:
             if (
@@ -716,6 +756,7 @@ class Dnp3MasterClient:
             raise
         try:
             parsed = CommandTaskResult.from_mapping(result)
+            self._validate_command_correlation(command, normalized, parsed)
         except (TypeError, ValueError, KeyError) as error:
             protocol_error = HostProtocolError(
                 f"{command} result is invalid: {error}", self.diagnostics
@@ -731,15 +772,27 @@ class Dnp3MasterClient:
                 original_error=protocol_error,
             )
             raise protocol_error from error
-        if parsed.execution_uncertain:
+        unsafe_points = tuple(
+            point
+            for point in parsed.point_results
+            if point.requires_manual_readback
+        )
+        if parsed.execution_uncertain or unsafe_points:
             uncertain_error = HostCommandError(
                 request_id=f"command-task-{parsed.task_id}",
                 code="UNCERTAIN_COMMAND_RESULT",
-                message="command result reports execution_uncertain=true",
+                message=(
+                    "command result requires independent readback before the "
+                    "session can be reused"
+                ),
                 details={
                     "execution_uncertain": True,
                     "may_still_execute": True,
                     "automatic_retry_safe": False,
+                    "manual_readback_points": len(unsafe_points),
+                    "unsafe_status_raw": sorted(
+                        {point.status_raw for point in unsafe_points}
+                    ),
                 },
             )
             self._handle_uncertain_command(
@@ -754,6 +807,47 @@ class Dnp3MasterClient:
             )
             raise uncertain_error
         return parsed
+
+    def _validate_command_correlation(
+        self,
+        operation: str,
+        commands: Sequence[CrobCommand | AnalogOutputCommand],
+        result: CommandTaskResult,
+    ) -> None:
+        if result.mode != operation:
+            raise ValueError(
+                f"command result mode {result.mode!r} does not match {operation!r}"
+            )
+        if len(result.point_results) != len(commands):
+            raise ValueError(
+                "command point_results count does not match the submitted batch"
+            )
+        seen_ordinals: set[int] = set()
+        for point in result.point_results:
+            requested = point.requested
+            if requested is None:
+                raise ValueError("command point result is missing request correlation")
+            ordinal = requested.get("request_ordinal")
+            if type(ordinal) is not int or not 0 <= ordinal < len(commands):
+                raise ValueError("command request_ordinal is invalid")
+            if ordinal in seen_ordinals:
+                raise ValueError("command result repeats a request_ordinal")
+            seen_ordinals.add(ordinal)
+            expected = commands[ordinal]
+            expected_type = (
+                "crob" if isinstance(expected, CrobCommand) else expected.command_type
+            )
+            if (
+                point.index != expected.index
+                or requested.get("type") != expected_type
+                or requested.get("index") != expected.index
+            ):
+                raise ValueError(
+                    "command result request correlation does not match the "
+                    "submitted type/index"
+                )
+        if seen_ordinals != set(range(len(commands))):
+            raise ValueError("command result does not correlate every submitted point")
 
     def _incident_context(
         self, dut_id: str | None
@@ -894,7 +988,7 @@ class Dnp3MasterClient:
         )
         result = self._mapping_result(
             command,
-            self.request(
+            self._request(
                 command,
                 {
                     "timeout_ms": round(normalized_timeout * 1000),
@@ -962,7 +1056,7 @@ class Dnp3MasterClient:
         )
         result = self._mapping_result(
             command,
-            self.request(command, params, timeout=exchange_timeout),
+            self._request(command, params, timeout=exchange_timeout),
         )
         try:
             return ReadTaskResult.from_mapping(result)
@@ -1281,6 +1375,38 @@ class Dnp3MasterClient:
                     f"hello field '{field_name}' must be a non-empty string",
                     self.diagnostics,
                 )
+        expected_host_version = self.config.expected_host_version
+        if (
+            expected_host_version is not None
+            and result["host_version"] != expected_host_version
+        ):
+            raise HostProtocolError(
+                "native host version does not match the Python package: "
+                f"expected {expected_host_version!r}, received "
+                f"{result['host_version']!r}",
+                self.diagnostics,
+            )
+        expected_matrix_sha256 = self.config.expected_capability_matrix_sha256
+        if (
+            expected_matrix_sha256 is not None
+            and result["capability_matrix_sha256"].lower()
+            != expected_matrix_sha256
+        ):
+            raise HostProtocolError(
+                "native host capability matrix hash does not match the configured "
+                "pytest matrix",
+                self.diagnostics,
+            )
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", result["capability_matrix_sha256"]):
+            raise HostProtocolError(
+                "hello capability_matrix_sha256 must contain 64 hexadecimal characters",
+                self.diagnostics,
+            )
+        if result["backend"] == "opendnp3" and result.get("backend_version") != "3.1.2":
+            raise HostProtocolError(
+                "native host OpenDNP3 version must be the pinned 3.1.2",
+                self.diagnostics,
+            )
         commands = result.get("supported_commands")
         if not isinstance(commands, list) or not all(isinstance(value, str) for value in commands):
             raise HostProtocolError("hello supported_commands must be a string array", self.diagnostics)

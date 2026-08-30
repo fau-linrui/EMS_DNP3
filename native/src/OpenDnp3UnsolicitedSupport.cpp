@@ -1,4 +1,5 @@
 #include "dnp3host/OpenDnp3UnsolicitedSupport.h"
+#include "dnp3host/Ieee1815_2012.h"
 
 #include <opendnp3/app/MeasurementTypes.h>
 #include <opendnp3/app/OctetString.h>
@@ -493,6 +494,8 @@ public:
         const opendnp3::ICollection<opendnp3::Indexed<opendnp3::BinaryCommandEvent>>& values) override
     {
         values.ForeachItem([this, &info](const auto& item) {
+            const auto status_raw = static_cast<std::uint8_t>(
+                opendnp3::CommandStatusSpec::to_type(item.value.status));
             store_->record(
                 info,
                 item.index,
@@ -500,10 +503,15 @@ public:
                 Json(item.value.value),
                 item.value.GetFlags().value,
                 item.value.time,
-                Json{{"command_status",
+                Json{{"command_status", std::string{command_status_name_2012(status_raw)}},
+                     {"command_status_raw", status_raw},
+                     {"command_status_edition", std::string{kTargetProtocolEdition}},
+                     {"command_status_backend",
                       opendnp3::CommandStatusSpec::to_string(item.value.status)},
-                     {"command_status_raw",
-                      opendnp3::CommandStatusSpec::to_type(item.value.status)}});
+                     {"command_status_reserved_2012",
+                      command_status_is_reserved_2012(status_raw)},
+                     {"command_status_wire_raw_unambiguous",
+                      command_status_wire_raw_unambiguous(status_raw)}});
         });
     }
 
@@ -512,9 +520,18 @@ public:
         const opendnp3::ICollection<opendnp3::Indexed<opendnp3::AnalogCommandEvent>>& values) override
     {
         values.ForeachItem([this, &info](const auto& item) {
+            const auto status_raw = static_cast<std::uint8_t>(
+                opendnp3::CommandStatusSpec::to_type(item.value.status));
             Json extra{
-                {"command_status", opendnp3::CommandStatusSpec::to_string(item.value.status)},
-                {"command_status_raw", opendnp3::CommandStatusSpec::to_type(item.value.status)}};
+                {"command_status", std::string{command_status_name_2012(status_raw)}},
+                {"command_status_raw", status_raw},
+                {"command_status_edition", std::string{kTargetProtocolEdition}},
+                {"command_status_backend",
+                 opendnp3::CommandStatusSpec::to_string(item.value.status)},
+                {"command_status_reserved_2012",
+                 command_status_is_reserved_2012(status_raw)},
+                {"command_status_wire_raw_unambiguous",
+                 command_status_wire_raw_unambiguous(status_raw)}};
             auto value = finite_number(item.value.value, extra);
             store_->record(
                 info,

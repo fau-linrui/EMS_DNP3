@@ -39,14 +39,16 @@
 | 能力 | 固定源码/API 与本项目证据 | 当前结论 |
 |---|---|---|
 | TCP Client | `DNP3Manager::AddTCPClient`、`IChannel::AddMaster`、`IMaster::Enable/Disable/Shutdown`、`IChannelListener::OnStateChange`；`OpenDnp3Backend.cpp`；`test_host_tcp.py` | `IMPLEMENTED_UNVERIFIED`：connect/timeout/reconnect/disconnect 本机已测 |
-| 一次性 Integrity/Class/自定义 Read | `IMasterOperations::Scan/ScanClasses`、`Header` 工厂、`IMasterTaskCallback`；`OpenDnp3ReadSupport.cpp` | `IMPLEMENTED_UNVERIFIED`：范围、multi-header、summary、deadline 和 cancellation 本机已测 |
+| 一次性 Integrity/Class/自定义 Read | `IMasterOperations::Scan/ScanClasses`、`Header` 工厂、`IMasterTaskCallback`；`OpenDnp3ReadSupport.cpp` | `IMPLEMENTED_UNVERIFIED`：范围、multi-header、summary、deadline、cancellation 及测量/分片/IIN 有界失败模型已测 |
+| Q00/Q01/Q06/Q07/Q08/Q17/Q28 | 3.1.2 `QualifierCode` 与公共 `Header`/`CommandSet`；场景能力推导 | `IMPLEMENTED_UNVERIFIED`：8/16-bit 请求与命令索引路径已接入；合法性仍按对象/功能码/方向和 DUT PICS 判断 |
+| Q02/Q09/Q39 | 3.1.2 `QualifierCode` 和公共 `Header` 均无 32-bit range/count/index 表达 | `UNSUPPORTED_BY_BACKEND`：预检/pytest 框架门禁阻止需要这些限定符的场景，不静默降级 |
 | BI/DBBI/BOS/Counter/Frozen Counter/Analog/AOS | `ISOEHandler` 公共 overload；类型化 visitors | `IMPLEMENTED_UNVERIFIED`：值/index/raw flags/顺序交付本机已测 |
 | Octet String、TimeAndInterval 及其余公开 SOE 类型 | `ISOEHandler` overload；`OpenDnp3ReadSupport.cpp` | `IMPLEMENTED_UNVERIFIED`：公共回调均有归一化，完整长度/变体组合待独立测试 |
-| IIN | `IMasterApplication::OnReceiveIIN`；有界 IIN store/completion gate | `IMPLEMENTED_UNVERIFIED`：raw/parsed 和 OBJECT_UNKNOWN 本机已测 |
+| IIN | `IMasterApplication::OnReceiveIIN`；有界 IIN store/completion gate | `IMPLEMENTED_UNVERIFIED`：raw/parsed 和 OBJECT_UNKNOWN 本机已测；任务窗口丢失会失败，EMS 场景拒绝 IIN2.0/2.1/2.2 |
 | CROB SBO | `ICommandProcessor::SelectAndOperate(CommandSet, ...)` | `IMPLEMENTED_UNVERIFIED`：逐点状态、安全门和批次本机已测 |
 | 有响应 Direct Operate | `ICommandProcessor::DirectOperate(CommandSet, ...)` | `IMPLEMENTED_UNVERIFIED`：CROB 路径本机已测，禁止自动重试 |
 | G41 V1～V4 | `AnalogOutputInt32/Int16/Float32/Double64` + `CommandSet` | `IMPLEMENTED_UNVERIFIED`：混合批次和逐点关联本机已测 |
-| Command Status | `CommandPointResult`、`CommandStatusSpec` | `IMPLEMENTED_UNVERIFIED`：公共枚举无损映射；全状态故障注入待独立端 |
+| Command Status | `CommandPointResult`、`CommandStatusSpec`、`Ieee1815_2012.h` | `IMPLEMENTED_UNVERIFIED`：2012 规范视图、后端别名和请求关联已接入；点级 TIMEOUT、13～125 保留状态和 decoded 127 歧义均触发事故锁/会话销毁。固定栈把未知线上值 19～125 折叠为 127，原始值全保真仍 `BLOCKED` |
 | Unsolicited | `EnableUnsolicited/DisableUnsolicited`、持久 `ISOEHandler`、有界 SOE 队列 | `IMPLEMENTED_UNVERIFIED`：FC20/FC21、G2V2/G32V7、FC130 接收、禁用和溢出已做同栈本机回归；Confirm 丢失、重发、重复及序号回绕仍待独立故障注入 |
 | Direct Operate No Response | 3.1.2 `ICommandProcessor` 公共接口仅提供结果回调型 Direct Operate | `UNSUPPORTED_BY_BACKEND`：明确失败，不用有响应命令模拟 |
 
@@ -61,7 +63,7 @@
 | TCP Server/TLS/UDP/Serial | 后端/构建或 API 可用性未按目标拓扑复核 | `BLOCKED` |
 | Group 0 Device Attributes | 对象支持、读取语义和 Profile 断言未闭环 | `BLOCKED` |
 | Group 31/33 Frozen Analog、G34 Deadband | codec/回调/公共 Header/事务需逐项确认 | `BLOCKED` |
-| Group 13/43 Command Event | 公开回调存在性与端到端交付未闭环 | `BLOCKED` |
+| Group 13/43 Command Event | solicited/unsolicited 公开回调已归一化；缺各宽度/时间变体 golden vector 和独立互操作 | `IMPLEMENTED_UNVERIFIED`，定向测试与独立证据待补 |
 | G50V1/V2、Group 80 主站读路径 | 特定读取/写入流程和公开 Header 能力未闭环 | `BLOCKED` |
 | Group 110 全长度组合 | 公共 OctetString 回调已接入，只测一个本机长度 | `IMPLEMENTED_UNVERIFIED`，全组合待测 |
 | 广播/self-address/特殊限定词 | 公共 API 表达能力和链路行为未闭环 | `BLOCKED` |

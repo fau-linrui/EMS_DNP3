@@ -1,6 +1,6 @@
 # 不确定控制结果事故锁处理手册
 
-本手册处理一种高风险情况：控制请求已经发出，但主站无法确定 EMS 是否执行。典型原因包括 DNP3 响应超时、host 返回 `execution_uncertain=true` / `may_still_execute=true`、Python 等待 host 超时/退出、控制结果结构损坏，或“成功响应”自身仍标记为不确定。
+本手册处理一种高风险情况：控制请求已经发出，但主站无法确定 EMS 是否执行。典型原因包括 DNP3 响应超时、host 返回 `execution_uncertain=true` / `may_still_execute=true`、Python 等待 host 超时/退出、控制结果结构或请求关联损坏，或点级 Command Status 为 `TIMEOUT`、IEEE 1815-2012 保留值、无法判定真实线上值的 decoded 127。即使外层响应为成功，也按不确定状态改变处理。
 
 ## 框架会自动做什么
 

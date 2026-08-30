@@ -41,7 +41,10 @@
 | `stats` | 返回 host、channel、local queue 统计及缺失网络字节/capture 的明确限制 |
 | `connect` | 创建 Manager -> TCP Client Channel -> Master，等待通道 OPEN |
 | `disconnect` | 取消任务并按顺序关闭 Master/Channel/Manager，令牌失效 |
-| `wait_event` | 等待并消费有界通道状态事件 |
+| `wait_event` | 等待并消费有界的通道状态事件；不返回测点变化 |
+| `enable_unsolicited` | 发送 Enable Unsolicited，显式启用选定的 Class 1/2/3 |
+| `disable_unsolicited` | 发送 Disable Unsolicited，显式禁用选定的 Class 1/2/3 |
+| `wait_unsolicited` | 等待并消费持久、有限容量的主动上送测量队列 |
 | `integrity_poll` | 一次读取 Class 0 和 Class 1/2/3 |
 | `class_poll` | 一次读取选择的事件 Class 1/2/3 |
 | `read` | 执行 1～64 个严格 Header 的一次性 Read |
@@ -75,11 +78,13 @@
 状态改变会话还需：
 
 ```json
-"safety": {
-  "environment": "LAB",
-  "allow_state_change": true,
-  "operator_id": "approved-operator-or-ticket",
-  "dut_id": "lab-asset-id"
+{
+  "safety": {
+    "environment": "LAB",
+    "allow_state_change": true,
+    "operator_id": "approved-operator-or-ticket",
+    "dut_id": "lab-asset-id"
+  }
 }
 ```
 
@@ -88,6 +93,20 @@
 ## wait_event
 
 参数 `timeout_ms` 为 0～60000，`max_events` 为 1～256。结果包含 `events`、`timed_out`、`remaining`、`dropped_total`。事件包含单调 `sequence`、`session_id`、`type=channel_state`、`state`（CLOSED/OPENING/OPEN/SHUTDOWN）和 `monotonic_ns`。队列容量 1,024，溢出时丢最旧并累计 `dropped_total`。
+
+## 主动上送命令
+
+`enable_unsolicited` 与 `disable_unsolicited` 的参数为：
+
+```json
+{"timeout_ms":5000,"classes":[1,2,3]}
+```
+
+`timeout_ms` 为 50～300000；`classes` 必须包含 1～3 个互不重复的 Class 1/2/3。结果包含 `task_id`、`task_status`、`task_started`、`task_destroyed`、`action`、`classes` 和 `timings`。调用方必须检查 `task_status`，不能仅凭收到响应判定启用或禁用成功。
+
+`wait_unsolicited` 的参数为 `{"timeout_ms":10000,"max_events":256}`；等待时间为 0～60000 ms，单批数量为 1～256。结果包含 `session_id`、当前 `enabled/classes`、`measurements`、`timed_out` 和 `summary`。每条 measurement 的 `source` 为 `unsolicited`，并带当前 `session_id`。
+
+主动上送队列默认容量 4,096，溢出采用 drop-oldest 并在 `summary.dropped_total` 中累计。任何非零丢弃数都表示事件流不完整，测试不得继续宣称 SOE 完整或顺序正确。断开会话会停止收集并清空该队列。Confirm 丢失、重发、重复检测及应用层序号回绕仍属于待独立验证项。
 
 ## Read 命令
 
@@ -118,7 +137,7 @@
 }
 ```
 
-支持 `all_objects`、`range8`、`range16`、`count8`、`count16`。group/variation 为 0～255；range 起止 0～255/65535 且 start <= stop；count 为 1～255/65535。Class Group 60 V1～V4 不允许 range qualifier。
+支持 `all_objects`、`range8`、`range16`、`count8`、`count16`，分别对应 Q06/Q00/Q01/Q07/Q08。group/variation 为 0～255；range 起止 0～255/65535 且 start <= stop；count 为 1～255/65535。Class Group 60 V1～V4 不允许 range qualifier。OpenDNP3 3.1.2 公共 API 不能表达 Q02/Q09/Q39 的 32-bit range/count/index；需要这些限定符的场景必须在能力门禁中保持 `UNSUPPORTED_BY_BACKEND`，不能降级成 16-bit 后伪装执行。
 
 成功结果包括：
 
@@ -127,9 +146,9 @@ task_id, task_status, task_started, task_destroyed, return_mode,
 measurements, summary, fragments, iin, timings
 ```
 
-每条 detail measurement 包含接收序号/时间、kind、group/variation、qualifier 原始/解析值、index、value、flags、DNP3 时间和质量、是否事件、header/fragment index 及 source。类型特有值放在额外字段中。`summary` 给出总数、详情数、溢出、序号范围、按 kind 和 group:variation 计数。
+每条 detail measurement 包含接收序号/时间、kind、group/variation、qualifier 原始/解析值、index、value、flags、DNP3 时间和质量、是否事件、header/fragment index 及 source。类型特有值放在额外字段中。`summary` 给出总数、详情数、溢出、序号范围、按 kind 和 group:variation 计数；分片记录最多 4096 条，IIN 观测最多 1024 条。测量、分片或当前任务 IIN 窗口发生任何丢失都返回 `QUEUE_OVERFLOW`，不会以不完整数据成功。
 
-`iin` 同时保留 `raw_hex`、两个原始 octet、解析 bits 和有界观测信息。超过上限返回 `QUEUE_OVERFLOW`，错误 details 中保留 `operation_result`，不会静默成功。
+`iin` 同时保留 `raw_hex`、两个原始 octet、解析 bits、有界观测信息、全局丢弃计数和当前任务窗口丢失计数。解析名称严格采用 IEEE 1815-2012 Table 4-3（例如 `NO_FUNC_CODE_SUPPORT`、`PARAMETER_ERROR`、`RESERVED_2`、`RESERVED_1`），原始值仍保留，避免名称转换丢失信息。OpenDNP3 task `SUCCESS` 只说明任务完成，不代表 DUT 接受了对象请求；EMS 场景模板会把 IIN2.0/2.1/2.2 视为请求失败，即使允许空响应也不会误通过。
 
 ## 控制命令
 
@@ -163,9 +182,9 @@ measurements, summary, fragments, iin, timings
 
 当前只支持 `response_mode=response`。`no_response` 明确返回 `UNSUPPORTED_BY_BACKEND`。
 
-成功结果包含 task/mode/status/timing、`all_success`、`execution_uncertain`、summary 和一一对应的 `point_results`。每点保留 header index、point index、CommandPointState 原始/解析值、CommandStatus 原始/解析值和请求副本。调用方必须检查每点状态。
+成功结果包含 task/mode/status/timing、`all_success`、`execution_uncertain`、summary 和一一对应的 `point_results`。每点保留 header index、point index、CommandPointState 原始/解析值、结构化 CommandStatus 和请求副本。`status` 是基于后端解码值生成的 IEEE 1815-2012 Table 11-7 规范视图，`status_raw` 是 OpenDNP3 解码枚举的 0～127 数值，`status_edition="IEEE1815-2012"`；后端后续版本名称仅放在 `status_backend`。13～18 会得到 `status="RESERVED"` 和 `status_reserved_2012=true`。固定 OpenDNP3 会把未知线上值 19～125 折叠为 127，因此此时 `status_wire_raw_unambiguous=false`，调用方不得断言线上原值一定是 127。必须检查每点状态和歧义标志，不能使用后端别名替代 2012 判定。
 
-命令超时返回 `RESPONSE_TIMEOUT`，details 明确 `execution_uncertain=true`、`may_still_execute=true`、`automatic_retry_safe=false`。不得自动重试。
+命令超时返回 `RESPONSE_TIMEOUT`，details 明确 `execution_uncertain=true`、`may_still_execute=true`、`automatic_retry_safe=false`。点级 `TIMEOUT`、2012 `RESERVED`（13～125）或解码值 127 的线上歧义也一律标记为需要人工读回；请求/结果关联缺失、重复或错配同样按协议损坏和不确定执行处理。不得自动重试。
 
 ## 错误码
 

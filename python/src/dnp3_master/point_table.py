@@ -118,6 +118,16 @@ class PointDefinition:
             return "OBJ.G111.LENGTH_VARIANTS"
         return f"OBJ.G{self.event_group}.V{self.event_variation}"
 
+    @property
+    def read_qualifier_capability_id(self) -> str:
+        """Return the exact qualifier used by this row's one-point READ."""
+
+        return (
+            "QUAL.Q00.REVIEW"
+            if self.read_qualifier == "range8"
+            else "QUAL.Q01.REVIEW"
+        )
+
     def read_header(self) -> ReadHeader:
         """Create the exact one-point static READ header for this row."""
 

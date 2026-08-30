@@ -5,7 +5,8 @@
 > 核心技术：C++17、OpenDNP3 3.1.2、CMake、Python、pytest、JSON Lines（NDJSON）
 > 主要用途：以主站身份自动测试作为 DNP3 从站的 EMS
 > 适用读者：项目负责人、测试开发工程师、内网代码 Agent
-> 文档状态：实施基线 v1.0
+> 文档状态：实施基线 v1.2
+> 文档性质：目标规范与实施路线；当前实现状态以 `config/capability_matrix.csv`、`docs/protocol.md` 和发布包 `bin/build-info.json` 为准
 
 ---
 
@@ -32,7 +33,7 @@ pytest 测试用例
 
 1. 对 IEEE 1815-2012 中每个已分配的协议层能力、功能码、对象组/变体、限定词、质量位、IIN 位和安全能力建立唯一能力条目。
 2. 每个能力条目必须有标准依据、实现状态、适用方向、测试用例和测试证据。
-3. 框架最终能够生成合法请求、解析合法响应，并能验证被测 EMS 对其 PICS/Device Profile 所声明能力的行为。
+3. 框架最终能够生成合法请求、解析合法响应，并能验证被测 EMS 的 Device Profile、独立 PICS 和批准操作约定所声明能力的行为。
 4. 对 EMS 未声明支持的可选能力，框架验证其是否按标准返回不支持或相应 IIN，而不是强迫 EMS 实现全部可选功能。
 5. 保留异常帧和错误时序测试能力，但保留字节值、保留功能码不算“协议功能”。
 
@@ -43,7 +44,9 @@ pytest 测试用例
 - 只有自编单元测试，没有独立实现互操作证据。
 - 没有合法获取并逐条核对 IEEE 1815-2012 正式文本。
 - OpenDNP3 不支持的功能仍被标记为已完成。
-- DUT 的 PICS/Device Profile 未纳入测试选择逻辑。
+- DUT 的 Device Profile、PICS 和批准操作约定未经过冲突检查并纳入测试选择逻辑。
+
+性能、资源占用、大点表和 24 小时稳定性是本项目为了证明测试工具可用、可信而增加的工程验收要求，不是 IEEE 1815-2012 一致性条款。性能测试通过不能提升协议能力的一致性状态；协议互操作通过也不能代替性能验收。
 
 ### 0.3 必须接受的技术事实
 
@@ -52,7 +55,7 @@ pytest 测试用例
 - 设备属性（Group 0）部分/缺失。
 - 模拟量死区对象（Group 34）缺失。
 - Self-address、部分广播行为缺失。
-- 命令事件（Group 13、43）部分能力缺失。
+- 命令事件（Group 13、43）的当前回调映射已接入，但变体级黄金向量和独立互操作证据仍缺失。
 - 文件传输（Group 70）没有完整业务实现。
 - Data Set（Groups 83、85～88）没有实现。
 - Virtual Terminal（Groups 112、113）没有实现。
@@ -64,6 +67,14 @@ pytest 测试用例
 2. 保持统一 Python API，未来替换为确实覆盖这些功能的其他协议栈。
 
 不得让 Agent 假装 OpenDNP3 已经实现上述能力。
+
+### 0.4 本指导书的规范边界
+
+- 本文中的“必须”“不得”“禁止”是项目约束；“建议”“未来”“后续”是设计方向，不能据此宣称功能已经实现。
+- 文档版本与软件版本相互独立。`实施基线 v1.2` 不表示 host 或 Python 包的版本为 1.2。
+- 本文第 12 节只是能力目录的人工交叉检查入口，不替代正式标准，也不是当前实现清单。
+- 当前命令、字段、错误码和安全行为以 `docs/protocol.md` 为唯一公开合同；本文修改这些内容时必须同步协议文档、Schema、C++、Python 和测试。
+- 当前能力与证据以能力矩阵的发布快照为准。计划项、接口草图或同栈回环测试不得提升实现或互操作状态。
 
 ---
 
@@ -109,9 +120,9 @@ pytest 测试用例
 框架必须支持以下四类工作：
 
 1. **功能自动化**：总召、Class 扫描、遥信/遥测/计数器读取、主动上送、遥控、遥调、时间同步、重启、冻结、类别分配等。
-2. **协议一致性验证**：依据 EMS 的 PICS/Device Profile 验证功能码、对象、变体、限定词、质量位、IIN、确认与时序。
+2. **协议一致性验证**：依据 EMS 的 Device Profile、独立 PICS 和批准操作约定验证功能码、对象、变体、限定词、质量位、IIN、确认与时序。
 3. **健壮性测试**：错误 CRC、错误序号、截断、重复、乱序、非法组合、超时、断连和重连。
-4. **性能测试**：大量测点总召、大量事件上送、批量命令、吞吐量、完整性、延迟分布、队列水位和工具自身丢弃检测。
+4. **性能测试**：大量测点总召、大量事件上送、批量命令、吞吐量、完整性、延迟分布、队列水位和工具自身丢弃检测。该项属于项目工程验收，不属于 IEEE 1815-2012 一致性判定。
 
 ### 2.2 第一版非目标
 
@@ -142,11 +153,20 @@ pytest 测试用例
 
 实现时按以下优先级裁决冲突：
 
-1. 公司合法持有的 IEEE 1815-2012 正式文本。
-2. 被测 EMS 的 DNP3 Device Profile/PICS，以及项目确认的互操作约束。
-3. DNP Users Group 与目标版本匹配的测试程序、技术公告和勘误。
-4. OpenDNP3 3.1.2 固定源码、API 文档和测试。
-5. Wireshark 解码、第三方设备手册和公开示例，仅作为辅助证据。
+1. 公司合法持有的 IEEE 1815-2012 正式文本及适用勘误。
+2. 被测 EMS 的标准化 DNP3 Device Profile；如果另有 PICS，应作为独立输入保存并绑定设备型号、固件和文档版本。
+3. 项目批准的厂商操作约定、互操作约束和偏差单。它们可收窄适用测试或选择允许的标准选项，但不能改写标准的强制行为。
+4. DNP Users Group 与目标版本匹配的测试程序、技术公告和勘误。
+5. OpenDNP3 3.1.2 固定源码、API 文档和测试。
+6. Wireshark 解码、第三方设备手册和公开示例，仅作为辅助证据。
+
+本文使用以下术语，三者不得混为同一个文件：
+
+| 术语 | 项目含义 | 使用规则 |
+|---|---|---|
+| DNP3 Device Profile | 按标准结构描述设备能力、对象、功能和选项的设备档案 | 优先用于适用性选择；记录原文件 SHA-256、设备型号和固件 |
+| PICS | 项目或一致性流程提供的协议实现声明 | 单独保存；不得因为名称含 PICS 就假设其内容完整或符合标准模板 |
+| 厂商操作约定 | 例如本项目收到的“五遥对象、功能码、限定词和主动上送约定” | 视为部分项目 Profile；逐项映射能力 ID，未出现的能力仍是 `UNKNOWN`，不能推断为不支持 |
 
 硬性规则：
 
@@ -163,7 +183,7 @@ docs/standards/opendnp3_gap_analysis.md
 config/capability_matrix.csv
 ```
 
-`standard_access.md` 至少记录：标准名称、版本、内部访问位置、负责人、获取日期、勘误版本。
+`standard_access.md` 至少记录：标准名称、版本、内部受控访问位置、授权主体/依据、负责人、获取日期、勘误版本和文件 SHA-256。正式 PDF、授权水印和许可证文件不得提交公共仓库或进入发布包；显示第三方受限授权的副本不能自动视为公司已获授权的标准来源，应由负责人确认合法访问方式后再关闭标准复核任务。
 
 ---
 
@@ -190,18 +210,29 @@ config/capability_matrix.csv
 
 ### 4.2 后端边界
 
-C++ 必须定义可替换后端接口，避免 Python 用例绑定 OpenDNP3：
+C++ 通过已实现的可替换后端接口隔离 Python 用例与 OpenDNP3。当前接口以 `native/include/dnp3host/Backend.h` 为准，核心形态如下（省略具体配置结构）：
 
 ```cpp
 class IMasterBackend {
 public:
     virtual ~IMasterBackend() = default;
-    virtual Result connect(const ConnectionConfig&) = 0;
-    virtual Result disconnect() = 0;
-    virtual ScanResult scan(const ScanRequest&) = 0;
-    virtual CommandResult operate(const CommandRequest&) = 0;
-    virtual TaskResult execute(const GenericRequest&) = 0;
-    virtual BackendCapabilities capabilities() const = 0;
+    virtual std::string name() const = 0;
+    virtual std::string version() const = 0;
+    virtual std::vector<std::string> supported_commands() const = 0;
+    virtual Json capabilities() const = 0;
+    virtual BackendStatus status() const = 0;
+    virtual BackendOperationResult connect(const ConnectionConfig&) = 0;
+    virtual BackendOperationResult disconnect() = 0;
+    virtual BackendOperationResult integrity_poll(const ReadOptions&) = 0;
+    virtual BackendOperationResult class_poll(const ClassPollConfig&) = 0;
+    virtual BackendOperationResult read(const ReadConfig&) = 0;
+    virtual BackendOperationResult enable_unsolicited(const UnsolicitedControlConfig&) = 0;
+    virtual BackendOperationResult disable_unsolicited(const UnsolicitedControlConfig&) = 0;
+    virtual BackendOperationResult wait_unsolicited(const WaitUnsolicitedConfig&) = 0;
+    virtual BackendOperationResult select_and_operate(const CommandConfig&) = 0;
+    virtual BackendOperationResult direct_operate(const CommandConfig&) = 0;
+    virtual BackendOperationResult wait_event(const WaitEventConfig&) = 0;
+    virtual void shutdown() noexcept = 0;
 };
 ```
 
@@ -224,75 +255,71 @@ public:
 
 ---
 
-## 5. 建议仓库结构
+## 5. 当前仓库结构与可移植边界
 
 ```text
 dnp3-master-test-framework/
 ├── CMakeLists.txt
 ├── CMakePresets.json
 ├── README.md
+├── CHANGELOG.md
+├── AGENTS.md
 ├── LICENSES/
 ├── cmake/
 ├── third_party/
-│   ├── opendnp3/                 # 固定源码或内部镜像
-│   └── nlohmann_json/
+│   ├── opendnp3/                 # 固定 3.1.2 源码
+│   └── *.lock.json               # 来源、commit、SHA-256 和许可证锁
 ├── native/
 │   ├── include/dnp3host/
-│   │   ├── IMasterBackend.h
+│   │   ├── Backend.h
 │   │   ├── OpenDnp3Backend.h
 │   │   ├── HostController.h
 │   │   ├── JsonLineProtocol.h
-│   │   ├── MeasurementStore.h
-│   │   ├── PerformanceCollector.h
+│   │   ├── OpenDnp3ReadSupport.h
+│   │   ├── OpenDnp3UnsolicitedSupport.h
+│   │   ├── OpenDnp3CommandSupport.h
+│   │   ├── Ieee1815_2012.h
 │   │   ├── Models.h
-│   │   └── Error.h
+│   │   └── *Config.h
 │   ├── src/
-│   │   ├── main.cpp
-│   │   ├── OpenDnp3Backend.cpp
-│   │   ├── HostController.cpp
-│   │   ├── JsonLineProtocol.cpp
-│   │   ├── MeasurementStore.cpp
-│   │   ├── PerformanceCollector.cpp
-│   │   └── Models.cpp
+│   │   └── *.cpp
 │   └── tests/
 ├── python/
 │   ├── pyproject.toml
 │   ├── src/dnp3_master/
-│   │   ├── __init__.py
-│   │   ├── client.py
-│   │   ├── process.py
-│   │   ├── models.py
-│   │   ├── errors.py
-│   │   ├── pics.py
-│   │   └── pytest_plugin.py
+│   │   ├── client.py / models.py / errors.py
+│   │   ├── pytest_plugin.py
+│   │   ├── ems_profile.py / point_table.py / ems_test_plan.py
+│   │   ├── preflight.py / evidence.py / safety_incidents.py
+│   │   └── local_outstation.py / package_verify.py / self_test.py
 │   └── tests/
+├── examples/pytest_ems/           # 可复制到现有 pytest 框架的场景模板
 ├── schemas/
 │   ├── request.schema.json
 │   ├── response.schema.json
-│   ├── config.schema.json
-│   └── capability.schema.json
+│   ├── ems-profile.schema.json
+│   ├── point-table.schema.json
+│   ├── ems-test-plan.schema.json
+│   └── evidence/build/package/preflight/safety schemas
 ├── config/
 │   ├── capability_matrix.csv
-│   ├── ems.example.json
+│   ├── ems_profile.example.json
+│   ├── ems_test_plan.example.json
 │   └── points.example.csv
-├── tests/
-│   ├── integration/
-│   ├── interoperability/
-│   ├── robustness/
-│   ├── performance/
-│   ├── vectors/
-│   └── pcaps/
 ├── docs/
 │   ├── architecture.md
 │   ├── protocol.md
-│   ├── test_strategy.md
-│   ├── release_evidence.md
+│   ├── BEGINNER_MIGRATION_BUILD_USE_GUIDE.md
+│   ├── INTRANET_HANDOFF_REMAINING_TASKS.md
 │   └── standards/
 └── scripts/
-    ├── build.ps1
-    ├── test.ps1
-    └── package.ps1
+    ├── doctor.ps1 / build.ps1 / test.ps1
+    ├── test-lifecycle.ps1 / run-local-self-test.ps1
+    ├── package.ps1
+    └── validate_*.py
 ```
+
+`out/build/<preset>` 是本机 CMake 中间产物，不能作为移植目录复制。移植应优先使用 `scripts/package.ps1` 生成的 `out/package/ems-dnp3-pytest-<version>/` 或其 ZIP；详细步骤以 `docs/BEGINNER_MIGRATION_BUILD_USE_GUIDE.md` 为准。
 
 ---
 
@@ -324,18 +351,30 @@ ctest --preset windows-msvc-release --output-on-failure
 
 ### 6.3 构建产物
 
-发布包至少包括：
+当前 `scripts/package.ps1` 生成的可移植包至少包括：
 
 ```text
 bin/dnp3-master-host.exe
-config/default.json
+bin/build-info.json
+CHANGELOG.md
+tools/dnp3-local-test-outstation.exe
+python/pyproject.toml
+python/src/dnp3_master/
+examples/pytest_ems/
+config/capability_matrix.csv
+config/*.example.json
+config/points.example.csv
 schemas/*.json
+docs/
+dependency-locks/*.lock.json
+licenses/
 NOTICE.txt
 THIRD_PARTY_LICENSES.txt
-build-info.json
+package-manifest.json
+self-test.ps1
 ```
 
-`build-info.json` 必须包含：主程序版本、Git commit、OpenDNP3 commit、编译器版本、构建时间、目标架构、schema 版本。
+`bin/build-info.json` 还必须绑定主程序版本、Git commit/工作区状态、OpenDNP3 commit、编译器、构建配置、目标架构、schema 版本、依赖锁哈希和能力矩阵哈希。ZIP 旁必须保留 `.sha256`；解包后先运行 `self-test.ps1`，不能只检查 EXE 是否存在。
 
 ---
 
@@ -376,6 +415,7 @@ build-info.json
 | 命令 | 作用 |
 |---|---|
 | `hello` | 返回版本、后端和能力摘要 |
+| `get_status` | 返回 host、连接、会话、在途任务和安全锁状态 |
 | `connect` | 创建并启用一个主站会话 |
 | `disconnect` | 禁用并销毁会话 |
 | `integrity_poll` | Class 0/1/2/3 完整扫描 |
@@ -383,8 +423,11 @@ build-info.json
 | `read` | 指定 Group/Variation/Range 扫描 |
 | `direct_operate` | Direct Operate；No Response 模式仅在后端明确声明相应能力时允许 |
 | `select_and_operate` | Select Before Operate |
-| `wait_event` | 从 C++ 事件队列取一批主动上送事件 |
-| `stats` | 获取通道、链路、任务和本地队列统计 |
+| `wait_event` | 从 C++ 有界队列取通道状态事件；不返回测点变化 |
+| `enable_unsolicited` | 显式启用选定的 Class 1/2/3 主动上送 |
+| `disable_unsolicited` | 显式禁用选定的 Class 1/2/3 主动上送 |
+| `wait_unsolicited` | 等待并消费持久、有界的主动上送测量队列 |
+| `stats` | 获取 host、通道和本地队列统计，并明确每个指标的范围和数据源 |
 | `shutdown` | 幂等关闭进程 |
 
 ### 7.4 后续命令族
@@ -393,7 +436,7 @@ build-info.json
 |---|---|
 | `freeze.*` | 立即冻结、冻结清零、定时冻结及 No Ack 形式 |
 | `time.*` | LAN/Non-LAN 时间同步、延迟测量、读写时间 |
-| `unsolicited.*` | 启用、禁用、确认、等待主动上送 |
+| `unsolicited.fault.*` | Confirm 丢失、重发/重复、序号回绕等原始故障注入；正常启停和等待已由三个公开命令实现 |
 | `class.*` | 类别分配与读取 |
 | `application.*` | 初始化、启动、停止、保存/激活配置 |
 | `restart.*` | 冷启动、热启动、延迟解析 |
@@ -401,7 +444,7 @@ build-info.json
 | `dataset.*` | Groups 83、85～88 Data Set |
 | `virtual_terminal.*` | Groups 112、113 |
 | `security.*` | Secure Authentication v5 与安全统计 |
-| `capture.*` | 性能采集开始、进度、结束 |
+| `capture.*` | 性能采集开始、只读进度快照和幂等结束；详细合同见第 10 节 |
 | `raw.*` | 独占连接的原始帧测试 |
 
 ### 7.5 通用读取请求模型
@@ -426,18 +469,30 @@ build-info.json
 
 ### 7.6 Hello 响应
 
-`hello` 至少返回：
+当前 `hello` 成功响应形态为（`capabilities` 和 `limits` 内容在此缩写）：
 
 ```json
 {
   "schema_version":1,
-  "host_version":"0.1.0",
-  "backend":"opendnp3",
-  "backend_version":"3.1.2",
-  "git_commit":"...",
-  "platform":"windows-x64",
-  "capability_matrix_version":"...",
-  "supported_commands":["connect","disconnect","integrity_poll"]
+  "id":"req-hello",
+  "ok":true,
+  "result":{
+    "host_version":"0.5.1",
+    "backend":"opendnp3",
+    "backend_version":"3.1.2",
+    "git_commit":"...",
+    "platform":"windows-x64",
+    "capability_matrix_version":"1",
+    "capability_matrix_sha256":"...",
+    "supported_commands":[
+      "class_poll","connect","direct_operate","disable_unsolicited",
+      "disconnect","enable_unsolicited","get_status","hello",
+      "integrity_poll","read","select_and_operate","shutdown","stats",
+      "wait_event","wait_unsolicited"
+    ],
+    "capabilities":{"...":"..."},
+    "limits":{"...":"..."}
+  }
 }
 ```
 
@@ -488,6 +543,8 @@ Agent 必须以固定版本 `cpp/examples/master` 和本地头文件为 API 依�
 
 ### 8.3 内部测点模型
 
+当前 host 在线上返回 JSON 值对象，Python 用不可变 `MeasurementRecord` 校验。下列 C++ 仅表示跨边界的逻辑字段合同，不是要求另建一套重复结构：
+
 ```cpp
 struct MeasurementRecord {
     uint64_t receive_seq;
@@ -495,20 +552,27 @@ struct MeasurementRecord {
     std::string kind;
     uint8_t group;
     uint8_t variation;
-    uint16_t index;
+    std::string qualifier;
+    uint8_t qualifier_raw;
+    std::optional<uint32_t> index;
     Value value;
-    uint8_t flags_raw;
+    std::optional<uint8_t> flags_raw;
+    bool flags_valid;
     std::optional<uint64_t> dnp3_timestamp_ms;
     std::string timestamp_quality;
     bool is_event;
     uint32_t header_index;
+    std::string source;              // solicited / unsolicited
+    uint64_t fragment_index;
+    std::optional<uint64_t> session_id;
 };
 ```
 
 要求：
 
-- `receive_seq` 在进程内严格递增。
-- 保留原始 flags，不只返回 `online=true/false`。
+- `receive_seq` 在对应收集器/会话内严格递增；主动上送还必须绑定 `session_id`，不得跨会话比较序号。
+- `index` 和 `flags_raw` 必须允许为空，因为并非每种回调对象都携带这两个字段。统一模型应能无损表示 IEEE 1815-2012 的 4-octet index；固定后端当前只能表达 16 位请求索引时，应在能力声明和请求校验中拒绝超范围值，禁止截断或回绕。
+- 同时保留限定词名称/原始值和 flags 原始值/有效性，不能只返回 `online=true/false`。
 - 区分 DNP3 源时间与本机单调接收时间。
 - 浮点数禁止输出 JSON `NaN/Infinity`；应返回明确错误或字符串分类字段。
 - Octet String/raw payload 使用 hex 或 Base64，必须限制长度。
@@ -525,6 +589,8 @@ INVALID_STATE
 NOT_CONNECTED
 ALREADY_CONNECTED
 CONNECTION_TIMEOUT
+SAFETY_INTERLOCK
+ALREADY_EXECUTING
 RESPONSE_TIMEOUT
 TASK_FAILED
 COMMAND_FAILED
@@ -538,6 +604,8 @@ INTERNAL_ERROR
 
 所有错误响应必须包含稳定机器码；`message` 只供人阅读，Python 不得依赖 message 做逻辑判断。
 
+上表是 NDJSON host 错误码的唯一命名表。Python 在本地等待 host 超时应抛出客户端异常（例如 `HostTimeoutError`），不能伪造 `RPC_TIMEOUT` host 响应；`CHANNEL_TIMEOUT`、`DNP3_RESPONSE_TIMEOUT`、`TASK_CANCELLED`、`DUT_REPORTED_ERROR` 和 `COMMAND_NOT_IMPLEMENTED` 不是 v1 host 错误码。连接超时统一为 `CONNECTION_TIMEOUT`，线上任务响应超时统一为 `RESPONSE_TIMEOUT`，设备 IIN/命令状态失败通过结构化结果或 `TASK_FAILED`/`COMMAND_FAILED` 表达。
+
 ### 8.5 状态机
 
 ```text
@@ -547,6 +615,16 @@ STARTING -> READY -> CONNECTING -> CONNECTED -> DISCONNECTING -> READY -> SHUTTI
 ```
 
 每个命令列出允许状态。非法状态返回 `INVALID_STATE`，禁止隐式创建或重建连接。
+
+Capture 生命周期是与连接状态正交的子状态机：
+
+```text
+IDLE -> ACTIVE -> FINALIZED
+          +-------> ABORTED
+          +-------> TIMED_OUT
+```
+
+v1 每个会话最多一个 ACTIVE capture。`disconnect`、连接失败和 `shutdown` 必须把 ACTIVE capture 转为终态并释放有界资源；新会话不得继承旧 capture。持久控制事故锁属于 Python/DUT 级安全状态，不得因为 native host 回到 READY 而自动解除。
 
 ### 8.6 OpenDNP3 3.1.2 API 对照
 
@@ -575,13 +653,43 @@ STARTING -> READY -> CONNECTING -> CONNECTED -> DISCONNECTING -> READY -> SHUTTI
 
 ### 9.1 对外 API
 
-Python 用例不得直接拼 JSON，统一调用：
+Python 用例不得直接拼 JSON，统一调用。下面示例与当前 0.5.1 公开 API 一致：
 
 ```python
-with Dnp3MasterClient(config) as master:
-    result = master.integrity_poll(timeout=5.0)
-    assert result.task_status == "success"
-    assert result.analog_inputs[12].value == 220.5
+from pathlib import Path
+
+from dnp3_master import (
+    Dnp3MasterClient,
+    HostProcessConfig,
+    ReadHeader,
+    TcpConnectionConfig,
+)
+
+process = HostProcessConfig(
+    executable=Path("bin/dnp3-master-host.exe"),
+    safety_incident_directory=Path("evidence/local/safety-incidents"),
+)
+
+with Dnp3MasterClient(process) as master:
+    master.connect(
+        TcpConnectionConfig(
+            host="192.0.2.10",
+            port=20000,
+            master_address=1,
+            outstation_address=1024,
+        )
+    )
+    result = master.read([ReadHeader.range16(30, 0, 0, 9)], timeout=5.0)
+    assert result.task_status == "SUCCESS"
+    assert not {
+        "IIN2.0.NO_FUNC_CODE_SUPPORT",
+        "IIN2.1.OBJECT_UNKNOWN",
+        "IIN2.2.PARAMETER_ERROR",
+    }.intersection(result.iin["bits"])
+    assert result.iin["observation_window_dropped"] == 0
+    analogs = result.measurements_of_kind("analog_input")
+    assert analogs
+    master.disconnect()
 ```
 
 最低接口：
@@ -589,19 +697,28 @@ with Dnp3MasterClient(config) as master:
 ```python
 connect()
 disconnect()
+get_status()
 integrity_poll()
 class_poll()
 read()
 direct_operate()
 select_and_operate()
 wait_event()
+enable_unsolicited()
+disable_unsolicited()
+wait_unsolicited()
 get_stats()
+begin_capture()       # H08 完成后
+capture_progress()   # H08 完成后
+end_capture()        # H08 完成后
 ```
+
+公共 `request()` 只允许尚无类型化封装的扩展命令。上述已实现命令（尤其是 connect/disconnect/read/control/shutdown）必须走对应方法；禁止用原始 NDJSON 绕过令牌管理、客户端状态机、结果关联和事故锁。Python 启动时必须校验 host 版本；pytest 还必须把本次能力矩阵 SHA-256 与 host 内嵌值比较，任一不一致立即终止进程。
 
 ### 9.2 进程管理
 
 - pytest session fixture 启动 EXE。
-- 启动后必须在限定时间内完成 `hello`。
+- 启动后必须在限定时间内完成 `hello`，并校验 Python/host 版本及能力矩阵哈希。
 - 每次写请求后 flush stdin。
 - 独立线程持续读取 stderr，避免管道填满死锁。
 - 正常结束先发送 `shutdown`。
@@ -614,30 +731,41 @@ get_stats()
 建议：
 
 ```text
-host_process       session scope
-master_client      session/module scope
-connected_master   function/module scope
-capture            function scope
+dnp3_pics               session scope
+dnp3_point_table        session scope
+dnp3_ems_test_plan      session scope
+dnp3_host_config        session scope
+host_process            session scope
+master_client           session scope（host_process 的别名边界）
+dnp3_connection_config  function scope
+connected_master        function scope
+capture                 function scope（H08 完成后）
 ```
 
 Fixture teardown 必须幂等，前一用例失败不能污染后一用例。
 
-### 9.4 PICS 驱动
+### 9.4 Device Profile、PICS 和操作约定驱动
 
 每个测试用例必须声明能力 ID，例如：
 
 ```python
-@pytest.mark.dnp3_capability("APP.FC.READ")
-@pytest.mark.dnp3_capability("OBJ.G30.V1")
-def test_integrity_poll_analog(...):
+@pytest.mark.dnp3_dut
+@pytest.mark.dnp3_capability("APP.FC.01.READ")
+@pytest.mark.dnp3_capability("OBJ.G30.V5")
+@pytest.mark.dnp3_capability("QUAL.Q01.REVIEW")
+def test_static_analog_range(connected_master):
     ...
 ```
 
-运行前根据 EMS Device Profile：
+一个 marker 只接受一个矩阵 ID；手写用例必须重复 marker，完整声明实际功能码、对象和 Qualifier。完整性扫描还需 `APP.CLASS.EVENTS`、`QUAL.Q06.REVIEW` 及 `OBJ.G60.V1`～`OBJ.G60.V4`。捆绑的 EMS 场景模板会从严格点表/计划推导这些依赖，普通 pytest 插件不会分析任意函数体来猜测。
+
+运行前先把 Device Profile、PICS 和厂商操作约定映射到同一能力 ID，再按合并后的 DUT 适用性执行：
 
 - `SUPPORTED`：执行正向测试。
-- `NOT_SUPPORTED`：执行不支持行为测试或 skip，取决于测试目的。
+- `NOT_SUPPORTED`：默认 skip 正向测试；只有测试计划明确要求且风险允许时才执行“不支持行为”测试。
 - `UNKNOWN`：标记 xfail/blocked，不得自动假设支持。
+
+任何状态改变能力即使标为 `SUPPORTED`，仍必须独立通过安全门；Profile 不是操作授权。Profile、PICS 和操作约定存在冲突时不得自动选择其中一个，应在预检阶段阻断并生成可定位的冲突项。
 
 ---
 
@@ -650,7 +778,23 @@ def test_integrity_poll_analog(...):
 | `detail` | 返回完整测点明细 | 功能验证和问题定位 |
 | `summary` | C++ 内聚合，只返回统计和异常样本 | 大数据性能测试 |
 
-### 10.2 性能采集命令
+两种模式均必须有接收对象数、内存和响应大小上限。`summary` 不得先构造完整 `MeasurementRecord` JSON 数组再丢弃；它应在 native 层直接更新紧凑统计。一次 Read 的 `return_mode` 只控制该任务结果，持续 capture 则跨多个回调和任务聚合，二者是正交能力。
+
+### 10.2 Capture v1 语义与命令合同
+
+Capture 必须先声明统计语义，不能把所有接收对象都按同一种“唯一点”算法处理：
+
+| `mode` | 真值来源 | 唯一性和完整性规则 |
+|---|---|---|
+| `static_set` | `capture.begin` 中经过校验的紧凑点范围 | 唯一键为规范化的 `kind + uint32 index`；同一键再次出现计为 duplicate；可确定 missing |
+| `event_sequence` | 外部参考从站/发生器生成的不可变事件清单和 SHA-256 | 每次事件是独立 occurrence；同一测点再次变化不自动算 duplicate；由报告层按批准的匹配规则与外部清单对账 |
+| `observation` | 无外部真值 | 只报告观察总数、签名重复、顺序和资源；`missing`/`duplicates` 必须为 `null` 并给出 `UNKNOWN_WITHOUT_GROUND_TRUTH` |
+
+`static_set` 的 Variation、来源、flags 和可选期望值属于过滤或 mismatch 断言，不属于点身份；这样 Variation 0 请求返回具体变体时不会被误判为另一个点。浮点期望值必须声明“位模式相等”或明确的绝对/相对容差。大型非连续点表应由 Python 预检后转换成有界紧凑范围；host 不接受任意文件路径，也不接受超过请求行和范围数量上限的内联清单。
+
+`event_sequence` 的外部清单至少绑定发生器版本、seed/场景 ID、开始和结束序号、事件总数及 SHA-256。DNP3 事件本身没有本项目的发生器 occurrence ID；没有外部真值或批准的匹配规则时，框架不得宣称 `missing == 0` 或 `duplicates == 0`。
+
+命令为：
 
 ```text
 capture.begin
@@ -658,22 +802,59 @@ capture.progress
 capture.end
 ```
 
-`capture.end` 至少返回：
+v1 行为固定如下：
+
+- 每个会话最多一个 ACTIVE capture；`capture.begin` 在已有 ACTIVE capture 时返回 `ALREADY_EXECUTING`。
+- `capture.begin` 由 host 生成有界 ASCII `capture_id`，返回规范化后的 mode、过滤条件、期望模型、开始单调时间和 deadline。
+- `capture.progress` 必须携带准确 `capture_id`，只返回非消费快照。累计计数、最大队列水位和状态只能单调前进；`current_queue_depth` 允许上下变化。
+- `capture.end` 必须携带准确 `capture_id`，停止接收、在有界期限内排空 collector 并返回终态。对同一 ID 重复调用必须幂等并返回相同终态摘要，直到下一次成功 `capture.begin` 或会话销毁。
+- 错误、过期或其他会话的 ID 返回 `INVALID_STATE` 并包含当前状态，不得误结束活动 capture。
+- `disconnect`、连接失败或 `shutdown` 把 ACTIVE capture 标记为 `ABORTED`，释放资源，并在断开结果或有界诊断快照中保留终态计数。
+- 本地 capture deadline 到期后状态为 `TIMED_OUT`、`valid=false`，原因包含 `CAPTURE_DEADLINE_EXCEEDED`；它不是 DNP3 `RESPONSE_TIMEOUT`。
+- 队列溢出后继续保留计数，但最终结果无效；`capture.progress/end` 返回 `QUEUE_OVERFLOW`，并在 `details.operation_result` 中携带有界终态摘要。
+- 因 v1 只有一个在途 RPC，阻塞的 Read 请求执行期间不保证能够调用 `capture.progress`。持续 unsolicited 场景可在请求间轮询；若将来需要任务执行中的实时进度，必须单独设计异步 job/通知协议，不能暗中增加第二条 stdout 通道。
+
+`capture.begin` 至少接受以下经过 Schema 限制的概念字段；准确字段名和上限在实现任务中固定后同步到 `schemas/`：
 
 ```json
 {
-  "expected":100000,
+  "mode":"static_set",
+  "sources":["solicited"],
+  "expected":{
+    "point_ranges":[
+      {"kind":"analog_input","start":0,"stop":99999}
+    ]
+  },
+  "mismatch_sample_limit":100,
+  "duration_limit_ms":600000
+}
+```
+
+`capture.end` 的静态点集结果至少返回：
+
+```json
+{
+  "capture_id":"cap-...",
+  "state":"FINALIZED",
+  "valid":true,
+  "mode":"static_set",
+  "expected_total":100000,
   "received_total":100000,
   "received_unique":100000,
   "duplicates":0,
   "missing":0,
+  "unmatched_total":0,
   "duration_ms":1840,
   "throughput_per_sec":54347.8,
   "max_queue_depth":418,
   "queue_overflow":0,
+  "invalid_reasons":[],
+  "completeness_scope":"NATIVE_STATIC_SET",
   "mismatch_sample":[]
 }
 ```
+
+所有计数必须定义为无符号整数并检查溢出。`missing`、`duplicates` 或资源指标不可证明/不可采集时使用 JSON `null` 加稳定 reason/source 字段，禁止填 0、空数组或估算值冒充测量结果。
 
 ### 10.3 性能实现约束
 
@@ -681,13 +862,38 @@ capture.end
 - 回调到存储路径不得进行磁盘 I/O。
 - 先使用有界 mutex/condition_variable 队列；只有基准证明不够时才改无锁结构。
 - 队列满时必须递增 overflow 并让本次结果无效，禁止静默丢弃。
-- 可使用数组、位图、紧凑结构或哈希摘要记录接收情况。
+- 可使用数组、位图、紧凑结构或哈希摘要记录接收情况；配置必须同时限制项目数和估算字节数，不能只限制点数。
 - 只返回全部异常点中的有限样本，样本上限可配置。
 - 性能运行关闭逐帧和逐点 Debug 日志。
-- 批量遥控/遥调必须提供 `operate_batch`，不能让 Python 逐点 RPC。
+- 当前 `read` 已支持多 Header，`direct_operate`/`select_and_operate` 已支持一个 CommandSet 多点；不得仅为改名重复新增 `read_batch`/`operate_batch`。只有现有命令无法表达所需线上任务时才设计新 API。
 - 同时测试“一个 CommandSet 多点”和“连续单点命令”，二者结果分开报告。
+- native 回调队列溢出、OpenDNP3/链路层丢弃、DUT 事件缓冲溢出 IIN 和操作系统网络丢包必须分别计数；其中任何一个非零都不能被另一个计数掩盖。
+- 性能采集开销本身必须通过 capture 关闭/开启的 A/B 基线量化；无法证明观察开销可接受时，不得用该结果评价 DUT。
 
-### 10.4 必须证明工具不是瓶颈
+### 10.4 指标词典和时间口径
+
+每个指标必须在报告中携带 `source`、`scope`、`unit` 和可用性；不同采集层的同名时间不得混用：
+
+| 指标 | 固定定义 | 典型来源 |
+|---|---|---|
+| `task_submit_monotonic_ns` | host 向 OpenDNP3 提交任务前的本机单调时间 | host |
+| `first_fragment_monotonic_ns` | SOE `BeginFragment` 首次进入时的本机单调时间 | OpenDNP3 callback |
+| `first_object_monotonic_ns` | 首个对象进入 `Process` 时的本机单调时间 | OpenDNP3 callback |
+| `last_object_monotonic_ns` | 最后一个对象进入 `Process` 时的本机单调时间 | OpenDNP3 callback |
+| `task_complete_monotonic_ns` | task completion callback 到达时的本机单调时间 | OpenDNP3 callback |
+| `wire_first_byte_monotonic_ns` | TCP/链路首字节到达采集点的时间 | 仅限批准的底层插桩或 PCAP；否则为 `null` |
+| `throughput_per_sec` | 指定统计窗口内 `received_total / duration_seconds` | native capture |
+| `process_cpu_seconds` | host 进程 user+kernel CPU 增量 | Windows process API |
+| `cpu_core_percent` | `CPU 秒 / wall 秒 × 100`；一个满载逻辑核为 100%，可超过 100% | Windows process API |
+| `working_set_bytes` / `private_bytes` | 同一采样点的当前值，另报 peak | Windows process API |
+| `handle_count` / `thread_count` | host 进程当前值，另报 min/max/末值 | Windows process API |
+| `queue_depth` / `max_queue_depth` / `queue_overflow` | 项目 collector 队列当前值、峰值和累计溢出 | native collector |
+| `network_rx_bytes` / `network_tx_bytes` | 明确是 DNP3 payload、TCP payload 还是线速字节 | PCAP 或经验证的底层计数；否则为 `null` |
+| DUT CPU/内存/队列 | 被测 EMS 进程或主机资源 | 内网批准的外部监控；主站不得估算 |
+
+延迟必须声明统计总体，例如“每次完整性扫描的 submit-to-complete”或“每个事件的发生器时间到 first-object”。p50/p95/p99 使用固定、文档化的 nearest-rank 算法并报告样本数；禁止把每点、每分片和每任务延迟混入同一个分布。DNP3 设备时间只有在时钟同步、精度和采集延迟预算已证明时才能用于单向延迟，否则仅作为设备时间字段展示。
+
+### 10.5 必须证明工具不是瓶颈
 
 正式测试 EMS 前，先用独立参考从站测出测试工具上限，并记录：
 
@@ -698,7 +904,23 @@ capture.end
 - 连接反复创建/销毁稳定性。
 - 24 小时或项目规定时长的稳定性。
 
-若 `queue_overflow > 0`、工具 CPU 饱和或队列持续增长，本次 EMS 性能结论无效。
+基准必须记录测试机 CPU/内存/操作系统、电源计划、网卡、进程版本、配置/点表/性能 Profile 哈希、参考端版本和两端是否同机。项目自带 OpenDNP3 回环从站只用于确定性回归和初步容量探索；同栈、同机结果不能作为独立互操作证据，也不能单独证明 master 上限。正式工具上限优先在另一台机器使用独立参考端测量，并确认参考端能力高于目标负载。
+
+每个场景包含可配置预热、测量、冷却和多轮重复。先执行无 capture/有 capture 的对照，再执行目标负载。若任一项目队列 overflow、DUT 事件缓冲溢出、操作系统/抓包丢包、工具 CPU 达到配置上限或队列/内存持续增长，本次 EMS 性能结论无效。阈值和安全余量只能来自项目 `performance_profile.json`，不得写死在代码或指导书中。
+
+### 10.6 24 小时稳定性运行规则
+
+24 小时不是一个简单的长 `sleep`，必须由可恢复证据的 soak runner 编排：
+
+1. 启动前运行离线预检，记录构建、配置、Profile、点表、参考端/DUT 身份和测试机规格哈希。
+2. 按 Profile 执行预热后开始正式计时；资源、连接、任务、capture 和磁盘余量按有界周期采样。
+3. 检查点使用有界轮转的编号文件保存，并通过同目录临时文件加原子替换写入；每个检查点至少包含 UTC、单调经过时间、最后成功场景、累计指标和前一检查点哈希。
+4. 日志、PCAP 和样本文件必须轮转并有总大小上限；磁盘余量低于阈值时安全停止并标记 `INCOMPLETE_RESOURCE_LIMIT`，不能写满磁盘。
+5. watchdog 检测 host 退出、无进度、连接抖动和采集线程停止。进程崩溃、机器重启、人工中断或证据链断裂都标记 `INCOMPLETE`，不得自动合并成一次连续 24 小时通过结果。
+6. 只读场景可按 Profile 做有界重连并单独累计中断；任何状态改变场景不得自动重试或在事故锁未处置时恢复运行。
+7. 结束时原子生成最终报告，包含实际有效时长、p50/p95/p99/max、完整性、所有 overflow/drop、连接/超时、资源 min/max/末值和内存增长斜率。
+
+是否通过由 Profile 明确规定，至少要求有效时长达到目标、所有可证明场景 `missing == 0`、所有 overflow/drop 为 0、无未处置异常退出，且预热后的 private bytes、working set、句柄和线程趋势不超过批准阈值。正式 24 小时结论必须在目标内网测试机和独占环境重新执行；本机缩短 soak 只能验证 runner、清理和报告逻辑。
 
 ---
 
@@ -706,7 +928,7 @@ capture.end
 
 ### 11.1 文件格式
 
-`config/capability_matrix.csv` 是协议范围、开发状态和测试证据的唯一事实来源。表头固定为：
+`config/capability_matrix.csv` 是标准能力目录和框架实现状态的唯一事实来源，但不是某台 EMS 的 PICS。每台 DUT 的适用性必须通过独立、未提交的 `ems.local.json` 叠加；不能把一个设备的结论写回公共矩阵。表头固定为：
 
 ```csv
 capability_id,edition,layer,feature,direction,subset_level,function_code,object_group,variations,qualifiers,std_reference,dut_pics_status,backend_status,framework_status,test_case_ids,evidence,owner,notes
@@ -722,15 +944,17 @@ capability_id,edition,layer,feature,direction,subset_level,function_code,object_
 | `direction` | `M2O`、`O2M` 或 `BIDIRECTIONAL` |
 | `subset_level` | 从正式标准/Device Profile 填写；不确定时填 `REVIEW_REQUIRED` |
 | `std_reference` | 正式标准的卷、章、条、表或图编号；不得只写网页链接 |
-| `dut_pics_status` | DUT 声明的支持情况，不代表测试框架能力 |
+| `dut_pics_status` | 公共框架目录中固定为 `UNKNOWN`；真实 DUT 的声明保存在独立 PICS overlay |
 | `backend_status` | 当前 C++ 后端实际能力 |
 | `framework_status` | 从 Python API 到线上证据的端到端状态 |
 | `test_case_ids` | 一个或多个稳定的 pytest ID |
-| `evidence` | 报告、PCAP、测试向量或独立互操作记录的相对路径及 SHA-256 |
+| `evidence` | 报告、PCAP、测试向量或独立互操作记录；`VERIFIED_*` 必须使用 `relative/path#sha256=<64 hex>` |
+
+当前 426 行矩阵是能力/对象目录，不等于 IEEE 1815-2012 的逐条规范要求清单。要宣称“全部标准要求已纳入”，还必须建立单独的 requirement catalog，把每条 `shall`、`shall not` 和条件性要求拆成稳定 requirement ID，记录条款、前置条件、适用角色、能力 ID、测试 ID 和证据。没有该目录时，只能陈述“能力目录覆盖”，不能陈述“规范要求全覆盖”。
 
 ### 11.2 状态枚举
 
-只允许使用以下状态：
+公共矩阵的 `backend_status/framework_status` 使用以下实现状态：
 
 ```text
 NOT_ANALYZED
@@ -740,11 +964,12 @@ IMPLEMENTED_UNVERIFIED
 VERIFIED_UNIT
 VERIFIED_INTEROP
 VERIFIED_CONFORMANCE
-NOT_APPLICABLE_BY_PICS
 BLOCKED
 ```
 
-状态只能向右提升，且必须满足：
+每台 DUT 的 PICS 只允许 `SUPPORTED`、`NOT_SUPPORTED`、`UNKNOWN`。`NOT_APPLICABLE_BY_PICS` 是预检/执行结果中的派生结论，不得写入公共框架矩阵来掩盖后端或框架缺口。
+
+这些状态不是“只能向右”的永久等级。每次发布必须根据当前代码、后端版本、DUT 固件和可访问证据重新计算；测试回归、证据损坏/过期、依赖或固件变化时必须降级。已发布的矩阵快照保持不可变，当前矩阵通过新提交记录升降原因。目标状态至少满足：
 
 | 目标状态 | 最低证据 |
 |---|---|
@@ -752,9 +977,10 @@ BLOCKED
 | `VERIFIED_UNIT` | 字段级编码/解码测试和固定黄金字节 |
 | `VERIFIED_INTEROP` | 与独立实现或真实 EMS 的 PCAP、断言和环境记录 |
 | `VERIFIED_CONFORMANCE` | 适用的正式一致性程序结果及人工审核 |
-| `NOT_APPLICABLE_BY_PICS` | Device Profile/PICS 中的明确条目和版本 |
 
-`UNSUPPORTED_BY_BACKEND` 不是失败，而是必须保留的真实状态。`NOT_APPLICABLE_BY_PICS` 只能用于某个 DUT 的执行选择，不能把框架自身未实现的能力隐藏掉。
+`UNSUPPORTED_BY_BACKEND` 不是失败，而是必须保留的真实状态。DUT 的“不适用”只能用于某次设备执行选择，不能把框架自身未实现的能力隐藏掉。
+
+`VERIFIED_INTEROP` 的证据清单必须记录对端协议栈及其独立性；仅知道“真实 EMS”但不知道是否与本项目同栈时，应保留真实 DUT 证据，但不得把它当作唯一独立互操作依据。DUT 适用性、backend 实现和 framework 端到端证据仍是三个独立维度，不能用一个总状态互相覆盖。
 
 ### 11.3 自动门禁
 
@@ -763,7 +989,8 @@ BLOCKED
 - `capability_id` 唯一且格式合法。
 - 枚举值合法。
 - 2012 目标项都有 `std_reference`。
-- `VERIFIED_*` 都有测试 ID 和存在的证据文件。
+- `VERIFIED_*` 都有测试 ID、存在的证据文件以及与文件内容匹配的 SHA-256。
+- 公共矩阵所有 `dut_pics_status` 均为 `UNKNOWN`，不接受设备状态污染框架目录。
 - 测试引用的能力 ID 都存在；矩阵引用的测试 ID 也真实存在。
 - `VERIFIED_CONFORMANCE` 不能只有同栈自测证据。
 - 发布时不能存在被本次里程碑要求覆盖的 `NOT_ANALYZED`。
@@ -828,7 +1055,7 @@ BLOCKED
 
 | 十六进制 | 十进制 | 名称 | 主要方向 | 实施备注 |
 |---:|---:|---|---|---|
-| `0x00` | 0 | CONFIRM | 双向 | 对带 `CON` 的应用分片确认 |
+| `0x00` | 0 | CONFIRM | 主站→从站 | 对带 `CON` 的从站应用分片确认；IEEE 1815-2012 Table 4-2 / 4.4.1 |
 | `0x01` | 1 | READ | 主站→从站 | 静态、事件、Class、范围和多 Header |
 | `0x02` | 2 | WRITE | 主站→从站 | 时间、死区、IIN/配置等对象依适用性拆分 |
 | `0x03` | 3 | SELECT | 主站→从站 | 与 OPERATE 配对，严格校验选择结果 |
@@ -860,11 +1087,11 @@ BLOCKED
 | `0x1D` | 29 | AUTHENTICATE_FILE | 主站→从站 | 文件认证，不等于 SAv5 |
 | `0x1E` | 30 | ABORT_FILE | 主站→从站 | 会话回收 |
 | `0x1F` | 31 | ACTIVATE_CONFIG | 主站→从站 | 激活状态对象和时序 |
-| `0x20` | 32 | AUTHENTICATE_REQ | 双向/按流程 | SAv5 认证请求 |
-| `0x21` | 33 | AUTH_REQ_NO_ACK | 双向/按流程 | SAv5 无响应请求 |
+| `0x20` | 32 | AUTHENTICATE_REQ | 主站→从站 | SAv5 认证请求；IEEE 1815-2012 Table 4-2 / 4.4.21 |
+| `0x21` | 33 | AUTH_REQ_NO_ACK | 主站→从站 | SAv5 无响应请求；IEEE 1815-2012 Table 4-2 / 4.4.22 |
 | `0x81` | 129 | RESPONSE | 从站→主站 | Solicited response、IIN、对象解析 |
 | `0x82` | 130 | UNSOLICITED_RESPONSE | 从站→主站 | 主动上送及应用确认 |
-| `0x83` | 131 | AUTHENTICATE_RESP | 双向/按流程 | SAv5 认证响应 |
+| `0x83` | 131 | AUTHENTICATE_RESP | 从站→主站 | SAv5 认证响应；IEEE 1815-2012 Table 4-2 / 4.4.25 |
 
 对 No Response 功能，测试不能以“收到成功响应”为通过条件；应根据线上无响应、从站状态后读回和副作用验证共同判定。
 
@@ -883,10 +1110,10 @@ BLOCKED
 | 11 | Binary Output Status Event | `v0–2` |
 | 12 | Binary Output Command | `v0–3`；逐项核对当前/废止语义 |
 | 13 | Binary Output Command Event | `v0–2` |
-| 20 | Counter 静态 | `v0,1,2,5,6` |
-| 21 | Frozen Counter 静态 | `v0,1,2,5,6,9,10` |
-| 22 | Counter Event | `v0,1,2,5,6` |
-| 23 | Frozen Counter Event | `v0,1,2,5,6` |
+| 20 | Counter 静态 | `v0–8`；`v3,v4,v7,v8` 在 2012 中仍有分配但 obsolete，不得从目录删除 |
+| 21 | Frozen Counter 静态 | `v0–12`；`v3,v4,v7,v8,v11,v12` 在 2012 中仍有分配但 obsolete |
+| 22 | Counter Event | `v0–8`；`v3,v4,v7,v8` 在 2012 中仍有分配但 obsolete |
+| 23 | Frozen Counter Event | `v0–8`；`v3,v4,v7,v8` 在 2012 中仍有分配但 obsolete |
 | 30 | Analog Input 静态 | `v0–6` |
 | 31 | Frozen Analog Input 静态 | `v0–8` |
 | 32 | Analog Input Event | `v0–8` |
@@ -900,17 +1127,18 @@ BLOCKED
 | 51 | Common Time of Occurrence | `v1–2` |
 | 52 | Time Delay | `v1–2` |
 | 60 | Class Data | `v1–4` |
-| 70 | File Control | `v1–8`；逐项核对 v1 的标识/目录语义 |
+| 70 | File Control | `v0–8`；`G70V0` 是 ASSIGN_CLASS 请求中选择 file event `v4–7` 的请求选择器，不是具体响应格式 |
 | 80 | Internal Indications | `v1` |
 | 81 | Device Storage | `v1` |
 | 82 | Device Profile | `v1` |
-| 83 | Data Set Prototype | `v1–2` |
-| 85 | Data Set Descriptor | `v0–1` |
-| 86 | Data Set | `v0–3` |
+| 83 | Data Set Private Registration | `v1–2` |
+| 85 | Data Set Prototype | `v0–1`；`v1` 为具体 prototype，`v0` 的请求适用性按正式条款核对 |
+| 86 | Data Set Descriptor | `v0–3` |
 | 87 | Data Set Present Value | `v0–1` |
 | 88 | Data Set Snapshot Event | `v0–1` |
 | 90 | Application Identifier | `v1` |
 | 91 | Activation Status | `v1` |
+| 100 | Floating-point（obsolete 通用对象族说明） | 无新的具体数据变体；保留能力条目并禁止新应用误用 |
 | 101 | Binary-Coded Decimal 对象族 | `v1–3`；名称和字段须由正式表复核 |
 | 102 | Unsigned Integer | `v0–1` |
 | 110 | Octet String 静态 | 变体号表示长度；逐长度能力由项目风险抽样，解析器须覆盖全部合法长度 |
@@ -925,7 +1153,15 @@ BLOCKED
 
 ### 12.7 限定词（Qualifier）
 
-必须从正式标准建立“限定词代码 × 对象 × 功能码 × 方向”的合法组合矩阵。至少覆盖：
+必须从正式标准建立“限定词代码 × 对象 × 功能码 × 方向”的合法组合矩阵。IEEE 1815-2012 Table 4-6 分配的限定词代码完整集合为：
+
+```text
+00 01 02 03 04 05 06 07 08 09
+17 18 19 27 28 29 37 38 39
+4B 5B 6B
+```
+
+目录至少覆盖：
 
 - 8/16 位 start-stop 范围。
 - all objects。
@@ -934,7 +1170,9 @@ BLOCKED
 - 16 位 free-format（常用于文件/认证等对象）。
 - 标准定义但 OpenDNP3 公共 API 无法生成的限定词。
 
-常见代码包括 `0x00`、`0x01`、`0x06`、`0x07`、`0x08`、`0x17`、`0x28`，free-format 包括 `0x5B`。这不是完整代码表；Agent 必须从 2012 正式表导入精确数值，不能根据这段文字补猜其他代码。
+代码出现在 Table 4-6 只表示它在 2012 中已分配，不表示它对所有对象、功能码和方向都合法；合法组合仍须逐条建模和测试。
+
+固定 OpenDNP3 3.1.2 仅公开 Q00/Q01/Q06/Q07/Q08/Q17/Q28。当前框架不能表达 Q02/Q09/Q39 的 32-bit range/count/index，也不能把它们降级为 16-bit 后声称已执行；需要这些限定符的场景必须由 PICS + 框架双门禁阻止，直到完成经评审的后端扩展或更换协议栈。
 
 每个限定词的测试需覆盖：合法边界、start > stop、count 与实际对象数不符、索引溢出、重复索引、不支持组合及正确 IIN。
 
@@ -952,15 +1190,16 @@ BLOCKED
 | IIN1.5 | `LOCAL_CONTROL` |
 | IIN1.6 | `DEVICE_TROUBLE` |
 | IIN1.7 | `DEVICE_RESTART` |
-| IIN2.0 | `FUNC_NOT_SUPPORTED` |
+| IIN2.0 | `NO_FUNC_CODE_SUPPORT` |
 | IIN2.1 | `OBJECT_UNKNOWN` |
-| IIN2.2 | `PARAM_ERROR` |
+| IIN2.2 | `PARAMETER_ERROR` |
 | IIN2.3 | `EVENT_BUFFER_OVERFLOW` |
 | IIN2.4 | `ALREADY_EXECUTING` |
 | IIN2.5 | `CONFIG_CORRUPT` |
-| IIN2.6–7 | Reserved；非零时保留原值并报告 |
+| IIN2.6 | `RESERVED_2`；非零时保留原值并报告 |
+| IIN2.7 | `RESERVED_1`；非零时保留原值并报告 |
 
-IIN 测试必须区分瞬时位、保持位以及由后续动作清除的位；不能只判断 `response.ok`。
+IIN 测试必须区分瞬时位、保持位以及由后续动作清除的位；不能只判断 `response.ok` 或 OpenDNP3 task `SUCCESS`。IIN2.0/2.1/2.2 表示请求不被支持、对象未知或参数错误，EMS 功能场景必须失败，即使场景允许零条测量。IIN 观测存储必须有界；当前任务窗口发生丢失必须返回溢出错误，不能用不完整聚合值继续判定。
 
 ### 12.9 质量、时间和命令状态
 
@@ -974,7 +1213,30 @@ IIN 测试必须区分瞬时位、保持位以及由后续动作清除的位；�
 
 时间矩阵至少覆盖：48 位 DNP3 时间、绝对时间、相对时间与 CTO、同步/不同步时间、时间溢出和无时间对象。内部统一保存原始毫秒值；Python 再提供 UTC datetime 视图。不得在无显式时区依据时转换成本地时间。
 
-命令结果不能压缩成布尔值。对 IEEE 1815-2012 定义的每个 Command Status 建独立条目，至少包括成功、超时、未 Select、格式错误、不支持、已激活、硬件错误、本地控制、操作过多、未授权、抑制、处理受限、越界以及下游相关状态；精确数值和该版是否定义必须从正式表导入，不能混入后续修订版枚举。
+命令结果不能压缩成布尔值。IEEE 1815-2012 Table 11-7 的 Command Status 必须按下表建模：
+
+| 数值 | 2012 规范名称 |
+|---:|---|
+| 0 | `SUCCESS` |
+| 1 | `TIMEOUT` |
+| 2 | `NO_SELECT` |
+| 3 | `FORMAT_ERROR` |
+| 4 | `NOT_SUPPORTED` |
+| 5 | `ALREADY_ACTIVE` |
+| 6 | `HARDWARE_ERROR` |
+| 7 | `LOCAL` |
+| 8 | `TOO_MANY_OBJS` |
+| 9 | `NOT_AUTHORIZED` |
+| 10 | `AUTOMATION_INHIBIT` |
+| 11 | `PROCESSING_LIMITED` |
+| 12 | `OUT_OF_RANGE` |
+| 13～125 | `RESERVED` |
+| 126 | `NON_PARTICIPATING` |
+| 127 | `UNDEFINED` |
+
+host/Python 边界必须同时提供 2012 规范视图、后端解码数值、后端名称和线上原值是否无歧义。OpenDNP3 3.1.2 对 13～18 暴露后续修订版枚举时，只能把该别名放在 `status_backend`，2012 视图仍为 `RESERVED`。固定栈会把未识别线上值 19～125 折叠成 127；这种结果必须标记 `status_wire_raw_unambiguous=false`，不能伪称保留了原始 7-bit 值。完整原值支持需要 raw decoder 或经批准的协议栈补丁。
+
+安全判定不得只使用 task summary：点级 `TIMEOUT`、2012 `RESERVED` 或 decoded 127 歧义均不能证明设备未执行，必须置 `execution_uncertain=true` 并进入人工读回流程。每个点还必须按 request ordinal/type/index 与原请求一一关联；缺失、重复或错配属于不确定的协议损坏。
 
 ### 12.10 Class、事件和主动上送
 
@@ -1065,7 +1327,7 @@ SAv5 必须作为独立安全子项目，覆盖功能码 `0x20`、`0x21`、`0x83
 | Group 0 Device Attributes | 部分/缺失 | 扩展后端和逐属性矩阵 |
 | Group 31、33 Frozen Analog | 3.1.2 公共支持不足 | 扩展编解码和主站交付路径 |
 | Group 34 Deadband | 缺失 | 扩展 WRITE/READ 和解析 |
-| Group 13、43 Command Event | 部分/缺失 | 扩展事件解析和测试 |
+| Group 13、43 Command Event | solicited/unsolicited 回调归一化已接入 | 保持 `IMPLEMENTED_UNVERIFIED`；补各值宽/时间变体 golden vector 和独立互操作，只有测试发现真实 codec/API 缺口时才扩展后端 |
 | Group 110、111 Octet String | 支持 | 补长度边界和性能测试 |
 | File Transfer / Group 70 | 没有完整业务实现 | 新状态机或其他后端 |
 | Data Set / Groups 83、85–88 | 未实现 | 新模块或其他后端 |
@@ -1108,21 +1370,36 @@ SAv5 必须作为独立安全子项目，覆盖功能码 `0x20`、`0x21`、`0x83
 - 发现标准不清、API 不存在或测试环境缺失时，状态改为 `BLOCKED`，不得“合理猜测”。
 - 所有协议新增功能按“黄金字节测试 → 后端实现 → Python API → 独立互操作 → 能力矩阵”顺序闭环。
 
+里程碑编号用于能力分组，不是要求所有工作严格串行。最小依赖图为：
+
+```text
+M0 输入/目录 ──> M1 工程骨架 ──> M2 核心读路径
+                                      ├──> M3 控制/服务（按风险独立拆卡）
+                                      ├──> M4/H08 本机 capture 与性能工具
+                                      │        └──> H09 本机 runner
+                                      │                 └──> 目标环境正式 24h 证据
+                                      └──> M5 经典对象/后端缺口
+M6 高级事务和 M7 SAv5 仅在各自前置输入、安全评审到位后启动
+```
+
+因此 H08/H09 的本机 collector、runner、确定性回环和资源采样可以现在开发，不必等待 Restart/Freeze/Assign Class 全部完成；正式 EMS 阈值、设备资源和 24 小时结论仍必须在目标内网独占环境执行。
+
 ### 14.2 M0：输入与范围基线
 
 任务：
 
 1. 收集 IEEE 1815-2012 正式文本访问方式、适用勘误和 DNP3 Device Profile 模板。
-2. 收集 EMS 的 Device Profile/PICS、点表、链路地址、承载方式、最大分片、超时、主动上送策略和安全能力。
+2. 分别收集 EMS 的 Device Profile、PICS、批准操作约定、点表、链路地址、承载方式、最大分片、超时、主动上送策略和安全能力，并执行冲突检查。
 3. 固定 OpenDNP3 3.1.2 源码 commit、SHA-256、许可证和内部镜像。
-4. 从正式标准建立完整 `capability_matrix.csv`；本指导书中的表只用于交叉检查。
-5. 编写 `opendnp3_gap_analysis.md`，逐项引用固定源码/API。
-6. 明确参考从站、独立主/从站工具、一致性测试资源和抓包位置。
+4. 从正式标准建立完整 `capability_matrix.csv`；本指导书中的表只用于交叉检查，公共矩阵的 DUT 状态保持 `UNKNOWN`。
+5. 建立逐条 requirement catalog，覆盖 `shall`、`shall not` 和条件性要求，并与能力 ID、测试 ID、证据关联。
+6. 编写 `opendnp3_gap_analysis.md`，逐项引用固定源码/API。
+7. 明确参考从站、独立主/从站工具、一致性测试资源和抓包位置。
 
 验收：
 
 - 能力矩阵校验脚本通过。
-- 所有功能码、对象/变体、限定词、IIN、质量、链路/传输、安全条目均已登记，无 `NOT_ANALYZED` 的目录缺口。
+- 所有功能码、对象/变体、限定词、IIN、质量、链路/传输、安全条目均已登记，且规范性要求目录不存在未解释的遗漏。
 - EMS PICS 中的 `SUPPORTED`、`NOT_SUPPORTED` 和 `UNKNOWN` 可机器读取。
 - 架构、缺口和许可证评审均有负责人签字/电子记录。
 
@@ -1144,7 +1421,7 @@ SAv5 必须作为独立安全子项目，覆盖功能码 `0x20`、`0x21`、`0x83
 - 连续 1,000 次启动、`hello`、`shutdown` 无僵尸进程和句柄持续增长。
 - 空行、非法 UTF-8、非法 JSON、重复 ID、未知命令、超长行都有稳定错误码，进程不崩溃。
 - stdout 的每一非空行均能被 JSON 解析；普通日志只在 stderr。
-- 尚未实现的命令统一返回 `UNSUPPORTED_BY_BACKEND` 或 `COMMAND_NOT_IMPLEMENTED`，不能返回假数据。
+- 尚未实现的已知命令统一返回 `UNSUPPORTED_BY_BACKEND`，未知命令返回 `INVALID_REQUEST`，不能返回假数据或引入未登记错误码。
 
 ### 14.4 M2：OpenDNP3 核心读路径
 
@@ -1188,30 +1465,44 @@ SAv5 必须作为独立安全子项目，覆盖功能码 `0x20`、`0x21`、`0x83
 
 ### 14.6 M4：大数据量与性能路径
 
-任务：
+M4 不得作为一张大任务卡实施。它在 M2 的稳定 Read/unsolicited 数据路径和 Capture v1 设计评审完成后即可独立启动，不以 M3 的 Restart/Freeze/Assign Class 为前置。按内部依赖顺序拆分：
+
+| 任务卡 | 唯一产出 |
+|---|---|
+| `T15a` | Capture v1 状态机、字段、错误语义、Schema 和指标词典评审完成；不写 collector 业务代码 |
+| `T15b` | native `MeasurementStore`、三种 mode、有界内存和确定性单元测试 |
+| `T15c` | host `capture.begin/progress/end`、幂等、超时/溢出/断开清理和协议测试 |
+| `T15d` | Python 类型化 API、fake host、真实 native 回环和打包合同测试 |
+| `T16a` | 可扩展本地参考从站/发生器、确定性 seed 和外部真值清单 |
+| `T16b` | Windows host 资源采样、指标 source/scope 和 capture A/B 开销测试 |
+| `T16c` | `performance_profile.json`、报告模型、阈值判定和短时 benchmark/soak |
+| `T16d` | 24 小时 runner、watchdog、原子检查点、轮转和中断证据测试 |
+| `T16e` | 在独立参考端和目标内网环境正式执行；只产生环境证据和阈值结论，不顺带修改协议能力 |
+
+总体任务：
 
 1. 实现 `MeasurementStore` 的 detail/summary 模式和有界队列。
-2. 实现 `capture.begin/progress/end`、期望集合、唯一性、重复、缺失、错值样本和队列水位。
-3. 实现 `operate_batch`、`read_batch` 和 C++ 内聚合，避免逐点 IPC。
-4. 使用单调时钟记录首字节、首对象、末对象、任务完成等时间点。
-5. 增加 CPU、工作集、private bytes、句柄、线程、队列深度、网络字节统计。
-6. 实现可重复数据生成器和测试场景清单。
+2. 按第 10 节实现 `capture.begin/progress/end`、三种 capture mode、期望模型、样本上限、队列水位和断开清理。
+3. 复用现有多 Header `read` 和多点 `direct_operate`/`select_and_operate`，在 C++ 内聚合；只有现有线上语义无法表达时才新增批量命令。
+4. 使用单调时钟记录 task submit、first fragment、first object、last object 和 task completion；wire first byte 仅由批准的底层插桩或 PCAP 提供。
+5. 增加带 source/scope 的 CPU、working set、private bytes、句柄、线程、队列深度统计；网络字节和 DUT 资源不可采集时返回 `null`，不得估算。
+6. 实现可重复数据发生器、外部真值清单、性能 Profile、短时 soak 和 24 小时 runner。
 
 验收：
 
 - 先用参考从站测出工具自身上限；工具上限应高于项目 EMS 目标并保留安全余量，具体阈值写入项目配置而非源码。
-- 目标点数下 `queue_overflow == 0`、`missing == 0`，且内存进入稳定平台，不随轮次线性增长。
+- 目标点数下所有 overflow/drop 为 0；有真值的场景 `missing == 0`，无真值场景明确为 unknown，且内存/句柄/线程趋势满足 Profile 阈值。
 - summary 模式不会生成逐点 JSON；响应大小有上限。
 - 至少覆盖：大总召、突发事件、持续事件、批量控制、断线重连后补事件、24 小时稳定性。
-- 报告给出 p50/p95/p99/max、吞吐、完整性、工具资源和 DUT 资源，不能只给平均值。
+- 报告给出带统计总体和 source/scope 的 p50/p95/p99/max、吞吐、完整性、工具资源，以及由外部监控实际提供的 DUT 资源；不能只给平均值或伪造不可用指标。
 
-### 14.7 M5：子集 Level 4 与经典对象缺口
+### 14.7 M5：经典对象与后端缺口
 
 任务按能力族拆分：
 
 - Group 0 Device Attributes。
 - Group 31/33 Frozen Analog，Group 34 Deadband。
-- Group 13/43 Command Event。
+- Group 13/43 Command Event 的定向变体测试和独立互操作；现有回调映射不是待重写项，除非测试证明存在真实缺口。
 - Group 50 Variation 1 的读取、Variation 2，以及 Group 80 主站读取路径。
 - `DIRECT_OPERATE_NR` 和公共 `Header` 无法表达的控制/限定词组合。
 - 广播、self-address 和 OpenDNP3 无法表达的限定词/请求组合。
@@ -1338,26 +1629,40 @@ SAv5 必须作为独立安全子项目，覆盖功能码 `0x20`、`0x21`、`0x83
 
 ### 15.4 PCAP 和运行清单
 
-每次可归档运行生成 `run_manifest.json`：
+当前 pytest 插件实际生成 `<evidence-root>/<run_id>/manifest.json` 和带哈希的 `pytest-results.json`。清单结构以 `schemas/evidence-manifest.schema.json` 为准，简化示例如下：
 
 ```json
 {
-  "run_id":"2026-08-28T120000Z-lab01-001",
-  "framework_version":"1.2.0",
-  "git_commit":"...",
-  "backend":{"name":"OpenDnp3Backend","version":"3.1.2","commit":"..."},
-  "standard":"IEEE1815-2012",
-  "dut":{"model":"...","firmware":"...","profile_sha256":"..."},
-  "config_sha256":"...",
-  "tests":["..."],
-  "pcap":"captures/run.pcapng",
-  "result":"PASS",
-  "started_utc":"...",
-  "ended_utc":"..."
+  "run_id":"pytest-20260828T120000000000Z-a1b2c3d4",
+  "state":"COMPLETED",
+  "started_at_utc":"...",
+  "completed_at_utc":"...",
+  "pytest_exit_status":0,
+  "runner":{
+    "python_implementation":"CPython",
+    "python_version":"...",
+    "platform":"...",
+    "pytest_version":"..."
+  },
+  "source_control":{"available":true,"commit":"...","tracked_worktree_state":"clean"},
+  "build_info":{"host_version":"0.5.1","opendnp3_version":"3.1.2"},
+  "inputs":{
+    "pics":{"present":true,"file_name":"ems.local.json","size_bytes":1234,"sha256":"..."},
+    "points":{"present":true,"file_name":"points.local.csv","size_bytes":2345,"sha256":"..."}
+  },
+  "results":{"file_name":"pytest-results.json","sha256":"...","test_count":12,"phase_count":36},
+  "redaction":{
+    "private_input_contents_stored":false,
+    "absolute_input_paths_in_metadata_stored":false,
+    "known_absolute_paths_redacted":true,
+    "arbitrary_test_output_requires_review":true,
+    "report_text_limit_chars":16384,
+    "sensitive_fields_redacted":true
+  }
 }
 ```
 
-所有报告、PCAP、配置快照、日志和矩阵快照计算 SHA-256。敏感配置先脱敏；密钥材料永不进入证据包。
+当前 recorder 已覆盖源码、构建、私有输入摘要、pytest 结果和脱敏边界，但尚未为独立对端身份、PCAP、测试机硬件、电源计划、性能真值和指标 source/scope 提供专用强类型字段。H09/M9 在形成正式互操作或性能结论前必须扩展证据 Schema（或绑定经批准且带哈希的独立元数据文件），不能仅把这些信息写在自由文本里。所有报告、PCAP、配置快照、日志和矩阵快照计算 SHA-256；能力矩阵中的 `VERIFIED_*` 引用还必须追加 `#sha256=` 并由校验器复算。清单及周期检查点采用原子写入；敏感配置先脱敏，密钥材料永不进入证据包。
 
 ### 15.5 测试命名和标记
 
@@ -1371,30 +1676,34 @@ TC_LINK_CONFIRMED_DUPLICATE_FCB_001
 TC_SEC_G120V1_REPLAY_001
 ```
 
-pytest 标记至少包括：
+当前 `python/pyproject.toml` 在 `--strict-markers` 下注册的项目标记为：
 
-```python
+```text
 @pytest.mark.dnp3_capability("OBJ.G30.V1")
-@pytest.mark.requires_dut_feature("analog_input")
-@pytest.mark.risk("read_only")  # read_only / changes_state / restart / destructive
-@pytest.mark.performance
+@pytest.mark.dnp3_dut
+@pytest.mark.dnp3_unsupported_behavior  # 仅“不支持行为”测试使用
+@pytest.mark.dnp3_state_changing        # 仅可能改变 DUT 的测试使用
+@pytest.mark.lifecycle_stress           # 仅本机生命周期压力测试使用
 ```
 
-默认测试命令只运行 `read_only`。改变状态、重启、删除文件、激活配置等测试必须由命令行显式授权，并校验实验环境标识。
+不需要真实 DUT 的普通单测不加 `dnp3_dut`。改变状态、重启、删除文件、激活配置等测试必须使用 `dnp3_state_changing`，并由命令行显式授权和校验实验环境标识。H09 如要新增 `performance`/`soak` 标记，必须先在 `python/pyproject.toml` 注册并补严格标记测试；不得直接复制尚未注册的示例标记。
 
 ### 15.6 性能场景参数
 
 不得在代码中写死“合格点数/时延”。在 `performance_profile.json` 中定义：
 
 - 每类测点数量及索引分布。
+- Capture mode、来源过滤、紧凑期望点集；事件场景还要绑定外部真值/发生器 seed、清单哈希和匹配规则。
 - 静态总召总点数和响应分片策略。
 - 事件突发量、持续速率、变化模式和事件 Class。
 - 命令批大小、发送间隔和并发策略。
 - 预热、测量、冷却、轮次数和稳定性时长。
 - 完整性要求、允许重复策略、p95/p99/最大时延阈值。
 - 工具 CPU/内存/队列上限和安全余量。
+- 指标 source/scope、资源采样周期、nearest-rank 百分位统计总体和最小样本数。
+- Soak 检查点周期、日志/PCAP/证据总量、磁盘余量、允许重连次数、内存增长斜率及句柄/线程阈值。
 
-结果必须同时报告发送/接收对象数、唯一点数、事件数、字节数、分片数、重复、缺失、溢出、超时和断连。只报“每秒 N 点”不足以判定性能。
+结果必须同时报告发送/接收对象数、唯一点数、事件数、字节数、分片数、重复、缺失、溢出、超时和断连。不可测或不可证明的值必须为 `null` 并说明原因；只报“每秒 N 点”不足以判定性能。
 
 ---
 
@@ -1402,46 +1711,33 @@ pytest 标记至少包括：
 
 ### 16.1 配置示例
 
-```json
-{
-  "schema_version":1,
-  "backend":"opendnp3",
-  "channel":{
-    "type":"tcp_client",
-    "host":"192.0.2.10",
-    "port":20000,
-    "connect_timeout_ms":5000,
-    "retry":{"min_ms":1000,"max_ms":30000}
-  },
-  "link":{
-    "master_address":1,
-    "outstation_address":10,
-    "use_confirms":false
-  },
-  "master":{
-    "response_timeout_ms":5000,
-    "task_retry_ms":5000,
-    "max_rx_fragment_size":2048,
-    "max_tx_fragment_size":2048,
-    "startup_integrity":false,
-    "disable_unsolicited_on_startup":true
-  },
-  "collection":{
-    "mode":"detail",
-    "queue_capacity":262144,
-    "mismatch_sample_limit":100
-  },
-  "safety":{
-    "environment":"LAB",
-    "allow_state_change":false,
-    "allow_restart":false,
-    "allow_file_delete":false,
-    "allow_activate_config":false
-  }
-}
+```python
+from pathlib import Path
+
+from dnp3_master import HostProcessConfig, TcpConnectionConfig
+
+host_process = HostProcessConfig(
+    executable=Path("bin/dnp3-master-host.exe"),
+    safety_incident_directory=Path("evidence/local/safety-incidents"),
+    startup_timeout=5.0,
+    request_timeout=10.0,
+    shutdown_timeout=2.0,
+)
+
+connection = TcpConnectionConfig(
+    host="192.0.2.10",
+    port=20000,
+    local_adapter="0.0.0.0",
+    connect_timeout=5.0,
+    retry_min=1.0,
+    retry_max=30.0,
+    master_address=1,
+    outstation_address=10,
+    keep_alive_timeout=60.0,
+)
 ```
 
-示例地址 `192.0.2.0/24` 是文档用途；实际配置由环境注入。证书私钥、口令和 SAv5 密钥只写引用 ID，不写明文。
+当前 0.5.1 没有一个可执行的 `config/default.json` 或总配置 Schema；不要按旧草图创建它。pytest 运行参数由插件 CLI/环境变量生成 `HostProcessConfig` 和 `TcpConnectionConfig`，DUT 能力、点表和业务场景分别使用 `ems.local.json`、`points.local.csv`、`ems_test_plan.local.json`，格式参照 `config/*.example.*`。示例地址 `192.0.2.0/24` 是文档用途；实际配置由环境注入。控制会话另附 `LabSafetyConfig`，其中 `operator_id` 和 `dut_id` 必须来自批准记录。Python 层还必须配置可靠的持久事故锁目录。证书私钥、口令和 SAv5 密钥只写引用 ID，不写明文。
 
 ### 16.2 线程和队列模型
 
@@ -1457,19 +1753,19 @@ pytest 标记至少包括：
 
 ### 16.3 超时和取消
 
-每个命令都支持调用方 timeout，并区分：
+必须区分本地调用期限、host 错误和设备返回结果：
 
-- `RPC_TIMEOUT`：Python 未在期限内得到 EXE 响应。
-- `CHANNEL_TIMEOUT`：连接建立失败。
-- `DNP3_RESPONSE_TIMEOUT`：线上任务无有效响应。
-- `TASK_CANCELLED`：断连、shutdown 或显式取消。
-- `DUT_REPORTED_ERROR`：收到带 IIN/状态的合法失败响应。
+- Python 未在本地期限内得到 host 响应：抛出客户端 `HostTimeoutError`，立即回收 host；这不是一个伪造的 NDJSON `RPC_TIMEOUT`。
+- TCP 未在连接期限内 OPEN：host 返回 `CONNECTION_TIMEOUT`，并保证本次创建的资源已清理。
+- Read/控制线上任务没有在期限内得到有效响应：host 返回 `RESPONSE_TIMEOUT`。
+- OpenDNP3 任务或命令点明确失败：返回 `TASK_FAILED`/`COMMAND_FAILED`，并保留 IIN、TaskCompletion 和逐点 Command Status。
+- Capture 自身 deadline：进入 `TIMED_OUT` 终态并返回 `valid=false`，不冒充 DNP3 响应超时。
 
-超时后必须明确底层任务是否仍可能执行。对控制命令不得盲目自动重试；重试策略由命令幂等性和 DUT 状态决定。
+任何状态改变请求只要出现 host `RESPONSE_TIMEOUT`、提交异常、客户端超时/进程退出/协议损坏、请求/结果关联异常、`execution_uncertain=true`、`may_still_execute=true`，或点级 `TIMEOUT`/2012 保留值/decoded 127 歧义，Python 必须清除安全令牌、销毁 host、为 DUT 写入跨进程持久事故锁并禁止后续控制。事故锁只能在新的只读会话完成独立读回、保存证据并显式确认准确 incident ID 后归档。事故锁写入失败仍按 fail-closed 停止全部控制。任何层都不得自动重发或自动发送恢复命令；完整流程以 `docs/SAFETY_INCIDENT_RUNBOOK.md` 为准。
 
 ### 16.4 输入与资源限制
 
-所有限制可配置且有安全默认值：请求行、JSON 深度、Header 数、点数、索引、响应大小、事件缓存、队列、文件大小、Data Set 元素数、VT 块、会话数、日志大小和 PCAP 大小。
+所有限制可配置且有安全默认值：请求行、JSON 深度、Header 数、点数、索引、响应大小、事件缓存、队列、文件大小、Data Set 元素数、VT 块、会话数、日志大小和 PCAP 大小。当前 Read 的逐点测量由 `max_measurements` 限制，分片记录最多 4096 条，IIN 观测最多 1024 条；任一当前任务数据丢失都必须返回 `QUEUE_OVERFLOW`。
 
 解析规则：
 
@@ -1485,10 +1781,12 @@ pytest 标记至少包括：
 1. 配置 `environment == "LAB"`。
 2. 相应 `allow_*` 明确为 true。
 3. pytest 用例带正确风险标记。
-4. 命令请求携带本次运行生成的短期 `safety_token`。
-5. 运行清单记录操作者、DUT 和授权范围。
+4. `operator_id`、`dut_id`、授权工单和目标点/动作范围准确绑定。
+5. 命令请求携带本会话一次性签发并绑定 DUT/操作者的短期 `safety_token`；disconnect、进程退出或不确定结果后立即失效。
+6. 同一 DUT 没有未解决的持久事故锁，且控制测试在所有主机/worker 间串行。
+7. 运行清单记录操作者、DUT、唯一场景、批准值、反馈点、恢复值和停止条件。
 
-默认拒绝广播控制、重启、文件删除、配置激活和对未知地址的控制。框架不得把“测试主站”当作绕过 EMS 权限控制的工具。
+默认拒绝广播控制、重启、文件删除、配置激活、未知地址控制和未显式选择的批量控制性能场景。操作、反馈读回或恢复任何一步不确定时立即停止，不得继续批次或猜测设备状态。框架不得把“测试主站”当作绕过 EMS 权限控制的工具。
 
 ### 16.6 日志和可观测性
 
@@ -1497,8 +1795,9 @@ pytest 标记至少包括：
 必须提供：
 
 - `get_status`：状态、在途任务、连接、队列、资源摘要。
-- `get_metrics`：累计连接、任务、超时、对象、字节、溢出、日志丢弃。
-- `dump_diagnostics`：非秘密诊断快照，具有大小上限。
+- `stats`：v1 的唯一指标命令，返回累计连接、任务、超时、对象、可用字节指标、溢出和日志丢弃，并为每项声明 source/scope；不要另造不兼容的 `get_metrics` 别名。
+- `capture.progress`：H08 完成后返回当前 capture 的有界只读快照。
+- `dump_diagnostics`：后续候选命令；只有加入命令注册表、Schema 和 capability 声明后才是“已知命令”，届时提供有大小上限的非秘密诊断快照。注册前仍按未知命令返回 `INVALID_REQUEST`。
 - 崩溃转储策略：实验环境可开启，但 SAv5 场景需安全批准和受控存储。
 
 ---
@@ -1522,10 +1821,10 @@ pytest 标记至少包括：
 
 可以发布“OpenDNP3 常用功能版本”的条件：
 
-- M0–M4 的目标能力通过阶段门禁。
+- 发布 Profile 明确列出本次承诺的能力 ID、使用场景和证据等级；这些能力全部通过对应阶段门禁。
 - `hello.capabilities` 和发布说明明确列出缺失项。
 - 所有未支持能力返回稳定的 `UNSUPPORTED_BY_BACKEND`。
-- 性能上限已测，工具自身丢弃可检测。
+- 如果本次 Profile 声称性能/大点表/稳定性能力，则相应 H08/H09 门禁必须通过；不声称时允许仍为缺口，但已有队列溢出必须可检测且不得静默成功。
 - 发布包在干净 Windows x64 主机通过 smoke test。
 
 允许表述：
@@ -1540,7 +1839,7 @@ pytest 标记至少包括：
 
 只有同时满足以下条件，才能由公司合规/技术负责人评审“全范围测试能力”表述：
 
-- IEEE 1815-2012 能力目录没有遗漏且完成双人标准复核。
+- IEEE 1815-2012 能力目录和逐条 requirement catalog 均没有遗漏，且完成双人标准复核。
 - 所有分配功能码和对象/变体具有至少编码、解析或“不适用于主站”的正式依据。
 - 所有主站适用能力达到批准的证据级别。
 - OpenDNP3 缺口已由扩展/替换后端真实补齐，而不是只存在 API。
@@ -1626,7 +1925,9 @@ OpenDNP3 上游仓库已经归档，不能假设会继续获得缺陷和安全�
 完成后严格使用项目级回复格式。
 ```
 
-### 18.3 首个可直接下发的任务卡
+### 18.3 历史首卡（T00 已完成，不要重新执行）
+
+下列 T00 仅保留为任务卡写法示例。当前仓库已经完成 T00～T12 的核心闭环；内网 Agent 必须先读取 `docs/INTRANET_HANDOFF_REMAINING_TASKS.md`，从其中尚未完成的 H01～H14 卡片选择一个，不得按本节从头重建工程。
 
 ```text
 任务卡编号：T00
@@ -1636,7 +1937,7 @@ OpenDNP3 上游仓库已经归档，不能假设会继续获得缺陷和安全�
 开始前必须读取：
 - 本开发指导书第 0、2、3、11、12、13、14 节
 - 公司内部 IEEE 1815-2012 的访问说明
-- EMS Device Profile/PICS（如果已提供）
+- EMS Device Profile、独立 PICS 和批准操作约定（如果已提供，三者分开读取）
 - OpenDNP3 3.1.2 固定源码的 README、features 文档和 master API 头文件
 
 允许修改：
@@ -1676,9 +1977,9 @@ OpenDNP3 上游仓库已经归档，不能假设会继续获得缺陷和安全�
 完成后严格使用项目级回复格式。
 ```
 
-### 18.4 建议任务队列
+### 18.4 历史任务队列与当前入口
 
-不要把下表合并成一个大任务：
+下表说明原始编号与能力演进，不代表当前待办。实时状态、依赖和停止条件只以 `docs/INTRANET_HANDOFF_REMAINING_TASKS.md` 为准，不要把下表合并成一个大任务：
 
 | 顺序 | 任务卡 | 唯一产出 |
 |---:|---|---|
@@ -1697,13 +1998,14 @@ OpenDNP3 上游仓库已经归档，不能假设会继续获得缺陷和安全�
 | 13 | T12 | Unsolicited 完整时序 |
 | 14 | T13 | 时间同步 |
 | 15 | T14 | Restart、Freeze、Assign Class；三者分别提交 |
-| 16 | T15 | summary collector 与 capture API |
-| 17 | T16 | 大数据基准、批量 API 和稳定性 |
-| 18 | T17+ | 按 M5 矩阵每个缺口独立实施 |
-| 19 | T30+ | 按 M6 每个事务模块独立实施 |
-| 20 | T40+ | 经安全批准后实施 M7 |
-| 21 | T50+ | M8 逐层 FaultPlan 和 fuzz target |
-| 22 | T60 | M9 发布证据与报告生成 |
+| 16 | T15a～T15d | Capture 合同、native collector、host/Python API 与回环闭环 |
+| 17 | T16a～T16d | 发生器、资源指标、性能报告和 24 小时 runner |
+| 18 | T16e | 独立参考端及目标内网正式基准与稳定性证据 |
+| 19 | T17+ | 按 M5 矩阵每个缺口独立实施 |
+| 20 | T30+ | 按 M6 每个事务模块独立实施 |
+| 21 | T40+ | 经安全批准后实施 M7 |
+| 22 | T50+ | M8 逐层 FaultPlan 和 fuzz target |
+| 23 | T60 | M9 发布证据与报告生成 |
 
 ### 18.5 给代码审查 Agent 的提示词
 
@@ -1754,13 +2056,15 @@ OpenDNP3 上游仓库已经归档，不能假设会继续获得缺陷和安全�
 6. OpenDNP3 3.1 C++ API：<https://dnp3.github.io/docs/cpp/3.1.0/>
 7. DNP3 Application Note AN2013-004b（公开摘要表，不能替代正式标准）：<https://www.dnp.org/LinkClick.aspx?fileticket=bTubmc6O7kg%3D&forcedownload=true&mid=447&portalid=0&tabid=66>
 
-IEEE 页面当前把 2012 版标为 inactive-reserved，不改变本项目明确锁定 2012 版的需求；如果未来迁移到更新版本，应走第 17.4 节的版本策略。
+上述功能/API 页面分别标注 3.0.0 或 3.1.0，并不是精确的 3.1.2 实现规范；它们只能辅助定位。所有 3.1.2 API、能力和默认值必须以仓库固定源码、头文件、example、测试及依赖锁哈希为准。外部页面一旦被用于证据，应在访问说明中记录访问日期和内部快照/摘要哈希，避免链接变化造成不可复现。
+
+IEEE 页面中的标准活动状态可能随时间更新；项目如需在报告中陈述该状态，必须在线核验并记录访问日期。无论页面状态如何，本项目明确锁定 2012 版；如果未来迁移到更新版本，应走第 17.4 节的版本策略。
 
 ---
 
 ## 附录 A：错误响应和能力响应示例
 
-标准错误响应：
+当前 v1 已知但后端尚未实现的 `capture.begin` 会返回：
 
 ```json
 {
@@ -1769,11 +2073,10 @@ IEEE 页面当前把 2012 版标为 inactive-reserved，不改变本项目明确
   "ok":false,
   "error":{
     "code":"UNSUPPORTED_BY_BACKEND",
-    "message":"Group 34 write is not supported by OpenDnp3Backend",
+    "message":"command is not implemented by the active DNP3 backend",
     "details":{
-      "capability_id":"OBJ.G34.V1.WRITE",
-      "backend":"OpenDnp3Backend",
-      "backend_version":"3.1.2"
+      "backend":"opendnp3",
+      "cmd":"capture.begin"
     }
   }
 }
@@ -1787,18 +2090,42 @@ IEEE 页面当前把 2012 版标为 inactive-reserved，不改变本项目明确
   "id":"req-1",
   "ok":true,
   "result":{
-    "host_version":"1.0.0",
-    "backend":{"name":"OpenDnp3Backend","version":"3.1.2","commit":"..."},
+    "host_version":"0.5.1",
+    "backend":"opendnp3",
+    "backend_version":"3.1.2",
+    "git_commit":"...",
+    "platform":"windows-x64",
+    "capability_matrix_version":"1",
     "capability_matrix_sha256":"...",
+    "supported_commands":[
+      "class_poll","connect","direct_operate","disable_unsolicited",
+      "disconnect","enable_unsolicited","get_status","hello",
+      "integrity_poll","read","select_and_operate","shutdown","stats",
+      "wait_event","wait_unsolicited"
+    ],
     "capabilities":{
-      "APP.FC.01.READ":"VERIFIED_INTEROP",
-      "OBJ.G30.V1":"VERIFIED_INTEROP",
-      "OBJ.G34.V1.WRITE":"UNSUPPORTED_BY_BACKEND",
-      "SEC.SAV5":"UNSUPPORTED_BY_BACKEND"
+      "APP.FC.01.READ":{
+        "status":"IMPLEMENTED_UNVERIFIED",
+        "implementation_revision":"t06-t08-opendnp3-3.1.2",
+        "verification_scope":"local_opendnp3_outstation"
+      },
+      "OBJ.G30.V5":{
+        "status":"IMPLEMENTED_UNVERIFIED",
+        "implementation_revision":"t06-t08-opendnp3-3.1.2",
+        "verification_scope":"local_opendnp3_outstation"
+      }
+    },
+    "limits":{
+      "max_request_bytes":1048576,
+      "max_json_depth":64,
+      "max_request_id_bytes":128,
+      "recent_request_id_capacity":4096
     }
   }
 }
 ```
+
+`hello.capabilities` 只列当前后端实际接入的子集，值是带状态和验证范围的对象，不是字符串。G34、SAv5 等尚未接入能力的权威状态只在 `config/capability_matrix.csv` 中，不得为了展示“完整列表”伪造到 hello 响应。
 
 ---
 
@@ -1806,12 +2133,12 @@ IEEE 页面当前把 2012 版标为 inactive-reserved，不改变本项目明确
 
 ```csv
 capability_id,edition,layer,feature,direction,subset_level,function_code,object_group,variations,qualifiers,std_reference,dut_pics_status,backend_status,framework_status,test_case_ids,evidence,owner,notes
-APP.FC.01.READ,IEEE1815-2012,APPLICATION,Read,M2O,REVIEW_REQUIRED,1,,,,<正式条款>,SUPPORTED,VERIFIED_INTEROP,VERIFIED_INTEROP,TC_APP_FC01_CLASS0_001,evidence/runs/<id>/manifest.json,protocol-team,
-OBJ.G30.V1,IEEE1815-2012,APPLICATION,Analog Input 32-bit with flags,O2M,REVIEW_REQUIRED,129,30,1,<正式限定词>,<正式条款>,SUPPORTED,VERIFIED_INTEROP,VERIFIED_INTEROP,TC_APP_FC01_G30V1_RANGE_001,evidence/runs/<id>/manifest.json,protocol-team,
-SEC.G120.V1,IEEE1815-2012,SECURITY,SAv5 Challenge,BIDIRECTIONAL,REVIEW_REQUIRED,32|131,120,1,0x5B,<正式条款>,UNKNOWN,UNSUPPORTED_BY_BACKEND,PLANNED,,,security-team,requires approved crypto design
+APP.FC.01.READ,IEEE1815-2012,APPLICATION,Read,M2O,REVIEW_REQUIRED,1,,,,"IEEE 1815-2012 4.4.2; Table 12-32",UNKNOWN,IMPLEMENTED_UNVERIFIED,IMPLEMENTED_UNVERIFIED,"TC_APP_FC01_INTEGRITY_LOCAL_001|TC_APP_FC01_MULTI_HEADER_LOCAL_001|TC_APP_FC01_PYTHON_E2E_LOCAL_001","native/tests/opendnp3_read_integration_tests.cpp|python/tests/test_host_read.py",PROTOCOL_OWNER,"Local evidence only; independent interoperability remains pending"
+OBJ.G34.V1,IEEE1815-2012,APPLICATION,"Analog Input Reporting Deadband variation 1",M2O,REVIEW_REQUIRED,,34,1,,REVIEW_REQUIRED,UNKNOWN,NOT_ANALYZED,BLOCKED,,,PROTOCOL_OWNER,"Exact clause and behavior require formal-standard review"
+SEC.G120.V1.CHALLENGE,IEEE1815-2012,SECURITY,"G120V1 Challenge",BIDIRECTIONAL,REVIEW_REQUIRED,32|33|131,120,1,5B,REVIEW_REQUIRED,UNKNOWN,NOT_ANALYZED,BLOCKED,,,SECURITY_OWNER,"Requires approved security design formal vectors and independent implementation"
 ```
 
-示例中的 `<正式条款>`、`REVIEW_REQUIRED` 和证据占位符必须由项目实际材料替换；不得原样发布。
+这些行只演示当前字段和有效 ID；权威内容始终是 `config/capability_matrix.csv`。`REVIEW_REQUIRED` 只能在标准负责人复核后替换。若状态升级为 `VERIFIED_*`，证据必须改成不可变文件引用，例如 `evidence/runs/<id>/manifest.json#sha256=<64 hex>`；公共矩阵的 `dut_pics_status` 仍保持 `UNKNOWN`。
 
 ---
 
@@ -1839,7 +2166,7 @@ SEC.G120.V1,IEEE1815-2012,SECURITY,SAv5 Challenge,BIDIRECTIONAL,REVIEW_REQUIRED,
 | 风险 | 影响 | 缓解措施 | 关闭证据 |
 |---|---|---|---|
 | OpenDNP3 上游归档 | 长期缺陷/安全维护落到内部 | 固定基线、最小 fork、双维护人、依赖扫描 | 维护计划和演练记录 |
-| “全协议”范围被误解 | 虚假完成和漏测 | 原子能力矩阵、PICS 驱动、分层覆盖率 | 矩阵审核 |
+| “全协议”范围被误解 | 虚假完成和漏测 | 原子能力矩阵、Profile/PICS/操作约定映射、分层覆盖率 | 矩阵审核 |
 | 同栈互测掩盖缺陷 | 编解码双方犯相同错误 | 独立实现、黄金向量、正式一致性程序 | PCAP 和外部报告 |
 | 大数据经 JSON 逐点传输 | 测试工具先成瓶颈 | C++ summary 聚合、batch、队列水位 | 工具上限报告 |
 | 回调阻塞/生命周期错误 | 丢点、死锁、崩溃 | 轻回调、明确销毁序、压力和 sanitizer | 稳定性报告 |
@@ -1858,5 +2185,5 @@ SEC.G120.V1,IEEE1815-2012,SECURITY,SAv5 Challenge,BIDIRECTIONAL,REVIEW_REQUIRED,
 3. 大数据量留在 C++ 内聚合；Python 做编排、断言和报告。
 4. IEEE 1815-2012 的“全功能”以逐项标准目录和证据为准，不以代码行数或接口数量为准。
 5. OpenDNP3 是首个后端，不是完整标准本身；其缺口必须显式存在，直到被真实实现和验证。
-6. EMS 只需满足其 Device Profile/PICS 声明和标准规定的适用项；框架则要能追踪全部标准能力。
+6. EMS 只需满足其 Device Profile、独立 PICS、批准操作约定和标准规定的适用项；框架则要能追踪全部标准能力。
 7. 没有正式标准依据、独立互操作或安全前置条件时，正确动作是 `BLOCKED`，不是猜测。

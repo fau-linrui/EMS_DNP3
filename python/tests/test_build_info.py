@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 import subprocess
 
+from dnp3_master import HostProcessConfig, __version__
+
 
 OPENDNP3_COMMIT = "26b4c01e4839bbbda8866655e086471c4917ee53"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -45,7 +47,12 @@ def test_build_info_contains_auditable_fixed_identity() -> None:
 
     assert set(build_info) == EXPECTED_KEYS
     assert build_info["schema_version"] == 1
-    assert build_info["host_version"] == "0.5.0"
+    assert build_info["host_version"] == "0.5.1"
+    assert build_info["host_version"] == __version__
+    assert (
+        HostProcessConfig(executable=Path("host.exe")).expected_host_version
+        == __version__
+    )
     assert GIT_IDENTITY_PATTERN.fullmatch(build_info["git_commit"])
     assert build_info["git_worktree_state"] in {"clean", "dirty", "unavailable"}
     assert build_info["opendnp3_version"] == "3.1.2"
