@@ -1,4 +1,4 @@
-# Python 子进程客户端与 pytest 集成（0.6.0）
+# Python 子进程客户端与 pytest 集成（0.6.1）
 
 `dnp3_master` 核心只依赖 Python 标准库。它启动 `dnp3-master-host.exe`、自动完成 hello、串行化单个在途请求、持续排空 stdout/stderr、验证严格响应、处理超时/异常退出，并在 Windows Job Object 中拥有整个子进程树。
 
@@ -326,6 +326,7 @@ host 启动/请求/关闭 timeout 也可通过 `--dnp3-startup-timeout`、`--dnp
 
 ```text
 python/src/dnp3_master/
+python-dist/dnp3_master_test_framework-0.6.1-py3-none-any.whl
 bin/dnp3-master-host.exe
 bin/build-info.json
 schemas/
@@ -338,7 +339,14 @@ config/local_event_profile.example.json
 examples/pytest_ems/
 examples/pytest_performance/
 package-manifest.json
+compatibility-test.ps1
+migration-consumer/
 ```
+
+目标环境从 `python-dist` 的 wheel 安装，不要对受清单保护的 `python` 目录执行
+editable/source build；pip 生成的 `build`/`*.egg-info` 会使包完整性校验失效。安装前
+运行 `compatibility-test.ps1`，详细门禁见
+`docs/RELEASE_AND_MIGRATION_ACCEPTANCE.md`。
 
 完整迁移、构建、首次 EMS 连接和排错步骤见
 `docs/BEGINNER_MIGRATION_BUILD_USE_GUIDE.md`；性能与 24 小时步骤见

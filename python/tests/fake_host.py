@@ -46,7 +46,7 @@ def error(
 def hello_result(mode: str = "normal") -> dict[str, Any]:
     tcp_api = mode in {"tcp_api", "hello_backend_mismatch"}
     return {
-        "host_version": "0.6.0" if mode != "hello_version_mismatch" else "9.9.9",
+        "host_version": "0.6.1" if mode != "hello_version_mismatch" else "9.9.9",
         "backend": "opendnp3" if tcp_api else "none",
         "backend_version": (
             "9.9.9" if mode == "hello_backend_mismatch" else "3.1.2"

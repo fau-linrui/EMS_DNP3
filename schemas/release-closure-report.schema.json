@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ems-dnp3/release-closure-report.schema.json",
+  "title": "DNP3 clean release closure report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "completed_utc",
+    "evidence_scope",
+    "formal_dut_conclusion",
+    "version",
+    "git_commit",
+    "git_worktree_state",
+    "preset",
+    "target_architecture",
+    "lifecycle_iterations",
+    "full_test",
+    "lifecycle_test",
+    "unpacked_loopback_self_test",
+    "migration_compatibility",
+    "deterministic_package",
+    "archive",
+    "archive_sha256",
+    "archive_sidecar",
+    "compatibility_report"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "completed_utc": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 64,
+      "pattern": "Z$"
+    },
+    "evidence_scope": { "const": "LOCAL_RELEASE_AND_LOOPBACK_ONLY" },
+    "formal_dut_conclusion": { "const": false },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "git_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "git_worktree_state": { "const": "clean" },
+    "preset": { "const": "windows-msvc-release" },
+    "target_architecture": { "const": "x64" },
+    "lifecycle_iterations": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "full_test": { "const": "PASS" },
+    "lifecycle_test": { "const": "PASS" },
+    "unpacked_loopback_self_test": { "const": "PASS" },
+    "migration_compatibility": { "const": "PASS" },
+    "deterministic_package": { "const": true },
+    "archive": { "$ref": "#/$defs/path" },
+    "archive_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "archive_sidecar": { "$ref": "#/$defs/path" },
+    "compatibility_report": { "$ref": "#/$defs/path" }
+  },
+  "$defs": {
+    "path": { "type": "string", "minLength": 1, "maxLength": 32767 }
+  }
+}

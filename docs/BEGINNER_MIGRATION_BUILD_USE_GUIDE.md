@@ -2,7 +2,7 @@
 
 本文面向不熟悉 C++ 的测试开发人员。正常使用时，你只需要写 Python/pytest；C++ 已封装在 `dnp3-master-host.exe` 中，不需要在测试代码里调用 OpenDNP3，也不需要理解 C++ 指针或编译器细节。
 
-> 当前版本：0.6.0，目标平台 Windows x64，固定协议栈 OpenDNP3 3.1.2。当前实现已完成本机 TCP、Read/Class Poll、主动上报、测量值/IIN、CROB 和四种 Analog Output 控制的同栈回归，并提供持续 capture、大点表/事件性能和可中断 soak 工具；这些本机结果仍不代表真实 EMS 互操作、正式性能结论或 IEEE 一致性认证。
+> 当前版本：0.6.1，目标平台 Windows x64，固定协议栈 OpenDNP3 3.1.2。当前实现已完成本机 TCP、Read/Class Poll、主动上报、测量值/IIN、CROB 和四种 Analog Output 控制的同栈回归，并提供持续 capture、大点表/事件性能和可中断 soak 工具；这些本机结果仍不代表真实 EMS 互操作、正式性能结论或 IEEE 一致性认证。
 
 ## 1. 先理解四个目录
 
@@ -49,18 +49,24 @@ pytest 用例 -> dnp3_master Python 包 -> dnp3-master-host.exe -> TCP/DNP3 -> E
 
 ```powershell
 cd D:\Work\Code\EMS_DNP3
-.\scripts\package.ps1 -Preset windows-msvc-release -Force
+.\scripts\release.ps1 -LifecycleIterations 1000
 ```
 
 产物位于：
 
 ```text
-out\package\ems-dnp3-pytest-0.6.0\
-out\package\ems-dnp3-pytest-0.6.0.zip
-out\package\ems-dnp3-pytest-0.6.0.zip.sha256
+out\package\ems-dnp3-pytest-0.6.1\
+out\package\ems-dnp3-pytest-0.6.1.zip
+out\package\ems-dnp3-pytest-0.6.1.zip.sha256
 ```
 
-打包过程会在临时目录解开 ZIP、逐文件验证 `package-manifest.json`，再执行一次 DNP3 读写回环自检。将 ZIP 和 `.sha256` 一起传入内网；传输后先用 `Get-FileHash -Algorithm SHA256` 与旁车文件第一列比对，再解压。包中包含主程序、只用于本机自检的测试从站、Python 源码、Schema、能力矩阵、严格点表/场景/性能示例、可复制 EMS 与只读性能 pytest 套件、依赖锁、许可证和本文档，不包含 IEEE 标准 PDF、EMS 本地配置、抓包或密钥。
+发布过程要求代码已经提交且工作区干净，会执行 Release 全量回归、1,000 次生命周期、
+两次确定性打包、解包回环和空白 pytest 消费者迁移验收。将 ZIP 和 `.sha256` 一起
+传入内网；传输后先用 `Get-FileHash -Algorithm SHA256` 与旁车文件第一列比对，再
+解压。包中包含主程序、只用于本机自检的测试从站、Python 源码和离线 wheel、
+Schema、能力矩阵、严格点表/场景/性能示例、可复制 EMS 与只读性能 pytest 套件、
+迁移验收入口、依赖锁、许可证和本文档，不包含 IEEE 标准 PDF、EMS 本地配置、抓包
+或密钥。
 
 内网目标机器若不安装 Build Tools，通常仍需安装 Microsoft Visual C++ 2015–2022 Redistributable x64 和 Python 3.10 或更高版本。
 
@@ -160,36 +166,57 @@ out\build\windows-msvc-release\bin\dnp3-local-test-outstation.exe
 
 脚本会先预热一次，再比较当前 pytest 进程的句柄和线程数。通过条件是线程数不增长，句柄最终值不超过预热基线加 8（给 Windows/pytest 的小幅系统噪声留余量），并且每个 host 都以返回码 0 退出且无需强制清理。看到类似 `handles=148->150` 并不自动等于泄漏，应以 pytest 最终是否通过为准；若失败，不要提高阈值掩盖问题，应保留完整输出并定位未关闭的进程、管道或 Job Object。
 
+### 4.1 生成正式 clean 发布包
+
+前面的分步命令适合开发排错。要生成可交付制品，先提交本次代码并确认
+`git status --short` 没有输出，再执行唯一正式入口：
+
+```powershell
+.\scripts\release.ps1 -LifecycleIterations 1000
+```
+
+它会重新完成环境、Release 构建、全量测试、生命周期、两次确定性打包和迁移验收，
+并把机器可读报告写到 `out\release`。如果源码是 dirty、构建属于旧 commit、不是
+Release/x64，或者两次 ZIP 哈希不同，脚本都会停止。它不创建 commit/tag，也不推送。
+
+`package.ps1 -AllowNonCleanBuild` 只用于开发者查看未提交代码的包结构；该产物不得
+传入内网、不得作为正式测试证据。完整规则见
+`docs/RELEASE_AND_MIGRATION_ACCEPTANCE.md`。
+
 ## 5. 接入另一个 pytest 自动化框架
 
 本章只适用于“把 DNP3 能力接入另一个 pytest 项目”。如果你准备直接在当前源码仓库中编写和运行用例，请跳过本章并进入第 6 章。
 
 ### 5.1 先取得可移植包
 
-**路线 A：你刚刚在第 4 章完成了 Release 构建和测试。** 在源码仓库根目录执行：
+**路线 A：你已按第 4.1 章完成正式发布闭环。** 直接使用该入口生成的目录/ZIP：
 
-```powershell
-.\scripts\package.ps1 `
-  -Preset windows-msvc-release `
-  -SkipBuild `
-  -Force
+```text
+out\package\ems-dnp3-pytest-0.6.1\
+out\package\ems-dnp3-pytest-0.6.1.zip
+out\package\ems-dnp3-pytest-0.6.1.zip.sha256
+out\release\release-closure-report.json
 ```
 
-`-SkipBuild` 表示复用第 4 章已经验证的构建；打包脚本仍会执行安装、清单生成、确定性 ZIP、解包校验和包内回环自检。如果 `out\build\windows-msvc-release` 不存在、源码在构建后又发生了变化，去掉 `-SkipBuild` 让脚本重新构建。
+不要在发布后修改源码再手工执行 `package.ps1 -SkipBuild`。打包门禁会拒绝“旧 EXE +
+新 Python”的陈旧组合。
 
 **路线 B：你已经在第 2 章的外部构建机生成并传输了 ZIP。** 在目标机器核对 `.zip.sha256` 后，把 ZIP 解压到目标 pytest 项目的 `third_party\ems_dnp3\`，不需要再次执行 `package.ps1`。
 
 两条路线最终都应得到以下可移植内容：
 
 ```text
-ems-dnp3-pytest-0.6.0\
+ems-dnp3-pytest-0.6.1\
   CHANGELOG.md
   bin\dnp3-master-host.exe
   python\
+  python-dist\dnp3_master_test_framework-0.6.1-py3-none-any.whl
   config\
   schemas\
   tools\dnp3-local-test-outstation.exe
   self-test.ps1
+  compatibility-test.ps1
+  migration-consumer\
   package-manifest.json
   ...
 ```
@@ -211,7 +238,7 @@ New-Item -ItemType Directory `
   -Path (Join-Path $targetProject 'third_party') `
   -Force | Out-Null
 Copy-Item `
-  -LiteralPath '.\out\package\ems-dnp3-pytest-0.6.0' `
+  -LiteralPath '.\out\package\ems-dnp3-pytest-0.6.1' `
   -Destination $packageRoot `
   -Recurse
 ```
@@ -221,7 +248,7 @@ Copy-Item `
 ```powershell
 $targetProject = 'D:\Automation\MyPytest'
 $packageRoot = Join-Path $targetProject 'third_party\ems_dnp3'
-$zip = (Resolve-Path '.\ems-dnp3-pytest-0.6.0.zip').Path
+$zip = (Resolve-Path '.\ems-dnp3-pytest-0.6.1.zip').Path
 $expectedHash = (
   (Get-Content -LiteralPath "$zip.sha256" -Raw).Trim() -split '\s+'
 )[0].ToLowerInvariant()
@@ -248,26 +275,58 @@ Expand-Archive `
     CHANGELOG.md
     bin\dnp3-master-host.exe
     python\
+    python-dist\dnp3_master_test_framework-0.6.1-py3-none-any.whl
     config\
     schemas\
     tools\dnp3-local-test-outstation.exe
     self-test.ps1
+    compatibility-test.ps1
+    migration-consumer\
     examples\pytest_ems\
     examples\pytest_performance\
     package-manifest.json
     ...
 ```
 
-### 5.3 安装 Python 层并启用 pytest 插件
+### 5.3 先做空白 pytest 迁移验收
 
-切换到目标 pytest 项目根目录，然后在它自己的虚拟环境中安装 Python 层：
+切换到目标 pytest 项目根目录。先让包内脚本使用目标框架自己的 Python/pytest 做
+隔离验收，并把报告放在包目录之外：
 
 ```powershell
 cd D:\Automation\MyPytest
-.\.venv\Scripts\python.exe -m pip install -e ".\third_party\ems_dnp3\python"
+$packageRoot = (Resolve-Path '.\third_party\ems_dnp3').Path
+& (Join-Path $packageRoot 'compatibility-test.ps1') `
+  -PythonExecutable '.\.venv\Scripts\python.exe' `
+  -ReportPath '.\artifacts\dnp3-migration-compatibility.json'
 ```
 
-如果不能执行 pip，则在运行 pytest 前设置：
+它会校验整个包，使用包内 `127.0.0.1` 测试从站完成读/控/capture 回环，再把 wheel
+临时安装到隔离目录并运行一个空白 pytest 项目。它会清空继承的 `DNP3_*` 配置，
+不会连接 EMS，也不会改动目标虚拟环境或发布包。只有
+`overall_passed=true` 才继续。
+
+### 5.4 安装 wheel 并启用 pytest 插件
+
+使用包内 wheel 安装 Python 层。命令显式禁止网络和依赖解析：
+
+```powershell
+$wheel = @(Get-ChildItem `
+  -LiteralPath (Join-Path $packageRoot 'python-dist') `
+  -Filter '*.whl' `
+  -File)
+if ($wheel.Count -ne 1) {
+  throw "期望一个 Python wheel，实际为 $($wheel.Count) 个。"
+}
+.\.venv\Scripts\python.exe -m pip install `
+  --no-index `
+  --no-deps `
+  $wheel[0].FullName
+```
+
+不要对 `third_party\ems_dnp3\python` 执行 `pip install -e` 或现场 source build；pip
+可能写入 `build\`/`*.egg-info`，导致 `package-manifest.json` 失效。若内部策略禁止
+安装 wheel，可以在运行 pytest 前只设置源码路径（不会改写包）：
 
 ```powershell
 $env:PYTHONPATH = "$PWD\third_party\ems_dnp3\python\src"
@@ -281,25 +340,21 @@ pytest_plugins = ("dnp3_master.pytest_plugin",)
 
 如果已有 `pytest_plugins`，把字符串追加到原元组中，不要再定义第二个同名变量。
 
-### 5.4 指定 Host 并先做包内自检
+### 5.5 指定 Host 并确认插件
 
 仍在目标 pytest 项目根目录执行：
 
 ```powershell
-$packageRoot = (Resolve-Path '.\third_party\ems_dnp3').Path
-& (Join-Path $packageRoot 'self-test.ps1') `
-  -PythonExecutable '.\.venv\Scripts\python.exe'
-
 $env:DNP3_MASTER_HOST_EXE = (
   Resolve-Path (Join-Path $packageRoot 'bin\dnp3-master-host.exe')
 ).Path
 ```
 
-`self-test.ps1` 只启动包内本机测试从站，不连接真实 EMS。除读回和控制反馈循环外，
-它还会精确采集 BI/AI/BOS/AOS 索引 0～1 共 8 点。成功输出中应看到
-`"capture_expected": 8`、`"capture_received_unique": 8` 和
-`"capture_valid": true`；缺少这些字段通常表示混用了旧 Python 包或旧 EXE。
-它通过后，再确认 pytest 已加载 DNP3 参数：
+第 5.3 章的 `compatibility-test.ps1` 已调用 `self-test.ps1`，它只启动包内本机测试
+从站，不连接真实 EMS。除读回和控制反馈循环外，它还会精确采集 BI/AI/BOS/AOS
+索引 0～1 共 8 点。成功输出中应看到 `"capture_expected": 8`、
+`"capture_received_unique": 8` 和 `"capture_valid": true`；缺少这些字段通常表示
+混用了旧 Python 包或旧 EXE。再确认目标项目已加载 DNP3 参数：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest --help |
@@ -308,11 +363,11 @@ $env:DNP3_MASTER_HOST_EXE = (
 
 到这里，第 5 章才算完成。接下来进入第 6 章，准备私有 PICS、点表和只读连接参数。
 
-### 5.5 不要人工裁剪可移植包
+### 5.6 不要人工裁剪可移植包
 
 对普通移植，最小受支持的复制单位就是整个
-`ems-dnp3-pytest-0.6.0\` 目录或原始 ZIP。`package-manifest.json` 覆盖包内每个
-文件；手工删除 `tools`、Schema、许可证、文档或示例后，逐文件校验必然失效，
+`ems-dnp3-pytest-0.6.1\` 目录或原始 ZIP。`package-manifest.json` 覆盖包内每个
+文件；手工删除 `tools`、wheel、迁移 consumer、Schema、许可证、文档或示例后，逐文件校验必然失效，
 也不能再把该目录称为经过验收的完整可移植包。
 
 其中 `tools\dnp3-local-test-outstation.exe` 只在本机自检时启动，不会参与真实
@@ -658,7 +713,12 @@ git status
 git pull --ff-only
 ```
 
-更新后先运行 `doctor.ps1`，再重新构建、执行完整测试和本机自检。通过 `bin\build-info.json` 记录 host 版本、OpenDNP3 commit、Git commit、工作区状态、构建配置和能力矩阵哈希，运行报告应保存这份信息；正式证据只使用 `git_worktree_state` 为 `clean` 的构建。复制可移植 ZIP 时同时保存 `.sha256` 和解包后的 `package-manifest.json`。
+更新后先运行 `doctor.ps1`，再通过 `release.ps1` 完成 clean commit 的构建、完整测试、
+生命周期、确定性打包和迁移验收。`bin\build-info.json` 记录 host 版本、OpenDNP3
+commit、Git commit、工作区状态、构建配置和能力矩阵哈希；正式证据只使用
+`git_worktree_state=clean` 且 commit 与发布报告一致的构建。复制可移植 ZIP 时同时
+保存 `.sha256`、`package-manifest.json`、`release-closure-report.json` 和目标机生成的
+迁移兼容报告。
 
 严禁提交或上传：IEEE 标准 PDF、EMS IP/账号/密钥、本地点表、本地 PICS、PCAP、生产日志和未经脱敏的报告。项目自带 `.gitignore` 只是最后一道防线，提交前仍必须检查 `git status`。
 

@@ -488,7 +488,7 @@ self-test.ps1
   "id":"req-hello",
   "ok":true,
   "result":{
-    "host_version":"0.6.0",
+    "host_version":"0.6.1",
     "backend":"opendnp3",
     "backend_version":"3.1.2",
     "git_commit":"...",
@@ -664,7 +664,7 @@ v1 每个会话最多一个 ACTIVE capture。`disconnect`、连接失败和 `shu
 
 ### 9.1 对外 API
 
-Python 用例不得直接拼 JSON，统一调用。下面示例与当前 0.6.0 公开 API 一致：
+Python 用例不得直接拼 JSON，统一调用。下面示例与当前 0.6.1 公开 API 一致：
 
 ```python
 from pathlib import Path
@@ -1656,7 +1656,7 @@ M4 不得作为一张大任务卡实施。它在 M2 的稳定 Read/unsolicited �
     "pytest_version":"..."
   },
   "source_control":{"available":true,"commit":"...","tracked_worktree_state":"clean"},
-  "build_info":{"host_version":"0.6.0","opendnp3_version":"3.1.2"},
+  "build_info":{"host_version":"0.6.1","opendnp3_version":"3.1.2"},
   "inputs":{
     "pics":{"present":true,"file_name":"ems.local.json","size_bytes":1234,"sha256":"..."},
     "points":{"present":true,"file_name":"points.local.csv","size_bytes":2345,"sha256":"..."}
@@ -1748,7 +1748,7 @@ connection = TcpConnectionConfig(
 )
 ```
 
-当前 0.6.0 没有一个可执行的 `config/default.json` 或总配置 Schema；不要按旧草图创建它。pytest 运行参数由插件 CLI/环境变量生成 `HostProcessConfig` 和 `TcpConnectionConfig`，DUT 能力、点表和业务场景分别使用 `ems.local.json`、`points.local.csv`、`ems_test_plan.local.json`，格式参照 `config/*.example.*`；性能/soak 和本机事件发生器分别使用 `performance_profile.local.json` 与 `local_event_profile.local.json`。示例地址 `192.0.2.0/24` 是文档用途；实际配置由环境注入。控制会话另附 `LabSafetyConfig`，其中 `operator_id` 和 `dut_id` 必须来自批准记录。Python 层还必须配置可靠的持久事故锁目录。证书私钥、口令和 SAv5 密钥只写引用 ID，不写明文。
+当前 0.6.1 没有一个可执行的 `config/default.json` 或总配置 Schema；不要按旧草图创建它。pytest 运行参数由插件 CLI/环境变量生成 `HostProcessConfig` 和 `TcpConnectionConfig`，DUT 能力、点表和业务场景分别使用 `ems.local.json`、`points.local.csv`、`ems_test_plan.local.json`，格式参照 `config/*.example.*`；性能/soak 和本机事件发生器分别使用 `performance_profile.local.json` 与 `local_event_profile.local.json`。示例地址 `192.0.2.0/24` 是文档用途；实际配置由环境注入。控制会话另附 `LabSafetyConfig`，其中 `operator_id` 和 `dut_id` 必须来自批准记录。Python 层还必须配置可靠的持久事故锁目录。证书私钥、口令和 SAv5 密钥只写引用 ID，不写明文。
 
 ### 16.2 线程和队列模型
 
@@ -2090,7 +2090,7 @@ IEEE 页面中的标准活动状态可能随时间更新；项目如需在报告
   "id":"req-1",
   "ok":true,
   "result":{
-    "host_version":"0.6.0",
+    "host_version":"0.6.1",
     "backend":"opendnp3",
     "backend_version":"3.1.2",
     "git_commit":"...",

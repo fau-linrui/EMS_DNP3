@@ -1,6 +1,6 @@
 # dnp3-master-test-framework Python package
 
-This directory is the portable pytest-facing layer. Version 0.6.0 provides the
+This directory is the portable pytest-facing layer. Version 0.6.1 provides the
 synchronous `Dnp3MasterClient`, validated TCP/read/control models, typed task
 results, strict process/protocol exceptions, bounded diagnostics, PICS-aware
 selection, strict EMS scenario plans, an offline configuration preflight,
@@ -14,6 +14,11 @@ the consuming framework's root `conftest.py`:
 ```python
 pytest_plugins = ("dnp3_master.pytest_plugin",)
 ```
+
+Portable releases include a `python-dist/*.whl`; install that wheel instead of
+running pip against the manifest-protected source directory. Run the package
+root `compatibility-test.ps1` first to verify the wheel, plugin, and packaged
+loopback host from a blank pytest consumer without contacting a DUT.
 
 Set `DNP3_MASTER_HOST_EXE` or pass `--dnp3-host-exe`. For real-DUT tests, also
 provide a private EMS profile with `--dnp3-pics-file` and mark each test with

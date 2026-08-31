@@ -2,6 +2,21 @@
 
 本文件记录用户可见行为和移植边界的变化。能力是否适用于某台 EMS，仍以该设备的正式 PICS、私有配置和不可变测试证据为准；版本记录不能替代互操作或一致性结论。
 
+## 0.6.1（2026-08-31）
+
+### 干净发布与迁移验收
+
+- 新增 fail-closed `release.ps1`：只接受当前 clean commit，核对 build-info，运行
+  Release 全量回归与 1,000 次生命周期，从同一构建连续打包两次并要求 ZIP 哈希
+  一致，最后生成发布闭环报告；普通 `package.ps1` 也拒绝 dirty、stale、Debug 或
+  非 x64 构建，显式非 clean 开关只允许本地检查。
+- 可移植包新增固定时间戳生成的 `py3-none-any` wheel、`compatibility-test.ps1` 和
+  空白 pytest consumer。迁移验收按每个实际解释器验证清单、回环、无网络隔离安装、
+  导入来源、版本一致性、插件参数与安全默认值，且不改写发布包或目标虚拟环境。
+- 新增严格兼容性/发布闭环报告 Schema；报告固定声明仅为本机包与同栈回环证据，
+  不形成真实 DUT、独立互操作或 IEEE 一致性结论。未实际运行的 Python/pytest
+  组合继续记为未覆盖。
+
 ## 0.6.0（2026-08-31）
 
 ### 持续 Capture
@@ -39,7 +54,6 @@
 - 可移植包加入性能/事件 Profile、报告 Schema、性能 pytest 套件和
   `PERFORMANCE_AND_SOAK_GUIDE.md`；包内 self-test 还会对 BI/AI/BOS/AOS 共 8 点
   执行精确静态 capture 并核验无缺失、重复、意外点或 overflow；版本提升为 0.6.0。
-
 ### 证据边界
 
 - H08a/T15 与 H09a/T16a～T16d 的本机工具基线已完成；H08b 的目标 Profile 映射和

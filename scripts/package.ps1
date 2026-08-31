@@ -5,6 +5,7 @@ param(
     [string]$OutputDirectory = '',
     [switch]$SkipBuild,
     [switch]$SkipUnpackedSelfTest,
+    [switch]$AllowNonCleanBuild,
     [switch]$Force
 )
 
@@ -13,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 
 $dnp3RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $dnp3PackageRoot = Join-Path $dnp3RepoRoot 'out\package'
-$dnp3PackageVersion = '0.6.0'
+$dnp3PackageVersion = '0.6.1'
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $dnp3PackageRoot "ems-dnp3-pytest-$dnp3PackageVersion"
 }
@@ -24,6 +25,73 @@ if (-not $dnp3Stage.StartsWith($dnp3AllowedRoot, [System.StringComparison]::Ordi
 }
 $dnp3Archive = "$dnp3Stage.zip"
 $dnp3ArchiveHash = "$dnp3Archive.sha256"
+
+if (-not $SkipBuild) {
+    & (Join-Path $PSScriptRoot 'build.ps1') -Preset $Preset
+    if ($LASTEXITCODE -ne 0) {
+        throw "Build failed before packaging with exit code $LASTEXITCODE."
+    }
+}
+
+$dnp3SourceBuildInfoPath = Join-Path $dnp3RepoRoot (
+    "out\build\$Preset\bin\build-info.json"
+)
+if (-not (Test-Path -LiteralPath $dnp3SourceBuildInfoPath -PathType Leaf)) {
+    throw "Build metadata was not found: $dnp3SourceBuildInfoPath"
+}
+$dnp3SourceBuildInfo = Get-Content -Raw -LiteralPath $dnp3SourceBuildInfoPath |
+    ConvertFrom-Json
+if (-not $AllowNonCleanBuild) {
+    if ($Preset -ne 'windows-msvc-release') {
+        throw (
+            'A formal portable package must use windows-msvc-release. Use ' +
+            '-AllowNonCleanBuild only for a local non-release inspection package.'
+        )
+    }
+    $dnp3GitCommand = Get-Command git -ErrorAction SilentlyContinue
+    if (-not $dnp3GitCommand) {
+        throw 'Git is required to prove a clean, traceable portable package.'
+    }
+    Push-Location $dnp3RepoRoot
+    try {
+        $dnp3GitCommit = (& git rev-parse HEAD 2>&1 | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $dnp3GitCommit -notmatch '^[0-9a-f]{40}$') {
+            throw 'Git could not resolve a valid 40-character HEAD commit.'
+        }
+        $dnp3GitStatus = (& git status --porcelain --untracked-files=normal 2>&1 |
+            Out-String).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Git could not inspect the source worktree state.'
+        }
+    }
+    finally {
+        Pop-Location
+    }
+    if ($dnp3GitStatus) {
+        throw (
+            'A formal portable package requires a clean worktree. Use ' +
+            '-AllowNonCleanBuild only for local inspection; never publish that artifact.'
+        )
+    }
+    if ($dnp3SourceBuildInfo.git_commit -ne $dnp3GitCommit) {
+        throw (
+            "Build commit '$($dnp3SourceBuildInfo.git_commit)' does not match " +
+            "current HEAD '$dnp3GitCommit'. Rebuild before packaging."
+        )
+    }
+    if ($dnp3SourceBuildInfo.git_worktree_state -ne 'clean') {
+        throw (
+            "Build worktree state is '$($dnp3SourceBuildInfo.git_worktree_state)', " +
+            'not clean. Rebuild from the clean checkout.'
+        )
+    }
+    if ($dnp3SourceBuildInfo.build_configuration -ne 'Release') {
+        throw 'A formal portable package requires Release build metadata.'
+    }
+    if ($dnp3SourceBuildInfo.target_architecture -ne 'x64') {
+        throw 'A formal portable package requires x64 build metadata.'
+    }
+}
 
 if (Test-Path -LiteralPath $dnp3Stage) {
     if (-not $Force) {
@@ -37,13 +105,6 @@ foreach ($dnp3ExistingArtifact in @($dnp3Archive, $dnp3ArchiveHash)) {
             throw "Package artifact already exists: $dnp3ExistingArtifact. Re-run with -Force to replace it."
         }
         Remove-Item -LiteralPath $dnp3ExistingArtifact -Force
-    }
-}
-
-if (-not $SkipBuild) {
-    & (Join-Path $PSScriptRoot 'build.ps1') -Preset $Preset
-    if ($LASTEXITCODE -ne 0) {
-        throw "Build failed before packaging with exit code $LASTEXITCODE."
     }
 }
 
@@ -79,6 +140,7 @@ try {
         'docs\OFFLINE_PREFLIGHT.md',
         'docs\SAFETY_INCIDENT_RUNBOOK.md',
         'docs\PERFORMANCE_AND_SOAK_GUIDE.md',
+        'docs\RELEASE_AND_MIGRATION_ACCEPTANCE.md',
         'docs\BEGINNER_MIGRATION_BUILD_USE_GUIDE.md',
         'docs\INTRANET_HANDOFF_REMAINING_TASKS.md'
     )) {
@@ -89,6 +151,11 @@ try {
     Copy-Item -LiteralPath 'CHANGELOG.md' -Destination $dnp3Stage
     Copy-Item -LiteralPath 'scripts\run-local-self-test.ps1' `
         -Destination (Join-Path $dnp3Stage 'self-test.ps1')
+    Copy-Item -LiteralPath 'scripts\test-compatibility.ps1' `
+        -Destination (Join-Path $dnp3Stage 'compatibility-test.ps1')
+    Copy-Item -LiteralPath 'scripts\fixtures\pytest_consumer' `
+        -Destination (Join-Path $dnp3Stage 'migration-consumer') `
+        -Recurse
 }
 finally {
     Pop-Location
@@ -134,6 +201,79 @@ else {
         throw 'Python 3.10 or newer was not found for deterministic packaging.'
     }
     $dnp3Python = $dnp3PythonCommand.Source
+}
+
+$dnp3WheelStage = Join-Path $dnp3Stage 'python-dist'
+$dnp3WheelBuildDirectory = Join-Path $dnp3PackageRoot (
+    'wheel-build-' + [Guid]::NewGuid().ToString('N')
+)
+$dnp3WheelBuildFullPath = [System.IO.Path]::GetFullPath($dnp3WheelBuildDirectory)
+if (-not $dnp3WheelBuildFullPath.StartsWith(
+    $dnp3AllowedRoot,
+    [System.StringComparison]::OrdinalIgnoreCase
+)) {
+    throw 'Internal wheel build directory escaped out\package.'
+}
+$dnp3PreviousSourceDateEpoch = [Environment]::GetEnvironmentVariable(
+    'SOURCE_DATE_EPOCH',
+    'Process'
+)
+try {
+    $dnp3WheelSource = Join-Path $dnp3WheelBuildFullPath 'python'
+    New-Item -ItemType Directory -Path $dnp3WheelBuildFullPath -Force | Out-Null
+    New-Item -ItemType Directory -Path $dnp3WheelStage -Force | Out-Null
+    Copy-Item -LiteralPath $dnp3PythonStage `
+        -Destination $dnp3WheelSource `
+        -Recurse
+    [Environment]::SetEnvironmentVariable(
+        'SOURCE_DATE_EPOCH',
+        '315532800',
+        'Process'
+    )
+    & $dnp3Python -m pip wheel `
+        --disable-pip-version-check `
+        --no-index `
+        --no-deps `
+        --no-build-isolation `
+        --no-cache-dir `
+        --wheel-dir $dnp3WheelStage `
+        $dnp3WheelSource
+    if ($LASTEXITCODE -ne 0) {
+        throw "Offline Python wheel creation failed with exit code $LASTEXITCODE."
+    }
+}
+finally {
+    [Environment]::SetEnvironmentVariable(
+        'SOURCE_DATE_EPOCH',
+        $dnp3PreviousSourceDateEpoch,
+        'Process'
+    )
+    if (Test-Path -LiteralPath $dnp3WheelBuildFullPath) {
+        Remove-Item -LiteralPath $dnp3WheelBuildFullPath -Recurse -Force
+    }
+}
+$dnp3Wheels = @(Get-ChildItem -LiteralPath $dnp3WheelStage -Filter '*.whl' -File)
+if ($dnp3Wheels.Count -ne 1) {
+    throw "Expected exactly one portable Python wheel, found $($dnp3Wheels.Count)."
+}
+
+if (-not $AllowNonCleanBuild) {
+    Push-Location $dnp3RepoRoot
+    try {
+        $dnp3FinalGitCommit = (& git rev-parse HEAD 2>&1 | Out-String).Trim()
+        $dnp3FinalGitStatus = (
+            & git status --porcelain --untracked-files=normal 2>&1 | Out-String
+        ).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Git could not recheck the source worktree before archiving.'
+        }
+    }
+    finally {
+        Pop-Location
+    }
+    if ($dnp3FinalGitCommit -ne $dnp3GitCommit -or $dnp3FinalGitStatus) {
+        throw 'HEAD or the source worktree changed while the package was staged.'
+    }
 }
 
 & $dnp3Python (Join-Path $PSScriptRoot 'create_deterministic_zip.py') `

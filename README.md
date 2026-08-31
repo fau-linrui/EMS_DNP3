@@ -1,6 +1,6 @@
 # DNP3 Windows Master Automation Test Framework
 
-面向 Windows x64、IEEE 1815-2012 和 pytest 的可移植 DNP3 主站自动化测试框架。当前版本 0.6.0，固定使用 OpenDNP3 3.1.2，并支持完全离线的 C++ 构建。
+面向 Windows x64、IEEE 1815-2012 和 pytest 的可移植 DNP3 主站自动化测试框架。当前版本 0.6.1，固定使用 OpenDNP3 3.1.2，并支持完全离线的 C++ 构建。
 
 普通测试开发只使用 Python/pytest；C++ 协议栈封装在独立的 `dnp3-master-host.exe` 中：
 
@@ -27,7 +27,7 @@ pytest -> dnp3_master Python package -> NDJSON -> dnp3-master-host.exe
 - PICS、点表、EMS 场景计划和能力矩阵的离线交叉预检；输出逐能力 blocker、输入 SHA-256 和机器可读 JSON，且不会连接 DUT。
 - 不确定控制结果的跨进程 DUT 事故锁、只读核对和显式读回确认归档；点级 TIMEOUT、2012 保留状态、raw 127 歧义或结果错配均会销毁会话。
 - Python/host 版本、固定 OpenDNP3 版本及 pytest 能力矩阵 SHA-256 启动握手，防止混用旧产物。
-- 环境体检、确定性 ZIP/SHA-256/逐文件清单、包含 8 点精确静态 capture 的解包回环自检、Debug/Release/ASan 和 1,000 次生命周期验收入口。
+- 环境体检、clean-commit 发布门禁、可复现 wheel/ZIP/SHA-256/逐文件清单、包含 8 点精确静态 capture 的解包回环自检、空白 pytest 消费者迁移验收、Debug/Release/ASan 和 1,000 次生命周期验收入口。
 
 控制默认锁住。只有获批实验室运行显式提供允许开关、operator ID、DUT ID，并连接时取得一次性会话令牌后才能调用。控制超时不会自动重试；任何不确定结果都会销毁会话并留下持久事故锁，必须独立读回和显式确认。当前 `DIRECT_OPERATE_NR` 明确返回 `UNSUPPORTED_BY_BACKEND`。
 
@@ -63,17 +63,24 @@ out\build\windows-msvc-release\bin\dnp3-master-host.exe
 out\build\windows-msvc-release\bin\build-info.json
 ```
 
-生成可直接复制到内网/既有 pytest 项目的包：
+正式生成可直接复制到内网/既有 pytest 项目的包（要求代码已提交且工作区干净）：
 
 ```powershell
-.\scripts\package.ps1 -Preset windows-msvc-release -Force
+.\scripts\release.ps1 -LifecycleIterations 1000
 ```
 
-产物目录、确定性 ZIP 和 SHA-256 校验文件位于 `out\package\ems-dnp3-pytest-0.6.0*`。包不会包含本地 IEEE 标准 PDF、EMS PICS、点表、场景计划、PCAP 或密钥。
+该入口执行 Release 全量测试、1,000 次生命周期、两次确定性打包和空白 pytest
+迁移验收；报告位于 `out\release`。产物目录、可安装 wheel、确定性 ZIP 和 SHA-256
+校验文件位于 `out\package\ems-dnp3-pytest-0.6.1*`。`package.ps1` 默认也会拒绝
+dirty/stale build；`-AllowNonCleanBuild` 只能用于本地检查，产物不得发布。包不会包含
+本地 IEEE 标准 PDF、EMS PICS、点表、场景计划、PCAP 或密钥。
 
 ## 集成到现有 pytest
 
-推荐复制整个可移植包，然后在目标虚拟环境安装其中的 `python` 子目录。在目标框架根 `conftest.py` 启用插件：
+推荐复制整个可移植包，并从包内 `python-dist\*.whl` 安装，避免 pip 改写受清单
+保护的源码目录。安装后先执行包根的 `compatibility-test.ps1`，它会在临时空白
+pytest 项目中完成离线隔离安装、插件和本机回环验收；然后在目标框架根
+`conftest.py` 启用插件：
 
 ```python
 pytest_plugins = ("dnp3_master.pytest_plugin",)
@@ -129,6 +136,7 @@ def test_integrity(connected_master):
 
 - [版本变更记录](CHANGELOG.md)
 - [小白拉取、构建、移植与使用指南](docs/BEGINNER_MIGRATION_BUILD_USE_GUIDE.md)
+- [干净版本发布与 pytest 迁移验收](docs/RELEASE_AND_MIGRATION_ACCEPTANCE.md)
 - [内网交接与剩余任务卡](docs/INTRANET_HANDOFF_REMAINING_TASKS.md)
 - [Python 客户端与 pytest 集成](docs/python_client.md)
 - [H08/H09 持续采集、性能、大点表与 24 小时指南](docs/PERFORMANCE_AND_SOAK_GUIDE.md)

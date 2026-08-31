@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ems-dnp3/compatibility-report.schema.json",
+  "title": "DNP3 portable package compatibility and migration report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "started_utc",
+    "completed_utc",
+    "evidence_scope",
+    "formal_dut_conclusion",
+    "package_root",
+    "package_version",
+    "package_git_commit",
+    "package_git_worktree_state",
+    "loopback_scope",
+    "overall_passed",
+    "results"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "started_utc": { "$ref": "#/$defs/utc" },
+    "completed_utc": { "$ref": "#/$defs/utc" },
+    "evidence_scope": { "const": "LOCAL_PACKAGE_AND_LOOPBACK_ONLY" },
+    "formal_dut_conclusion": { "const": false },
+    "package_root": { "$ref": "#/$defs/path" },
+    "package_version": { "$ref": "#/$defs/packageVersion" },
+    "package_git_commit": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|unversioned)$"
+    },
+    "package_git_worktree_state": {
+      "enum": ["clean", "dirty", "unavailable"]
+    },
+    "loopback_scope": {
+      "const": "packaged 127.0.0.1 test outstation only; no DUT access"
+    },
+    "overall_passed": { "type": "boolean" },
+    "results": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/result" }
+    }
+  },
+  "$defs": {
+    "utc": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 64,
+      "pattern": "Z$"
+    },
+    "path": { "type": "string", "minLength": 1, "maxLength": 32767 },
+    "packageVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "maxLength": 128
+    },
+    "nullableVersion": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 128 },
+        { "type": "null" }
+      ]
+    },
+    "nullablePath": {
+      "oneOf": [{ "$ref": "#/$defs/path" }, { "type": "null" }]
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "python_executable",
+        "python_version",
+        "pytest_version",
+        "pip_version",
+        "setuptools_version",
+        "installation_mode",
+        "installed_import_path",
+        "package_integrity",
+        "loopback_self_test",
+        "blank_pytest_consumer",
+        "status",
+        "error"
+      ],
+      "properties": {
+        "python_executable": { "$ref": "#/$defs/path" },
+        "python_version": { "$ref": "#/$defs/nullableVersion" },
+        "pytest_version": { "$ref": "#/$defs/nullableVersion" },
+        "pip_version": { "$ref": "#/$defs/nullableVersion" },
+        "setuptools_version": { "$ref": "#/$defs/nullableVersion" },
+        "installation_mode": {
+          "enum": ["packaged_wheel", "source_copy_fallback"]
+        },
+        "installed_import_path": { "$ref": "#/$defs/nullablePath" },
+        "package_integrity": { "enum": ["PASS", "NOT_RUN"] },
+        "loopback_self_test": { "enum": ["PASS", "SKIPPED", "NOT_RUN"] },
+        "blank_pytest_consumer": { "enum": ["PASS", "NOT_RUN"] },
+        "status": { "enum": ["PASS", "FAIL"] },
+        "error": {
+          "oneOf": [
+            { "type": "string", "minLength": 1, "maxLength": 8192 },
+            { "type": "null" }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -4,7 +4,7 @@
 
 ## 1. 当前已经完成什么
 
-截至 0.6.0，仓库已完成指导书 T00～T16d 中可在本机可靠闭环的核心部分：
+截至 0.6.1，仓库已完成指导书 T00～T16d 中可在本机可靠闭环的核心部分：
 
 - Windows x64 CMake/Visual Studio 工程、固定 OpenDNP3 3.1.2 和全部离线构建依赖。
 - C++ host 的严格 NDJSON 协议、Schema、错误码、重复请求 ID 防护、请求大小/深度限制和有序清理。
@@ -33,7 +33,11 @@
 - pytest 脱敏证据记录器：运行/测试阶段结果、构建身份及 PICS/点表/场景计划/矩阵文件名、大小、SHA-256；不复制私有输入内容，并替换已知本机绝对路径。任意 DUT/第三方输出仍须在外发前人工复核。
 - 有界 `stats`、环境体检、确定性 ZIP/SHA-256/逐文件清单、解包校验和不接真实 EMS 的本机一键读写自检；包内自检含 BI/AI/BOS/AOS 共 8 点的精确静态 capture。
 - `build-info.json` 记录 Git commit 和 clean/dirty/unavailable 工作区状态；正式证据只接受 clean 构建。
-- Python 启动握手强制校验 0.6.0 host 版本；pytest 还校验当前能力矩阵 SHA-256。已实现命令禁止从公共原始 `request()` 绕过类型 API，避免安全令牌或客户端会话状态失步。
+- 已有 fail-closed 一键发布门禁：要求当前 clean commit，执行 Release 全量回归、
+  1,000 次生命周期、两次哈希一致的确定性打包，并生成发布报告；包内含离线 wheel
+  和空白 pytest consumer，可按每个目标解释器做不接 DUT 的迁移验收，且不会改写
+  发布包或目标虚拟环境。
+- Python 启动握手强制校验 0.6.1 host 版本；pytest 还校验当前能力矩阵 SHA-256。已实现命令禁止从公共原始 `request()` 绕过类型 API，避免安全令牌或客户端会话状态失步。
 - 426 行 IEEE 1815-2012 能力矩阵；已补齐 Table 4-6 的 22 个限定词代码、2012 精确 IIN/Command Status 名称、遗漏的 obsolete-but-assigned Counter 变体和 G70V0，并单列 OpenDNP3 对保留 Command Status 原始线上值的折叠缺口。已实现项均保持 `IMPLEMENTED_UNVERIFIED`，没有虚构 `VERIFIED_INTEROP/CONFORMANCE`。
 - 已把用户提供的“DNP3 操作约定”登记为部分输入，并在 `docs/standards/ems_device_profile.md` 记录 D01～D09；由于缺正式 PICS/固件身份且文档内部有冲突，DUT 状态仍全部为 `UNKNOWN`。
 
@@ -104,6 +108,9 @@ examples/pytest_performance/
 - 事故锁只对使用同一持久目录和完全相同 `dut_id` 的进程有效，不是多机分布式锁；真实控制必须保持单控制器、串行执行。
 - 未完成时间同步、Restart、Freeze、Assign Class、File/Data Set/VT、SAv5、Raw fault/fuzz 等能力。
 - 已有真实 EMS 点表/场景断言模板，但尚无目标 EMS 的实际运行结果、PICS 适用性结论、性能阈值、24 小时稳定性或独立互操作证据。
+- Python 3.10+ / pytest 8～9 的工具声明不等于所有小版本均已实测；公开构建机只对
+  实际安装的组合出具迁移报告，内网必须对准备投入使用的每个解释器/pytest 组合
+  运行 `compatibility-test.ps1`，未运行的组合继续记为未覆盖。
 - 已知 EMS 操作约定声称事件仅 unsolicited、支持 FC5/FC6、使用“Activation Model”式 LATCH_ON/OFF、TCP 不支持广播且遥脉同遥测；这些陈述存在标准差异/歧义，不能直接转成自动化断言。
 - 426 行矩阵是能力/对象目录，不是逐条 `shall/shall not/conditional` 的完整规范要求目录；在完成 requirement catalog 和双人标准复核前，不得宣称 IEEE 1815-2012 规范要求全覆盖。
 
@@ -148,9 +155,17 @@ examples/pytest_performance/
 .\scripts\build.ps1 -Preset windows-msvc-release
 .\scripts\test.ps1 -Preset windows-msvc-release
 .\scripts\run-local-self-test.ps1 -Preset windows-msvc-release
+.\scripts\test-compatibility.ps1 `
+  -PackageRoot .\out\package\ems-dnp3-pytest-0.6.1 `
+  -PythonExecutable .\.venv\Scripts\python.exe
 git diff --check
 git status --short
 ```
+
+正式制品发布不用手工拼接上述命令；代码提交且工作区 clean 后执行
+`.\scripts\release.ps1 -LifecycleIterations 1000`。迁移到另一个 pytest 项目后，再从
+包根执行 `compatibility-test.ps1` 并保存 JSON 报告。两者都只访问本机回环，不代替
+真实 EMS 任务卡。
 
 `test.ps1` 已设置 `DNP3_MASTER_HOST_EXE`/`DNP3_TEST_OUTSTATION_EXE` 并包含 `python\tests\test_ems_native_scenarios.py`；不要在未设置这两个变量时把该文件单独追加到命令清单。需要定向运行时，按 `docs/LOCAL_TEST_OUTSTATION.md` 的环境保存/恢复示例执行。
 

@@ -94,7 +94,7 @@ from .safety_incidents import (
 )
 from .soak import SoakRunnerError, run_soak
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 TARGET_STANDARD = "IEEE1815-2012"
 
 __all__ = [

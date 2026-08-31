@@ -1630,7 +1630,7 @@ class HostProcessConfig:
     shutdown_timeout: float = 2.0
     diagnostic_tail_bytes: int = 64 * 1024
     max_response_bytes: int = 16 * 1024 * 1024
-    expected_host_version: str | None = "0.6.0"
+    expected_host_version: str | None = "0.6.1"
     expected_capability_matrix_sha256: str | None = None
 
     def __post_init__(self) -> None:

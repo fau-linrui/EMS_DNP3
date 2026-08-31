@@ -61,6 +61,7 @@ python -m venv .venv
 .\scripts\build.ps1 -Preset windows-msvc-release
 .\scripts\test.ps1 -Preset windows-msvc-release
 .\scripts\run-local-self-test.ps1 -Preset windows-msvc-release
+.\scripts\test-compatibility.ps1 -PackageRoot .\out\package\ems-dnp3-pytest-0.6.1
 ```
 
 其他受支持的 preset 是 `windows-msvc-debug` 和 `windows-msvc-asan`。测试脚本依赖已构建的 host 和本机测试从站。
@@ -81,8 +82,11 @@ ctest --preset windows-msvc-release --output-on-failure
 只有发布或打包相关任务才运行：
 
 ```powershell
-.\scripts\package.ps1 -Preset windows-msvc-release -Force
+.\scripts\release.ps1 -LifecycleIterations 1000
 ```
+
+正式发布入口要求工作区已提交且 clean。`package.ps1 -AllowNonCleanBuild` 只用于
+检查未提交代码的包结构，不得把其产物发布或作为正式证据。
 
 ## 实现约定
 

@@ -287,3 +287,28 @@ def test_package_manifest_schema_is_strict_and_hashes_each_file() -> None:
     item = schema["properties"]["files"]["items"]
     assert item["additionalProperties"] is False
     assert item["required"] == ["path", "size_bytes", "sha256"]
+
+
+def test_compatibility_report_schema_is_strict_and_non_conclusive() -> None:
+    schema = load_schema("compatibility-report.schema.json")
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["evidence_scope"]["const"] == (
+        "LOCAL_PACKAGE_AND_LOOPBACK_ONLY"
+    )
+    assert schema["properties"]["formal_dut_conclusion"]["const"] is False
+    assert schema["$defs"]["result"]["additionalProperties"] is False
+    assert schema["$defs"]["result"]["properties"]["installation_mode"][
+        "enum"
+    ] == ["packaged_wheel", "source_copy_fallback"]
+
+
+def test_release_closure_schema_requires_clean_reproducible_release() -> None:
+    schema = load_schema("release-closure-report.schema.json")
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["evidence_scope"]["const"] == (
+        "LOCAL_RELEASE_AND_LOOPBACK_ONLY"
+    )
+    assert schema["properties"]["formal_dut_conclusion"]["const"] is False
+    assert schema["properties"]["git_worktree_state"]["const"] == "clean"
+    assert schema["properties"]["deterministic_package"]["const"] is True
+    assert schema["properties"]["migration_compatibility"]["const"] == "PASS"
