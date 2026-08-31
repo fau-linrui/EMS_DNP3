@@ -31,6 +31,8 @@ from .errors import (
 )
 from .models import (
     AnalogOutputCommand,
+    CaptureConfig,
+    CaptureResult,
     CommandTaskResult,
     CrobCommand,
     HostProcessConfig,
@@ -67,6 +69,9 @@ _TYPED_API_COMMANDS = frozenset(
         "wait_unsolicited",
         "select_and_operate",
         "direct_operate",
+        "capture.begin",
+        "capture.progress",
+        "capture.end",
     }
 )
 
@@ -533,6 +538,104 @@ class Dnp3MasterClient:
             self._abort_process("wait_unsolicited returned an invalid result")
             raise HostProtocolError(
                 f"wait_unsolicited result is invalid: {error}", self.diagnostics
+            ) from error
+
+    def begin_capture(
+        self,
+        config: CaptureConfig,
+        *,
+        request_timeout: float | None = None,
+    ) -> CaptureResult:
+        """Start the session's only bounded native measurement capture."""
+
+        if not isinstance(config, CaptureConfig):
+            raise TypeError("config must be a CaptureConfig")
+        return self._capture_result(
+            "capture.begin",
+            config.to_params(),
+            request_timeout=request_timeout,
+        )
+
+    def capture_progress(
+        self,
+        capture_id: str,
+        *,
+        request_timeout: float | None = None,
+    ) -> CaptureResult:
+        """Return a non-consuming bounded snapshot for the exact capture ID."""
+
+        normalized_id = self._capture_id(capture_id)
+        return self._capture_result(
+            "capture.progress",
+            {"capture_id": normalized_id},
+            request_timeout=request_timeout,
+        )
+
+    def end_capture(
+        self,
+        capture_id: str,
+        *,
+        drain_timeout: float = 5.0,
+        request_timeout: float | None = None,
+    ) -> CaptureResult:
+        """Stop accepting objects, drain bounded storage, and finalize capture."""
+
+        normalized_id = self._capture_id(capture_id)
+        try:
+            normalized_drain_timeout = float(drain_timeout)
+        except (TypeError, ValueError, OverflowError):
+            normalized_drain_timeout = math.nan
+        if (
+            isinstance(drain_timeout, bool)
+            or not isinstance(drain_timeout, (int, float))
+            or not math.isfinite(normalized_drain_timeout)
+            or not 0.05 <= normalized_drain_timeout <= 300
+        ):
+            raise ValueError("drain_timeout must be between 0.05 and 300 seconds")
+        drain_timeout_ms = round(normalized_drain_timeout * 1000)
+        exchange_timeout = (
+            max(self.config.request_timeout, normalized_drain_timeout + 1.0)
+            if request_timeout is None
+            else request_timeout
+        )
+        return self._capture_result(
+            "capture.end",
+            {
+                "capture_id": normalized_id,
+                "drain_timeout_ms": drain_timeout_ms,
+            },
+            request_timeout=exchange_timeout,
+        )
+
+    @staticmethod
+    def _capture_id(value: str) -> str:
+        if (
+            not isinstance(value, str)
+            or len(value) > 64
+            or _TOKEN_PATTERN.fullmatch(value) is None
+        ):
+            raise ValueError(
+                "capture_id must be a 1-64 byte ASCII token"
+            )
+        return value
+
+    def _capture_result(
+        self,
+        command: str,
+        params: Mapping[str, Any],
+        *,
+        request_timeout: float | None,
+    ) -> CaptureResult:
+        result = self._mapping_result(
+            command,
+            self._request(command, params, timeout=request_timeout),
+        )
+        try:
+            return CaptureResult.from_mapping(result)
+        except (TypeError, ValueError, KeyError) as error:
+            self._abort_process(f"{command} returned an invalid capture result")
+            raise HostProtocolError(
+                f"{command} result is invalid: {error}", self.diagnostics
             ) from error
 
     def integrity_poll(

@@ -47,7 +47,7 @@ def test_build_info_contains_auditable_fixed_identity() -> None:
 
     assert set(build_info) == EXPECTED_KEYS
     assert build_info["schema_version"] == 1
-    assert build_info["host_version"] == "0.5.1"
+    assert build_info["host_version"] == "0.6.0"
     assert build_info["host_version"] == __version__
     assert (
         HostProcessConfig(executable=Path("host.exe")).expected_host_version

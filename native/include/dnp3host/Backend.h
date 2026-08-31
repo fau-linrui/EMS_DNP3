@@ -43,6 +43,45 @@ struct WaitUnsolicitedConfig {
     std::size_t max_events{256};
 };
 
+enum class CaptureMode {
+    StaticSet,
+    EventSequence,
+    Observation,
+};
+
+struct CapturePointRange {
+    std::string kind;
+    std::uint16_t start{0};
+    std::uint16_t stop{0};
+};
+
+struct CaptureEventManifest {
+    std::string generator;
+    std::string generator_version;
+    std::string scenario_id;
+    std::uint64_t seed{0};
+    std::uint64_t start_sequence{0};
+    std::uint64_t end_sequence{0};
+    std::uint64_t event_total{0};
+    std::string sha256;
+    std::string match_rule;
+};
+
+struct CaptureConfig {
+    CaptureMode mode{CaptureMode::Observation};
+    std::vector<std::string> sources;
+    std::vector<CapturePointRange> point_ranges;
+    std::optional<CaptureEventManifest> event_manifest;
+    std::size_t mismatch_sample_limit{100};
+    std::size_t queue_capacity{4096};
+    std::uint32_t duration_limit_ms{600000};
+};
+
+struct CaptureReferenceConfig {
+    std::string capture_id;
+    std::uint32_t drain_timeout_ms{5000};
+};
+
 enum class ReturnMode {
     Detail,
     Summary,
@@ -160,6 +199,12 @@ struct BackendStatus {
     std::size_t queued_unsolicited_events{0};
     std::uint64_t dropped_unsolicited_events{0};
     std::uint64_t unsolicited_fragments{0};
+    Json capture{Json{{"capture_id", nullptr},
+                      {"state", "IDLE"},
+                      {"valid", nullptr},
+                      {"current_queue_depth", 0},
+                      {"max_queue_depth", 0},
+                      {"queue_overflow", 0}}};
 };
 
 class IMasterBackend {
@@ -183,6 +228,11 @@ public:
         const UnsolicitedControlConfig& config) = 0;
     virtual BackendOperationResult wait_unsolicited(
         const WaitUnsolicitedConfig& config) = 0;
+    virtual BackendOperationResult capture_begin(const CaptureConfig& config) = 0;
+    virtual BackendOperationResult capture_progress(
+        const CaptureReferenceConfig& config) = 0;
+    virtual BackendOperationResult capture_end(
+        const CaptureReferenceConfig& config) = 0;
     virtual BackendOperationResult select_and_operate(const CommandConfig& config) = 0;
     virtual BackendOperationResult direct_operate(const CommandConfig& config) = 0;
     virtual BackendOperationResult wait_event(const WaitEventConfig& config) = 0;

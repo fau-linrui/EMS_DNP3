@@ -14,6 +14,8 @@ from .client import Dnp3MasterClient
 from .local_outstation import LocalTestOutstation
 from .models import (
     AnalogOutputCommand,
+    CaptureConfig,
+    CapturePointRange,
     CrobCommand,
     HostProcessConfig,
     LabSafetyConfig,
@@ -64,6 +66,36 @@ def run_self_test(host_executable: Path, outstation_executable: Path) -> dict[st
         )
         integrity = client.integrity_poll(timeout=3.0)
         analog = client.read([ReadHeader.range16(30, 0, 0, 0)], timeout=3.0)
+        capture_started = client.begin_capture(
+            CaptureConfig(
+                mode="static_set",
+                sources=("solicited",),
+                duration_limit=3.0,
+                point_ranges=(
+                    CapturePointRange("binary_input", 0, 1),
+                    CapturePointRange("analog_input", 0, 1),
+                    CapturePointRange("binary_output_status", 0, 1),
+                    CapturePointRange("analog_output_status", 0, 1),
+                ),
+                queue_capacity=64,
+                mismatch_sample_limit=8,
+            )
+        )
+        capture_read = client.read(
+            (
+                ReadHeader.all_objects(1, 2),
+                ReadHeader.all_objects(30, 5),
+                ReadHeader.all_objects(10, 2),
+                ReadHeader.all_objects(40, 3),
+            ),
+            timeout=3.0,
+            max_measurements=100,
+            return_mode="summary",
+        )
+        capture_terminal = client.end_capture(
+            capture_started.capture_id,
+            drain_timeout=2.0,
+        )
         binary_baseline = client.read(
             [ReadHeader.range16(10, 2, 0, 0)], timeout=3.0
         )
@@ -133,6 +165,18 @@ def run_self_test(host_executable: Path, outstation_executable: Path) -> dict[st
             or analog.measurements[0].value != 123.5
         ):
             raise RuntimeError("loopback G30V5 range read did not match 123.5")
+        if (
+            capture_read.task_status != "SUCCESS"
+            or not capture_terminal.valid
+            or capture_terminal.state != "FINALIZED"
+            or capture_terminal.expected_total != 8
+            or capture_terminal.received_unique != 8
+            or capture_terminal.missing != 0
+            or capture_terminal.duplicates != 0
+            or capture_terminal.unmatched_total != 0
+            or capture_terminal.queue_overflow != 0
+        ):
+            raise RuntimeError("loopback static capture did not match its exact truth set")
         if not all(
             result.task_status == "SUCCESS"
             and result.all_success
@@ -162,6 +206,9 @@ def run_self_test(host_executable: Path, outstation_executable: Path) -> dict[st
             "backend_version": client.hello_info["backend_version"],
             "integrity_measurements": len(integrity.measurements),
             "analog_value": analog.measurements[0].value,
+            "capture_expected": capture_terminal.expected_total,
+            "capture_received_unique": capture_terminal.received_unique,
+            "capture_valid": capture_terminal.valid,
             "command_points": sum(
                 len(result.point_results) for result in command_results
             ),

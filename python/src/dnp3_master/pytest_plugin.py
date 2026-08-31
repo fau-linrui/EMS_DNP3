@@ -17,7 +17,17 @@ from .ems_test_plan import EmsTestPlan, EmsTestPlanError, load_ems_test_plan
 from .evidence import EvidenceRecorder
 from .errors import HostCommandError
 from .models import HostProcessConfig, LabSafetyConfig, TcpConnectionConfig
+from .local_benchmark import (
+    LocalEventProfile,
+    LocalEventProfileError,
+    load_local_event_profile,
+)
 from .point_table import PointTable, PointTableError, load_point_table
+from .performance import (
+    PerformanceProfile,
+    PerformanceProfileError,
+    load_performance_profile,
+)
 
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -108,6 +118,26 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help=(
             "Strict EMS poll/event/control scenario plan JSON (or set "
             "DNP3_EMS_PLAN)"
+        ),
+    )
+    group.addoption(
+        "--dnp3-performance-profile",
+        action="store",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Strict read-only performance/soak profile JSON (or set "
+            "DNP3_PERFORMANCE_PROFILE)"
+        ),
+    )
+    group.addoption(
+        "--dnp3-local-event-profile",
+        action="store",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Loopback-only deterministic event load profile JSON (or set "
+            "DNP3_LOCAL_EVENT_PROFILE)"
         ),
     )
     group.addoption(
@@ -340,6 +370,8 @@ def pytest_configure(config: pytest.Config) -> None:
         "capability is NOT_SUPPORTED",
         "dnp3_state_changing: require explicit authorization because the test "
         "may change DUT state",
+        "dnp3_performance: bounded performance or large-point-table test",
+        "dnp3_soak: interruption-aware stability/soak runner test",
     ):
         config.addinivalue_line("markers", marker)
 
@@ -427,6 +459,42 @@ def pytest_configure(config: pytest.Config) -> None:
     setattr(config, "_dnp3_ems_plan_path", ems_plan_path)
     setattr(config, "_dnp3_selected_control_scenario", selected_control)
 
+    configured_performance = config.getoption(
+        "--dnp3-performance-profile"
+    ) or os.environ.get("DNP3_PERFORMANCE_PROFILE")
+    performance_profile: PerformanceProfile | None = None
+    performance_path: Path | None = None
+    if configured_performance:
+        performance_path = Path(configured_performance).expanduser().resolve(
+            strict=False
+        )
+        try:
+            performance_profile = load_performance_profile(performance_path)
+        except PerformanceProfileError as error:
+            raise pytest.UsageError(
+                f"invalid DNP3 performance profile {performance_path}: {error}"
+            ) from error
+    setattr(config, "_dnp3_performance_profile", performance_profile)
+    setattr(config, "_dnp3_performance_profile_path", performance_path)
+
+    configured_local_events = config.getoption(
+        "--dnp3-local-event-profile"
+    ) or os.environ.get("DNP3_LOCAL_EVENT_PROFILE")
+    local_event_profile: LocalEventProfile | None = None
+    local_event_path: Path | None = None
+    if configured_local_events:
+        local_event_path = Path(configured_local_events).expanduser().resolve(
+            strict=False
+        )
+        try:
+            local_event_profile = load_local_event_profile(local_event_path)
+        except LocalEventProfileError as error:
+            raise pytest.UsageError(
+                f"invalid DNP3 local event profile {local_event_path}: {error}"
+            ) from error
+    setattr(config, "_dnp3_local_event_profile", local_event_profile)
+    setattr(config, "_dnp3_local_event_profile_path", local_event_path)
+
     evidence_recorder: EvidenceRecorder | None = None
     configured_evidence = config.getoption("--dnp3-evidence-dir") or os.environ.get(
         "DNP3_EVIDENCE_DIR"
@@ -460,6 +528,8 @@ def pytest_configure(config: pytest.Config) -> None:
                     "pics": pics_path,
                     "point_table": points_path,
                     "ems_test_plan": ems_plan_path,
+                    "performance_profile": performance_path,
+                    "local_event_profile": local_event_path,
                 },
                 runner={"pytest_version": pytest.__version__},
             )
@@ -752,6 +822,24 @@ def dnp3_ems_test_plan(pytestconfig: pytest.Config) -> EmsTestPlan | None:
     """Return the validated EMS scenario plan, if one was configured."""
 
     return getattr(pytestconfig, "_dnp3_ems_test_plan", None)
+
+
+@pytest.fixture(scope="session")
+def dnp3_performance_profile(
+    pytestconfig: pytest.Config,
+) -> PerformanceProfile | None:
+    """Return a strict project-owned performance profile, if configured."""
+
+    return getattr(pytestconfig, "_dnp3_performance_profile", None)
+
+
+@pytest.fixture(scope="session")
+def dnp3_local_event_profile(
+    pytestconfig: pytest.Config,
+) -> LocalEventProfile | None:
+    """Return the strict loopback generator profile, if configured."""
+
+    return getattr(pytestconfig, "_dnp3_local_event_profile", None)
 
 
 @pytest.fixture(scope="session")

@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "profile_id": "local-large-static-read-v1",
+  "scope": "LOCAL_LOOPBACK_ONLY",
+  "seed": 20260831,
+  "scenarios": [
+    {
+      "scenario_id": "large-static-baseline",
+      "operation": "read",
+      "headers": [
+        {"group": 1, "variation": 2, "qualifier": "all_objects", "start": null, "stop": null, "count": null},
+        {"group": 30, "variation": 5, "qualifier": "all_objects", "start": null, "stop": null, "count": null},
+        {"group": 10, "variation": 2, "qualifier": "all_objects", "start": null, "stop": null, "count": null},
+        {"group": 40, "variation": 3, "qualifier": "all_objects", "start": null, "stop": null, "count": null}
+      ],
+      "classes": [],
+      "capture": null,
+      "warmup_iterations": 2,
+      "measurement_iterations": 10,
+      "interval_seconds": 0.1,
+      "cooldown_seconds": 0.5,
+      "task_timeout_seconds": 10.0,
+      "max_measurements": 4096,
+      "expected_objects_per_iteration": 4096,
+      "expected_by_kind": {
+        "analog_input": 1024,
+        "analog_output_status": 1024,
+        "binary_input": 1024,
+        "binary_output_status": 1024
+      },
+      "expected_by_group_variation": {
+        "1:2": 1024,
+        "10:2": 1024,
+        "30:5": 1024,
+        "40:3": 1024
+      },
+      "baseline_scenario_id": null
+    },
+    {
+      "scenario_id": "large-static-capture",
+      "operation": "read",
+      "headers": [
+        {"group": 1, "variation": 2, "qualifier": "all_objects", "start": null, "stop": null, "count": null},
+        {"group": 30, "variation": 5, "qualifier": "all_objects", "start": null, "stop": null, "count": null},
+        {"group": 10, "variation": 2, "qualifier": "all_objects", "start": null, "stop": null, "count": null},
+        {"group": 40, "variation": 3, "qualifier": "all_objects", "start": null, "stop": null, "count": null}
+      ],
+      "classes": [],
+      "capture": {
+        "mode": "static_set",
+        "sources": ["solicited"],
+        "duration_limit_seconds": 15.0,
+        "point_ranges": [
+          {"kind": "binary_input", "start": 0, "stop": 1023},
+          {"kind": "analog_input", "start": 0, "stop": 1023},
+          {"kind": "binary_output_status", "start": 0, "stop": 1023},
+          {"kind": "analog_output_status", "start": 0, "stop": 1023}
+        ],
+        "mismatch_sample_limit": 100,
+        "queue_capacity": 8192
+      },
+      "warmup_iterations": 2,
+      "measurement_iterations": 10,
+      "interval_seconds": 0.1,
+      "cooldown_seconds": 0.5,
+      "task_timeout_seconds": 10.0,
+      "max_measurements": 4096,
+      "expected_objects_per_iteration": 4096,
+      "expected_by_kind": {
+        "analog_input": 1024,
+        "analog_output_status": 1024,
+        "binary_input": 1024,
+        "binary_output_status": 1024
+      },
+      "expected_by_group_variation": {
+        "1:2": 1024,
+        "10:2": 1024,
+        "30:5": 1024,
+        "40:3": 1024
+      },
+      "baseline_scenario_id": "large-static-baseline"
+    }
+  ],
+  "thresholds": {
+    "minimum_samples": 10,
+    "max_task_p95_ms": 5000.0,
+    "max_task_p99_ms": 7500.0,
+    "max_task_ms": 10000.0,
+    "max_cpu_core_percent": 400.0,
+    "max_working_set_bytes": 1073741824,
+    "max_private_bytes": 1073741824,
+    "max_handle_count": 1024,
+    "max_thread_count": 128,
+    "max_private_growth_bytes_per_hour": 268435456.0,
+    "max_working_set_growth_bytes_per_hour": 268435456.0,
+    "max_handle_growth": 16,
+    "max_thread_growth": 8,
+    "max_capture_overhead_percent": 100.0
+  },
+  "soak": {
+    "target_duration_seconds": 86400.0,
+    "cycle_interval_seconds": 1.0,
+    "checkpoint_interval_seconds": 60.0,
+    "resource_sample_interval_seconds": 10.0,
+    "watchdog_timeout_seconds": 30.0,
+    "max_checkpoints": 1442,
+    "max_evidence_bytes": 268435456,
+    "min_free_disk_bytes": 1073741824,
+    "allowed_reconnects": 0,
+    "max_consecutive_failures": 0
+  }
+}

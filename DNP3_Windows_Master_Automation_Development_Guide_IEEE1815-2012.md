@@ -272,6 +272,8 @@ dnp3-master-test-framework/
 ├── native/
 │   ├── include/dnp3host/
 │   │   ├── Backend.h
+│   │   ├── CaptureConfig.h
+│   │   ├── MeasurementCapture.h
 │   │   ├── OpenDnp3Backend.h
 │   │   ├── HostController.h
 │   │   ├── JsonLineProtocol.h
@@ -291,24 +293,30 @@ dnp3-master-test-framework/
 │   │   ├── pytest_plugin.py
 │   │   ├── ems_profile.py / point_table.py / ems_test_plan.py
 │   │   ├── preflight.py / evidence.py / safety_incidents.py
-│   │   └── local_outstation.py / package_verify.py / self_test.py
+│   │   ├── local_outstation.py / package_verify.py / self_test.py
+│   │   └── performance.py / local_benchmark.py / process_metrics.py / soak.py / reporting.py
 │   └── tests/
 ├── examples/pytest_ems/           # 可复制到现有 pytest 框架的场景模板
+├── examples/pytest_performance/   # 可复制的只读性能与 soak 场景模板
 ├── schemas/
 │   ├── request.schema.json
 │   ├── response.schema.json
 │   ├── ems-profile.schema.json
 │   ├── point-table.schema.json
 │   ├── ems-test-plan.schema.json
+│   ├── capture/performance/soak/local-event schemas
 │   └── evidence/build/package/preflight/safety schemas
 ├── config/
 │   ├── capability_matrix.csv
 │   ├── ems_profile.example.json
 │   ├── ems_test_plan.example.json
+│   ├── performance_profile.example.json
+│   ├── local_event_profile.example.json
 │   └── points.example.csv
 ├── docs/
 │   ├── architecture.md
 │   ├── protocol.md
+│   ├── PERFORMANCE_AND_SOAK_GUIDE.md
 │   ├── BEGINNER_MIGRATION_BUILD_USE_GUIDE.md
 │   ├── INTRANET_HANDOFF_REMAINING_TASKS.md
 │   └── standards/
@@ -361,6 +369,7 @@ tools/dnp3-local-test-outstation.exe
 python/pyproject.toml
 python/src/dnp3_master/
 examples/pytest_ems/
+examples/pytest_performance/
 config/capability_matrix.csv
 config/*.example.json
 config/points.example.csv
@@ -374,7 +383,7 @@ package-manifest.json
 self-test.ps1
 ```
 
-`bin/build-info.json` 还必须绑定主程序版本、Git commit/工作区状态、OpenDNP3 commit、编译器、构建配置、目标架构、schema 版本、依赖锁哈希和能力矩阵哈希。ZIP 旁必须保留 `.sha256`；解包后先运行 `self-test.ps1`，不能只检查 EXE 是否存在。
+`bin/build-info.json` 还必须绑定主程序版本、Git commit/工作区状态、OpenDNP3 commit、编译器、构建配置、目标架构、schema 版本、依赖锁哈希和能力矩阵哈希。ZIP 旁必须保留 `.sha256`；解包后先运行 `self-test.ps1`，不能只检查 EXE 是否存在。0.6.0 的 self-test 除读回/控制反馈循环外，还必须对 BI/AI/BOS/AOS 共 8 点完成精确静态 capture，并报告 expected/received unique 均为 8、`valid=true`。
 
 ---
 
@@ -427,6 +436,9 @@ self-test.ps1
 | `enable_unsolicited` | 显式启用选定的 Class 1/2/3 主动上送 |
 | `disable_unsolicited` | 显式禁用选定的 Class 1/2/3 主动上送 |
 | `wait_unsolicited` | 等待并消费持久、有界的主动上送测量队列 |
+| `capture.begin` | 启动一个跨回调、有界的持续采集 |
+| `capture.progress` | 读取当前采集的非消费式进度快照 |
+| `capture.end` | 有界排空并幂等结束采集，返回完整终态 |
 | `stats` | 获取 host、通道和本地队列统计，并明确每个指标的范围和数据源 |
 | `shutdown` | 幂等关闭进程 |
 
@@ -444,7 +456,6 @@ self-test.ps1
 | `dataset.*` | Groups 83、85～88 Data Set |
 | `virtual_terminal.*` | Groups 112、113 |
 | `security.*` | Secure Authentication v5 与安全统计 |
-| `capture.*` | 性能采集开始、只读进度快照和幂等结束；详细合同见第 10 节 |
 | `raw.*` | 独占连接的原始帧测试 |
 
 ### 7.5 通用读取请求模型
@@ -477,7 +488,7 @@ self-test.ps1
   "id":"req-hello",
   "ok":true,
   "result":{
-    "host_version":"0.5.1",
+    "host_version":"0.6.0",
     "backend":"opendnp3",
     "backend_version":"3.1.2",
     "git_commit":"...",
@@ -653,7 +664,7 @@ v1 每个会话最多一个 ACTIVE capture。`disconnect`、连接失败和 `shu
 
 ### 9.1 对外 API
 
-Python 用例不得直接拼 JSON，统一调用。下面示例与当前 0.5.1 公开 API 一致：
+Python 用例不得直接拼 JSON，统一调用。下面示例与当前 0.6.0 公开 API 一致：
 
 ```python
 from pathlib import Path
@@ -708,9 +719,9 @@ enable_unsolicited()
 disable_unsolicited()
 wait_unsolicited()
 get_stats()
-begin_capture()       # H08 完成后
-capture_progress()   # H08 完成后
-end_capture()        # H08 完成后
+begin_capture()
+capture_progress()
+end_capture()
 ```
 
 公共 `request()` 只允许尚无类型化封装的扩展命令。上述已实现命令（尤其是 connect/disconnect/read/control/shutdown）必须走对应方法；禁止用原始 NDJSON 绕过令牌管理、客户端状态机、结果关联和事故锁。Python 启动时必须校验 host 版本；pytest 还必须把本次能力矩阵 SHA-256 与 host 内嵌值比较，任一不一致立即终止进程。
@@ -739,7 +750,7 @@ host_process            session scope
 master_client           session scope（host_process 的别名边界）
 dnp3_connection_config  function scope
 connected_master        function scope
-capture                 function scope（H08 完成后）
+capture                 function scope（按用例显式创建并在 teardown 中结束）
 ```
 
 Fixture teardown 必须幂等，前一用例失败不能污染后一用例。
@@ -913,10 +924,10 @@ v1 行为固定如下：
 24 小时不是一个简单的长 `sleep`，必须由可恢复证据的 soak runner 编排：
 
 1. 启动前运行离线预检，记录构建、配置、Profile、点表、参考端/DUT 身份和测试机规格哈希。
-2. 按 Profile 执行预热后开始正式计时；资源、连接、任务、capture 和磁盘余量按有界周期采样。
+2. 按 Profile 执行预热后开始正式计时；资源、连接、任务、capture 和磁盘余量按有界周期采样。还必须持续消费有界 channel-event 队列，捕获两次状态快照之间的短暂断线/重连；队列发生任何 drop 时连接历史不可证明，本轮 fail closed。
 3. 检查点使用有界轮转的编号文件保存，并通过同目录临时文件加原子替换写入；每个检查点至少包含 UTC、单调经过时间、最后成功场景、累计指标和前一检查点哈希。
 4. 日志、PCAP 和样本文件必须轮转并有总大小上限；磁盘余量低于阈值时安全停止并标记 `INCOMPLETE_RESOURCE_LIMIT`，不能写满磁盘。
-5. watchdog 检测 host 退出、无进度、连接抖动和采集线程停止。进程崩溃、机器重启、人工中断或证据链断裂都标记 `INCOMPLETE`，不得自动合并成一次连续 24 小时通过结果。
+5. watchdog 检测 host 退出、无进度、连接抖动和采集线程停止。其阈值必须严格大于单个场景已知的全部有界 RPC 预算；启用 capture 时包括 begin、Read 和 end/drain 三段，不能只按 Read timeout 配置。进程崩溃、机器重启、人工中断或证据链断裂都标记 `INCOMPLETE`，不得自动合并成一次连续 24 小时通过结果。
 6. 只读场景可按 Profile 做有界重连并单独累计中断；任何状态改变场景不得自动重试或在事故锁未处置时恢复运行。
 7. 结束时原子生成最终报告，包含实际有效时长、p50/p95/p99/max、完整性、所有 overflow/drop、连接/超时、资源 min/max/末值和内存增长斜率。
 
@@ -1645,7 +1656,7 @@ M4 不得作为一张大任务卡实施。它在 M2 的稳定 Read/unsolicited �
     "pytest_version":"..."
   },
   "source_control":{"available":true,"commit":"...","tracked_worktree_state":"clean"},
-  "build_info":{"host_version":"0.5.1","opendnp3_version":"3.1.2"},
+  "build_info":{"host_version":"0.6.0","opendnp3_version":"3.1.2"},
   "inputs":{
     "pics":{"present":true,"file_name":"ems.local.json","size_bytes":1234,"sha256":"..."},
     "points":{"present":true,"file_name":"points.local.csv","size_bytes":2345,"sha256":"..."}
@@ -1737,7 +1748,7 @@ connection = TcpConnectionConfig(
 )
 ```
 
-当前 0.5.1 没有一个可执行的 `config/default.json` 或总配置 Schema；不要按旧草图创建它。pytest 运行参数由插件 CLI/环境变量生成 `HostProcessConfig` 和 `TcpConnectionConfig`，DUT 能力、点表和业务场景分别使用 `ems.local.json`、`points.local.csv`、`ems_test_plan.local.json`，格式参照 `config/*.example.*`。示例地址 `192.0.2.0/24` 是文档用途；实际配置由环境注入。控制会话另附 `LabSafetyConfig`，其中 `operator_id` 和 `dut_id` 必须来自批准记录。Python 层还必须配置可靠的持久事故锁目录。证书私钥、口令和 SAv5 密钥只写引用 ID，不写明文。
+当前 0.6.0 没有一个可执行的 `config/default.json` 或总配置 Schema；不要按旧草图创建它。pytest 运行参数由插件 CLI/环境变量生成 `HostProcessConfig` 和 `TcpConnectionConfig`，DUT 能力、点表和业务场景分别使用 `ems.local.json`、`points.local.csv`、`ems_test_plan.local.json`，格式参照 `config/*.example.*`；性能/soak 和本机事件发生器分别使用 `performance_profile.local.json` 与 `local_event_profile.local.json`。示例地址 `192.0.2.0/24` 是文档用途；实际配置由环境注入。控制会话另附 `LabSafetyConfig`，其中 `operator_id` 和 `dut_id` 必须来自批准记录。Python 层还必须配置可靠的持久事故锁目录。证书私钥、口令和 SAv5 密钥只写引用 ID，不写明文。
 
 ### 16.2 线程和队列模型
 
@@ -1796,7 +1807,8 @@ connection = TcpConnectionConfig(
 
 - `get_status`：状态、在途任务、连接、队列、资源摘要。
 - `stats`：v1 的唯一指标命令，返回累计连接、任务、超时、对象、可用字节指标、溢出和日志丢弃，并为每项声明 source/scope；不要另造不兼容的 `get_metrics` 别名。
-- `capture.progress`：H08 完成后返回当前 capture 的有界只读快照。
+- `capture.progress`：返回当前 capture 的有界、非消费、只读快照；终态由
+  `capture.end` 固化，同一 capture ID 的 end 在下一次 begin 前保持幂等。
 - `dump_diagnostics`：后续候选命令；只有加入命令注册表、Schema 和 capability 声明后才是“已知命令”，届时提供有大小上限的非秘密诊断快照。注册前仍按未知命令返回 `INVALID_REQUEST`。
 - 崩溃转储策略：实验环境可开启，但 SAv5 场景需安全批准和受控存储。
 
@@ -2064,23 +2076,11 @@ IEEE 页面中的标准活动状态可能随时间更新；项目如需在报告
 
 ## 附录 A：错误响应和能力响应示例
 
-当前 v1 已知但后端尚未实现的 `capture.begin` 会返回：
-
-```json
-{
-  "schema_version":1,
-  "id":"req-9",
-  "ok":false,
-  "error":{
-    "code":"UNSUPPORTED_BY_BACKEND",
-    "message":"command is not implemented by the active DNP3 backend",
-    "details":{
-      "backend":"opendnp3",
-      "cmd":"capture.begin"
-    }
-  }
-}
-```
+0.6.0 已实现 `capture.begin/progress/end`。请求和终态必须分别满足
+`schemas/request.schema.json` 与 `schemas/capture-result.schema.json`；静态点集、
+事件摘要和纯观察三种模式的完整示例见 `docs/protocol.md`。同一会话同时只允许
+一个 ACTIVE capture，ID 错配或并发 begin 返回 `INVALID_STATE`，队列溢出返回
+`QUEUE_OVERFLOW` 并在 `error.details.operation_result` 保留可审计终态。
 
 能力响应不能只返回一个 `supports_all`：
 
@@ -2090,7 +2090,7 @@ IEEE 页面中的标准活动状态可能随时间更新；项目如需在报告
   "id":"req-1",
   "ok":true,
   "result":{
-    "host_version":"0.5.1",
+    "host_version":"0.6.0",
     "backend":"opendnp3",
     "backend_version":"3.1.2",
     "git_commit":"...",
@@ -2098,7 +2098,8 @@ IEEE 页面中的标准活动状态可能随时间更新；项目如需在报告
     "capability_matrix_version":"1",
     "capability_matrix_sha256":"...",
     "supported_commands":[
-      "class_poll","connect","direct_operate","disable_unsolicited",
+      "capture.begin","capture.end","capture.progress","class_poll",
+      "connect","direct_operate","disable_unsolicited",
       "disconnect","enable_unsolicited","get_status","hello",
       "integrity_poll","read","select_and_operate","shutdown","stats",
       "wait_event","wait_unsolicited"

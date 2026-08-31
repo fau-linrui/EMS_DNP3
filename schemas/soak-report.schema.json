@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ems-dnp3/soak-report.schema.json",
+  "title": "DNP3 read-only soak final report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "report_type", "status", "status_reason", "passed",
+    "formal_dut_conclusion", "evidence_scope", "started_utc", "ended_utc",
+    "target_duration_seconds", "elapsed_seconds", "cycle_count",
+    "last_successful_scenario", "scenario_results", "failure_count",
+    "failure_samples", "failure_sample_limit", "reconnect_count",
+    "channel_events", "capture",
+    "resources", "threshold_checks", "profile", "checkpoint_chain_tail_sha256",
+    "evidence_directory", "evidence_bytes_before_final", "final_report_path",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "report_type": { "const": "DNP3_READ_ONLY_SOAK" },
+    "status": { "enum": [
+      "COMPLETED", "COMPLETED_FAILED_THRESHOLDS", "INCOMPLETE_INTERRUPTED",
+      "INCOMPLETE_HOST_EXIT", "INCOMPLETE_WATCHDOG", "INCOMPLETE_RESOURCE_LIMIT",
+      "INCOMPLETE_CONNECTION_LIMIT", "INCOMPLETE_FAILURE_LIMIT",
+      "INCOMPLETE_INTERNAL_ERROR", "INCOMPLETE_EVIDENCE_WRITE"
+    ] },
+    "status_reason": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "passed": { "type": "boolean" },
+    "formal_dut_conclusion": { "const": false },
+    "evidence_scope": { "enum": ["LOCAL_LOOPBACK_ONLY", "TARGET_ENVIRONMENT_PENDING_REVIEW"] },
+    "started_utc": { "type": "string", "pattern": "Z$" }, "ended_utc": { "type": "string", "pattern": "Z$" },
+    "target_duration_seconds": { "type": "number", "minimum": 0.1 }, "elapsed_seconds": { "type": "number", "minimum": 0 },
+    "cycle_count": { "type": "integer", "minimum": 0 },
+    "last_successful_scenario": { "type": ["string", "null"], "maxLength": 128 },
+    "scenario_results": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/$defs/scenario" } },
+    "failure_count": { "type": "integer", "minimum": 0 },
+    "failure_samples": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/failure" } },
+    "failure_sample_limit": { "const": 32 }, "reconnect_count": { "type": "integer", "minimum": 0 },
+    "channel_events": { "$ref": "#/$defs/channelEvents" },
+    "capture": { "$ref": "#/$defs/capture" }, "resources": { "$ref": "#/$defs/resources" },
+    "threshold_checks": { "type": "array", "minItems": 12, "maxItems": 256, "items": { "$ref": "#/$defs/check" } },
+    "profile": { "$ref": "#/$defs/profile" },
+    "checkpoint_chain_tail_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+    "evidence_directory": { "type": "string", "minLength": 1, "maxLength": 32767 },
+    "evidence_bytes_before_final": { "type": "integer", "minimum": 0 },
+    "final_report_path": { "type": ["string", "null"], "maxLength": 32767 },
+    "limitations": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "type": "string", "minLength": 1, "maxLength": 512 } }
+  },
+  "$defs": {
+    "distribution": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sample_count", "p50", "p95", "p99", "max", "unit", "source", "scope", "percentile_method"],
+      "properties": {
+        "sample_count": { "type": "integer", "minimum": 0 }, "p50": { "type": ["number", "null"] },
+        "p95": { "type": ["number", "null"] }, "p99": { "type": ["number", "null"] }, "max": { "type": ["number", "null"] },
+        "unit": { "const": "milliseconds" }, "source": { "const": "native_read_task_timings" },
+        "scope": { "type": "string", "minLength": 1 }, "percentile_method": { "const": "nearest_rank" }
+      }
+    },
+    "scenario": {
+      "type": "object", "additionalProperties": false,
+      "required": ["scenario_id", "successful_cycles", "task_latency_ms"],
+      "properties": {
+        "scenario_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "successful_cycles": { "type": "integer", "minimum": 0 }, "task_latency_ms": { "$ref": "#/$defs/distribution" }
+      }
+    },
+    "failure": {
+      "type": "object", "additionalProperties": false,
+      "required": ["utc", "scenario_id", "type", "message"],
+      "properties": {
+        "utc": { "type": "string", "pattern": "Z$" }, "scenario_id": { "type": ["string", "null"], "maxLength": 128 },
+        "type": { "type": "string", "minLength": 1, "maxLength": 128 }, "message": { "type": "string", "maxLength": 2048 }
+      }
+    },
+    "capture": {
+      "type": "object", "additionalProperties": false,
+      "required": ["received_total", "queue_overflow", "max_queue_depth"],
+      "properties": {
+        "received_total": { "type": "integer", "minimum": 0 }, "queue_overflow": { "type": "integer", "minimum": 0 },
+        "max_queue_depth": { "type": "integer", "minimum": 0, "maximum": 65536 }
+      }
+    },
+    "channelEvents": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "observed_after_baseline", "initial_events_drained", "dropped_total",
+        "last_state", "source", "scope"
+      ],
+      "properties": {
+        "observed_after_baseline": { "type": "integer", "minimum": 0 },
+        "initial_events_drained": { "type": "integer", "minimum": 0, "maximum": 1024 },
+        "dropped_total": { "type": "integer", "minimum": 0 },
+        "last_state": { "enum": ["CLOSED", "OPENING", "OPEN", "SHUTDOWN"] },
+        "source": { "const": "native_channel_event_store" },
+        "scope": { "const": "master_session_during_soak" }
+      }
+    },
+    "resourceRange": {
+      "type": "object", "additionalProperties": false,
+      "required": ["minimum", "maximum", "first", "last", "unit"],
+      "properties": {
+        "minimum": { "type": "integer", "minimum": 0 },
+        "maximum": { "type": "integer", "minimum": 0 },
+        "first": { "type": "integer", "minimum": 0 },
+        "last": { "type": "integer", "minimum": 0 },
+        "unit": { "enum": ["bytes", "count"] },
+        "growth_per_hour": { "type": "number" }
+      }
+    },
+    "resources": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": [
+            "available", "source", "scope", "sample_count",
+            "cpu_core_percent", "working_set_bytes", "private_bytes",
+            "handle_count", "thread_count"
+          ],
+          "properties": {
+            "available": { "const": true },
+            "source": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "scope": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "sample_count": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "cpu_core_percent": {
+              "type": "object", "additionalProperties": false,
+              "required": ["maximum", "sample_count", "unit", "definition"],
+              "properties": {
+                "maximum": { "type": ["number", "null"], "minimum": 0 },
+                "sample_count": { "type": "integer", "minimum": 0, "maximum": 99999 },
+                "unit": { "const": "percent_of_one_logical_core" },
+                "definition": { "type": "string", "minLength": 1, "maxLength": 256 }
+              }
+            },
+            "working_set_bytes": { "$ref": "#/$defs/resourceRange" },
+            "private_bytes": { "$ref": "#/$defs/resourceRange" },
+            "handle_count": { "$ref": "#/$defs/resourceRange" },
+            "thread_count": { "$ref": "#/$defs/resourceRange" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["available", "source", "scope", "reason"],
+          "properties": {
+            "available": { "const": false },
+            "source": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "scope": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "reason": { "type": "string", "minLength": 1, "maxLength": 256 }
+          }
+        }
+      ]
+    },
+    "check": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "observed", "limit", "comparison", "passed", "reason"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 }, "observed": { "type": ["number", "null"] }, "limit": { "type": "number" },
+        "comparison": { "enum": ["<=", ">="] }, "passed": { "type": "boolean" }, "reason": { "type": ["string", "null"] }
+      }
+    },
+    "profile": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile_id", "sha256", "seed"],
+      "properties": {
+        "profile_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" }, "seed": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

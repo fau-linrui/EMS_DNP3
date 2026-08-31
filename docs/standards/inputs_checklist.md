@@ -13,7 +13,7 @@
 | 与 2012 版匹配的勘误/技术公告清单 | MISSING | 未提供 | STANDARDS_OWNER | 标准解释与一致性断言 |
 | EMS Device Profile/PICS（含版本与签名/哈希） | REVIEW_REQUIRED | 已提供来自 `AutoExistStation_1_AutoExistStation_20260829103730.xlsx` 的“DNP3 操作约定”文本，但无原始文件/哈希、厂商、固件和批准信息；事件 Read、FC6 响应、SBO、CROB 点模型、广播和遥脉映射存在待澄清项，详见 `ems_device_profile.md` | DUT_OWNER | 可用于缩小询问范围；不能驱动最终 DUT 断言或状态改变测试 |
 | EMS 点表 | MISSING | 未提供测点类型、索引、Class、量程及可写属性 | DUT_OWNER | 真实 EMS 功能与性能用例 |
-| EMS 私有测试场景计划 | MISSING | 0.5.1 已提供严格模板、加载器和不连接 DUT 的四输入离线预检，但尚未填写真实完整性/Class 期望、主动上报触发、批准控制/反馈/恢复值和工单引用 | DUT_OWNER / SAFETY_OWNER | 真实 EMS 场景执行；控制和主动上报默认关闭 |
+| EMS 私有测试场景计划 | MISSING | 0.6.0 已提供严格模板、加载器和不连接 DUT 的四输入离线预检，但尚未填写真实完整性/Class 期望、主动上报触发、批准控制/反馈/恢复值和工单引用 | DUT_OWNER / SAFETY_OWNER | 真实 EMS 场景执行；控制和主动上报默认关闭 |
 | EMS 连接参数 | MISSING | 未提供承载、地址、端口、链路地址、超时、最大分片 | DUT_OWNER | 连接与互操作测试 |
 | EMS 主动上送和启动策略 | REVIEW_REQUIRED | 操作约定声明事件依靠 unsolicited，但未提供 FC20/FC21、启动空响应、Confirm、重发、序号、缓存和溢出参数，并与 Class/Event Read 规则存在歧义 | DUT_OWNER | unsolicited 与启动时序测试 |
 | EMS 安全能力与授权边界 | MISSING | 框架已实现会话令牌和跨进程不确定结果事故锁，但未提供真实实验环境标识、书面操作授权或 SAv5 声明 | SECURITY_OWNER | 真实控制、重启、时间、文件、配置及 SAv5 测试 |
@@ -32,7 +32,7 @@
 
 ## 当前结论
 
-- T00～T12 的通用工程、TCP、核心 Read/IIN、有响应控制和显式 unsolicited 基线路径已实现；0.5.1 还提供可复制的严格 EMS pytest 场景套件、可编程有状态回环从站和离线配置预检。本机完整 native 链路与同栈集成测试通过，真实 EMS 和原始 Confirm/重发故障时序仍未验证。
+- T00～T16d 的本机工程路径已实现，包括核心 Read/IIN、有响应控制、显式 unsolicited、持续 capture、16,384 点 A/B、4,096 条事件块双路径无丢失核验与带 channel-event 审计的可中断 soak；0.6.0 还提供可复制的严格 EMS pytest 场景套件、可编程有状态回环从站和离线配置预检。真实 EMS、正式 24 小时结论和原始 Confirm/重发故障时序仍未验证。
 - 本机标准 PDF 的版本与结构已确认；除 T05～T11 既有索引外，已复核 2012 功能方向、IIN、Qualifier、Command Status、遗漏的 obsolete Counter 变体和 G70V0，并由机器门禁锁定关键名称/方向。来源/授权、勘误、逐条 requirement catalog 和全目录双人复核仍未完成，因此不能据此形成对外合规声明。
 - OpenDNP3 3.1.2 主源码及传递构建依赖已经固定；已对当前 TCP/Read/Control 公共 API 做定向复核。其余能力仍需按 PICS 逐项复核，不能把同栈本机测试提升为独立互操作。
 - 已取得部分 EMS 操作约定，但它不是与固件绑定的正式 PICS，且存在 D01～D09 待确认项；`dut_pics_status` 继续保持 `UNKNOWN`。

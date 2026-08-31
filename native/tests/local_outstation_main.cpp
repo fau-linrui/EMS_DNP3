@@ -27,12 +27,14 @@
 #include <opendnp3/outstation/OutstationStackConfig.h>
 #include <opendnp3/outstation/UpdateBuilder.h>
 
-#include <array>
+#include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -40,13 +42,19 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <unordered_set>
+#include <vector>
 
 namespace {
 
 using dnp3host::Json;
 
-constexpr std::size_t kPointCount = 2;
+constexpr std::uint16_t kDefaultPointCount = 2;
+constexpr std::uint16_t kDefaultEventBufferCapacity = 32;
+constexpr std::uint32_t kMaximumGeneratedEvents = 65535;
+constexpr std::uint64_t kMaximumGeneratedDurationUs = 55ULL * 1000ULL * 1000ULL;
+constexpr std::size_t kSnapshotSampleLimit = 16;
 constexpr std::size_t kMaxControlRequestBytes = 64U * 1024U;
 constexpr std::uint64_t kMaximumDnp3Timestamp = (1ULL << 48U) - 1ULL;
 
@@ -61,16 +69,55 @@ std::optional<std::uint16_t> parse_port(const std::string_view text)
     return static_cast<std::uint16_t>(value);
 }
 
-std::optional<std::uint16_t> parse_arguments(const int argc, char* argv[])
+struct Options {
+    std::uint16_t port{0};
+    std::uint16_t point_count{kDefaultPointCount};
+    std::uint16_t event_buffer_capacity{kDefaultEventBufferCapacity};
+};
+
+std::optional<Options> parse_arguments(const int argc, char* argv[])
 {
-    if (argc != 3 || std::string_view{argv[1]} != "--port") {
+    if (argc < 3 || argc > 7 || argc % 2 == 0) {
         return std::nullopt;
     }
-    return parse_port(argv[2]);
+    Options options;
+    bool saw_port = false;
+    bool saw_point_count = false;
+    bool saw_event_buffer = false;
+    for (int index = 1; index < argc; index += 2) {
+        const auto flag = std::string_view{argv[index]};
+        const auto value = parse_port(argv[index + 1]);
+        if (!value) {
+            return std::nullopt;
+        }
+        if (flag == "--port" && !saw_port) {
+            options.port = *value;
+            saw_port = true;
+        }
+        else if (flag == "--point-count" && !saw_point_count) {
+            options.point_count = *value;
+            saw_point_count = true;
+        }
+        else if (flag == "--event-buffer-capacity" && !saw_event_buffer) {
+            options.event_buffer_capacity = *value;
+            saw_event_buffer = true;
+        }
+        else {
+            return std::nullopt;
+        }
+    }
+    return saw_port ? std::optional<Options>{options} : std::nullopt;
 }
 
 class StatefulCommandHandler final : public opendnp3::ICommandHandler {
 public:
+    explicit StatefulCommandHandler(const std::uint16_t point_count)
+        : point_count_(point_count),
+          binary_output_status_(point_count, false),
+          analog_output_status_(point_count, 0.0)
+    {
+    }
+
     void Begin() override {}
     void End() override {}
 
@@ -79,9 +126,9 @@ public:
         const std::uint16_t index) override
     {
         bool ignored = false;
-        return index < kPointCount && crob_value(command, ignored)
+        return index < point_count_ && crob_value(command, ignored)
             ? opendnp3::CommandStatus::SUCCESS
-            : (index < kPointCount ? opendnp3::CommandStatus::FORMAT_ERROR
+            : (index < point_count_ ? opendnp3::CommandStatus::FORMAT_ERROR
                                    : opendnp3::CommandStatus::OUT_OF_RANGE);
     }
 
@@ -91,7 +138,7 @@ public:
         opendnp3::IUpdateHandler& handler,
         const opendnp3::OperateType operate_type) override
     {
-        if (index >= kPointCount) {
+        if (index >= point_count_) {
             return opendnp3::CommandStatus::OUT_OF_RANGE;
         }
         bool value = false;
@@ -193,17 +240,26 @@ public:
     Json snapshot() const
     {
         const std::lock_guard<std::mutex> lock{mutex_};
+        Json binary_sample = Json::array();
+        Json analog_sample = Json::array();
+        const auto sample_count = std::min<std::size_t>(
+            point_count_, kSnapshotSampleLimit);
+        for (std::size_t index = 0; index < sample_count; ++index) {
+            binary_sample.push_back(binary_output_status_[index]);
+            analog_sample.push_back(analog_output_status_[index]);
+        }
         return Json{
+            {"point_count_per_type", point_count_},
             {"operation_count", operation_count_},
             {"crob_operation_count", crob_operation_count_},
             {"analog_operation_count", analog_operation_count_},
             {"select_before_operate_count", select_before_operate_count_},
             {"direct_operate_count", direct_operate_count_},
             {"direct_operate_no_ack_count", direct_operate_no_ack_count_},
-            {"binary_output_status",
-             Json::array({binary_output_status_[0], binary_output_status_[1]})},
-            {"analog_output_status",
-             Json::array({analog_output_status_[0], analog_output_status_[1]})}};
+            {"snapshot_sample_count", sample_count},
+            {"snapshot_truncated", sample_count < point_count_},
+            {"binary_output_status", std::move(binary_sample)},
+            {"analog_output_status", std::move(analog_sample)}};
     }
 
 private:
@@ -227,15 +283,15 @@ private:
         return false;
     }
 
-    static opendnp3::CommandStatus select_analog(const std::uint16_t index) noexcept
+    opendnp3::CommandStatus select_analog(const std::uint16_t index) const noexcept
     {
-        return index < kPointCount ? opendnp3::CommandStatus::SUCCESS
+        return index < point_count_ ? opendnp3::CommandStatus::SUCCESS
                                    : opendnp3::CommandStatus::OUT_OF_RANGE;
     }
 
-    static opendnp3::CommandStatus select_analog(
+    opendnp3::CommandStatus select_analog(
         const std::uint16_t index,
-        const double value) noexcept
+        const double value) const noexcept
     {
         if (!std::isfinite(value)) {
             return opendnp3::CommandStatus::OUT_OF_RANGE;
@@ -251,7 +307,7 @@ private:
         const opendnp3::OperateType operate_type)
     {
         const auto normalized = static_cast<double>(value);
-        if (index >= kPointCount || !std::isfinite(normalized)) {
+        if (index >= point_count_ || !std::isfinite(normalized)) {
             return opendnp3::CommandStatus::OUT_OF_RANGE;
         }
         if (!handler.Update(
@@ -286,8 +342,9 @@ private:
     }
 
     mutable std::mutex mutex_;
-    std::array<bool, kPointCount> binary_output_status_{{false, false}};
-    std::array<double, kPointCount> analog_output_status_{{0.0, 0.0}};
+    std::size_t point_count_;
+    std::vector<bool> binary_output_status_;
+    std::vector<double> analog_output_status_;
     std::uint64_t operation_count_{0};
     std::uint64_t crob_operation_count_{0};
     std::uint64_t analog_operation_count_{0};
@@ -343,39 +400,34 @@ std::optional<dnp3host::ProtocolError> require_empty_params(
     return std::nullopt;
 }
 
-std::optional<std::uint16_t> point_index(const Json& value)
+std::optional<std::uint64_t> unsigned_value(
+    const Json& value, const std::uint64_t maximum)
 {
     if (!value.is_number_unsigned() && !value.is_number_integer()) {
         return std::nullopt;
     }
     if (value.is_number_unsigned()) {
         const auto parsed = value.get<std::uint64_t>();
-        return parsed < kPointCount
-            ? std::optional<std::uint16_t>{static_cast<std::uint16_t>(parsed)}
-            : std::nullopt;
+        return parsed <= maximum ? std::optional<std::uint64_t>{parsed}
+                                 : std::nullopt;
     }
     const auto parsed = value.get<std::int64_t>();
-    if (parsed < 0 || parsed >= static_cast<std::int64_t>(kPointCount)) {
-        return std::nullopt;
-    }
-    return static_cast<std::uint16_t>(parsed);
+    return parsed >= 0 && static_cast<std::uint64_t>(parsed) <= maximum
+        ? std::optional<std::uint64_t>{static_cast<std::uint64_t>(parsed)}
+        : std::nullopt;
+}
+
+std::optional<std::uint16_t> point_index(
+    const Json& value, const std::uint16_t point_count)
+{
+    const auto parsed = unsigned_value(value, point_count - 1U);
+    return parsed ? std::optional<std::uint16_t>{static_cast<std::uint16_t>(*parsed)}
+                  : std::nullopt;
 }
 
 std::optional<std::uint64_t> timestamp(const Json& value)
 {
-    if (!value.is_number_unsigned() && !value.is_number_integer()) {
-        return std::nullopt;
-    }
-    if (value.is_number_unsigned()) {
-        const auto parsed = value.get<std::uint64_t>();
-        return parsed <= kMaximumDnp3Timestamp
-            ? std::optional<std::uint64_t>{parsed}
-            : std::nullopt;
-    }
-    const auto parsed = value.get<std::int64_t>();
-    return parsed >= 0 && static_cast<std::uint64_t>(parsed) <= kMaximumDnp3Timestamp
-        ? std::optional<std::uint64_t>{static_cast<std::uint64_t>(parsed)}
-        : std::nullopt;
+    return unsigned_value(value, kMaximumDnp3Timestamp);
 }
 
 std::optional<opendnp3::EventMode> event_mode(const Json& value)
@@ -417,7 +469,7 @@ DispatchResult dispatch(
     const dnp3host::Request& request,
     const std::shared_ptr<opendnp3::IOutstation>& outstation,
     const std::shared_ptr<StatefulCommandHandler>& command_handler,
-    const std::uint16_t port)
+    const Options& options)
 {
     if (request.command == "hello") {
         if (const auto error = require_empty_params(request)) {
@@ -429,10 +481,18 @@ DispatchResult dispatch(
                 Json{
                     {"role", "local_test_outstation"},
                     {"bind_host", "127.0.0.1"},
-                    {"port", port},
-                    {"point_count_per_type", kPointCount},
+                    {"port", options.port},
+                    {"point_count_per_type", options.point_count},
+                    {"event_buffer_capacity_per_supported_type",
+                     options.event_buffer_capacity},
+                    {"generator",
+                     Json{{"name", "local_deterministic_event_generator"},
+                          {"version", "1"},
+                          {"maximum_events_per_request", kMaximumGeneratedEvents},
+                          {"maximum_duration_us", kMaximumGeneratedDurationUs}}},
                     {"supported_commands",
-                     Json::array({"hello", "snapshot", "update", "shutdown"})},
+                     Json::array(
+                         {"hello", "snapshot", "update", "generate_events", "shutdown"})},
                     {"max_request_bytes", kMaxControlRequestBytes}}),
             false};
     }
@@ -454,13 +514,143 @@ DispatchResult dispatch(
                 request.id, Json{{"state", "SHUTTING_DOWN"}}),
             true};
     }
-    if (request.command != "update") {
+    if (request.command != "update" && request.command != "generate_events") {
         auto error = invalid_request(
             request.id,
             "command is not supported by the local outstation",
             "unknown_command");
         error.details["command"] = request.command;
         return {dnp3host::JsonLineProtocol::error_response(error), false};
+    }
+
+    if (request.command == "generate_events") {
+        if (const auto error = require_fields(
+                request,
+                {"type",
+                 "count",
+                 "seed",
+                 "start_sequence",
+                 "timestamp_base_ms",
+                 "point_span",
+                 "interval_us"})) {
+            return {dnp3host::JsonLineProtocol::error_response(*error), false};
+        }
+        if (!request.params["type"].is_string()) {
+            const auto error = invalid_request(
+                request.id, "type must be a string", "invalid_type");
+            return {dnp3host::JsonLineProtocol::error_response(error), false};
+        }
+        const auto type = request.params["type"].get<std::string>();
+        if (type != "binary_input" && type != "analog_input") {
+            auto error = invalid_request(
+                request.id,
+                "generator supports binary_input or analog_input",
+                "unsupported_type");
+            error.details["type"] = type;
+            return {dnp3host::JsonLineProtocol::error_response(error), false};
+        }
+        const auto count = unsigned_value(
+            request.params["count"], kMaximumGeneratedEvents);
+        const auto seed = unsigned_value(
+            request.params["seed"],
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()));
+        const auto start_sequence = unsigned_value(
+            request.params["start_sequence"],
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()));
+        const auto timestamp_base = timestamp(request.params["timestamp_base_ms"]);
+        const auto point_span = unsigned_value(
+            request.params["point_span"], options.point_count);
+        const auto interval_us = unsigned_value(
+            request.params["interval_us"], kMaximumGeneratedDurationUs);
+        if (!count || *count == 0U || !seed || !start_sequence || !timestamp_base
+            || !point_span || *point_span == 0U || !interval_us) {
+            const auto error = invalid_request(
+                request.id,
+                "generator numeric fields are outside their bounded ranges",
+                "invalid_generator_range");
+            return {dnp3host::JsonLineProtocol::error_response(error), false};
+        }
+        const auto offset = *count - 1U;
+        const auto maximum_sequence =
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+        if (*start_sequence > maximum_sequence - offset
+            || *timestamp_base > kMaximumDnp3Timestamp - offset
+            || (*interval_us != 0U
+                && *count > kMaximumGeneratedDurationUs / *interval_us)) {
+            const auto error = invalid_request(
+                request.id,
+                "generated sequence, timestamp, or duration would overflow",
+                "generator_overflow");
+            return {dnp3host::JsonLineProtocol::error_response(error), false};
+        }
+
+        constexpr std::uint64_t batch_size = 1024U;
+        opendnp3::UpdateBuilder updates;
+        std::uint64_t pending = 0;
+        const auto generator_started = std::chrono::steady_clock::now();
+        for (std::uint64_t offset_index = 0; offset_index < *count; ++offset_index) {
+            const auto sequence = *start_sequence + offset_index;
+            const auto index_value = static_cast<std::uint16_t>(
+                (*seed + sequence) % *point_span);
+            const auto event_time = *timestamp_base + offset_index;
+            bool applied = false;
+            if (type == "binary_input") {
+                const auto value = ((*seed ^ sequence) & 1U) != 0U;
+                applied = updates.Update(
+                    opendnp3::Binary{
+                        value,
+                        opendnp3::Flags{0x01},
+                        opendnp3::DNPTime{event_time}},
+                    index_value,
+                    opendnp3::EventMode::Force);
+            }
+            else {
+                const auto value = static_cast<double>(sequence % 1000000U)
+                    + static_cast<double>(*seed % 1000U) / 1000.0;
+                applied = updates.Update(
+                    opendnp3::Analog{
+                        value,
+                        opendnp3::Flags{0x01},
+                        opendnp3::DNPTime{event_time}},
+                    index_value,
+                    opendnp3::EventMode::Force);
+            }
+            if (!applied) {
+                const auto error = dnp3host::ProtocolError{
+                    request.id,
+                    dnp3host::ErrorCode::InternalError,
+                    "local generator rejected a validated event",
+                    Json{{"offset", offset_index}}};
+                return {dnp3host::JsonLineProtocol::error_response(error), false};
+            }
+            ++pending;
+            if (*interval_us != 0U || pending == batch_size
+                || offset_index + 1U == *count) {
+                outstation->Apply(updates.Build());
+                pending = 0;
+            }
+            if (*interval_us != 0U && offset_index + 1U != *count) {
+                const auto next_offset = offset_index + 1U;
+                const auto next_deadline = generator_started
+                    + std::chrono::microseconds{*interval_us * next_offset};
+                std::this_thread::sleep_until(next_deadline);
+            }
+        }
+        return {
+            dnp3host::JsonLineProtocol::success_response(
+                request.id,
+                Json{{"generator", "local_deterministic_event_generator"},
+                     {"generator_version", "1"},
+                     {"type", type},
+                     {"event_total", *count},
+                     {"seed", *seed},
+                     {"start_sequence", *start_sequence},
+                     {"end_sequence", *start_sequence + offset},
+                     {"timestamp_base_ms", *timestamp_base},
+                     {"point_span", *point_span},
+                     {"interval_us", *interval_us},
+                     {"event_mode", "force"}}),
+            false};
     }
 
     if (const auto error = require_fields(
@@ -475,13 +665,13 @@ DispatchResult dispatch(
         return {dnp3host::JsonLineProtocol::error_response(error), false};
     }
     const auto type = request.params["type"].get<std::string>();
-    const auto index = point_index(request.params["index"]);
+    const auto index = point_index(request.params["index"], options.point_count);
     if (!index) {
         auto error = invalid_request(
             request.id,
             "index is outside the local test database",
             "invalid_index");
-        error.details["maximum"] = kPointCount - 1;
+        error.details["maximum"] = options.point_count - 1U;
         return {dnp3host::JsonLineProtocol::error_response(error), false};
     }
     const auto mode = event_mode(request.params["event_mode"]);
@@ -631,9 +821,12 @@ bool write_response(const Json& response)
 
 int main(const int argc, char* argv[])
 {
-    const auto port = parse_arguments(argc, argv);
-    if (!port) {
-        std::cerr << "usage: dnp3-local-test-outstation --port <1-65535>\n";
+    const auto options = parse_arguments(argc, argv);
+    if (!options) {
+        std::cerr
+            << "usage: dnp3-local-test-outstation --port <1-65535> "
+               "[--point-count <1-65535>] "
+               "[--event-buffer-capacity <1-65535>]\n";
         return 2;
     }
 
@@ -643,35 +836,53 @@ int main(const int argc, char* argv[])
             "pytest-local-outstation",
             opendnp3::levels::NOTHING,
             opendnp3::ServerAcceptMode::CloseExisting,
-            opendnp3::IPEndpoint{"127.0.0.1", *port},
+            opendnp3::IPEndpoint{"127.0.0.1", options->port},
             nullptr);
 
-        opendnp3::DatabaseConfig database(kPointCount);
-        for (std::uint16_t index = 0;
-             index < static_cast<std::uint16_t>(kPointCount);
-             ++index) {
-            database.binary_input[index].clazz = opendnp3::PointClass::Class1;
-            database.binary_input[index].svariation =
+        opendnp3::DatabaseConfig database;
+        for (std::uint32_t raw_index = 0; raw_index < options->point_count; ++raw_index) {
+            const auto index = static_cast<std::uint16_t>(raw_index);
+            auto& binary = database.binary_input[index];
+            binary.clazz = opendnp3::PointClass::Class1;
+            binary.svariation =
                 opendnp3::StaticBinaryVariation::Group1Var2;
-            database.binary_input[index].evariation =
+            binary.evariation =
                 opendnp3::EventBinaryVariation::Group2Var2;
-            database.analog_input[index].clazz = opendnp3::PointClass::Class2;
-            database.analog_input[index].svariation =
+            auto& analog = database.analog_input[index];
+            analog.clazz = opendnp3::PointClass::Class2;
+            analog.svariation =
                 opendnp3::StaticAnalogVariation::Group30Var5;
-            database.analog_input[index].evariation =
+            analog.evariation =
                 opendnp3::EventAnalogVariation::Group32Var7;
             database.binary_output_status[index].svariation =
                 opendnp3::StaticBinaryOutputStatusVariation::Group10Var2;
             database.analog_output_status[index].svariation =
                 opendnp3::StaticAnalogOutputStatusVariation::Group40Var3;
         }
+        const auto auxiliary_count = std::min<std::uint16_t>(options->point_count, 2U);
+        for (std::uint16_t index = 0; index < auxiliary_count; ++index) {
+            database.double_binary[index] = {};
+            database.counter[index] = {};
+            database.frozen_counter[index] = {};
+            database.time_and_interval[index] = {};
+            database.octet_string[index] = {};
+        }
         opendnp3::OutstationStackConfig config(database);
-        config.outstation.eventBufferConfig = opendnp3::EventBufferConfig::AllTypes(32);
+        config.outstation.eventBufferConfig = opendnp3::EventBufferConfig(
+            options->event_buffer_capacity,
+            0,
+            options->event_buffer_capacity,
+            0,
+            0,
+            options->event_buffer_capacity,
+            options->event_buffer_capacity,
+            0);
         config.outstation.params.allowUnsolicited = true;
         config.link.LocalAddr = 1024;
         config.link.RemoteAddr = 1;
 
-        auto command_handler = std::make_shared<StatefulCommandHandler>();
+        auto command_handler =
+            std::make_shared<StatefulCommandHandler>(options->point_count);
         auto outstation = channel->AddOutstation(
             "pytest-local-outstation-stack",
             command_handler,
@@ -679,6 +890,44 @@ int main(const int argc, char* argv[])
             config);
         if (!outstation || !outstation->Enable()) {
             throw std::runtime_error("unable to enable local outstation");
+        }
+
+        constexpr std::uint32_t initialization_batch_size = 1024U;
+        opendnp3::UpdateBuilder primary_updates;
+        std::uint32_t primary_pending = 0;
+        for (std::uint32_t raw_index = 0; raw_index < options->point_count; ++raw_index) {
+            const auto index = static_cast<std::uint16_t>(raw_index);
+            const auto timestamp_ms = 1700000001000ULL + raw_index;
+            primary_updates.Update(
+                opendnp3::Binary{
+                    (raw_index & 1U) != 0U,
+                    opendnp3::Flags{0x01},
+                    opendnp3::DNPTime{timestamp_ms}},
+                index,
+                opendnp3::EventMode::Suppress);
+            primary_updates.Update(
+                opendnp3::Analog{
+                    static_cast<double>(raw_index) + 0.5,
+                    opendnp3::Flags{0x01},
+                    opendnp3::DNPTime{timestamp_ms}},
+                index,
+                opendnp3::EventMode::Suppress);
+            primary_updates.Update(
+                opendnp3::BinaryOutputStatus{
+                    (raw_index & 1U) != 0U, opendnp3::Flags{0x01}},
+                index,
+                opendnp3::EventMode::Suppress);
+            primary_updates.Update(
+                opendnp3::AnalogOutputStatus{
+                    static_cast<double>(raw_index), opendnp3::Flags{0x01}},
+                index,
+                opendnp3::EventMode::Suppress);
+            ++primary_pending;
+            if (primary_pending == initialization_batch_size
+                || raw_index + 1U == options->point_count) {
+                outstation->Apply(primary_updates.Build());
+                primary_pending = 0;
+            }
         }
 
         const std::uint8_t octets[] = {0xDE, 0xAD, 0xBE, 0xEF};
@@ -727,7 +976,8 @@ int main(const int argc, char* argv[])
             0);
         outstation->Apply(updates.Build());
 
-        std::cout << "{\"ready\":true,\"port\":" << *port << "}\n" << std::flush;
+        std::cout << "{\"ready\":true,\"port\":" << options->port << "}\n"
+                  << std::flush;
         while (true) {
             auto line = dnp3host::JsonLineProtocol::read_line(
                 std::cin, kMaxControlRequestBytes);
@@ -761,7 +1011,8 @@ int main(const int argc, char* argv[])
                 continue;
             }
 
-            const auto result = dispatch(*parsed.request, outstation, command_handler, *port);
+            const auto result =
+                dispatch(*parsed.request, outstation, command_handler, *options);
             if (!write_response(result.response)) {
                 throw std::runtime_error("failed to write local control response");
             }

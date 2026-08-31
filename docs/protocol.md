@@ -38,21 +38,22 @@
 |---|---|
 | `hello` | 返回 host/backend/build 身份、限制、能力和实现命令列表 |
 | `get_status` | 返回 READY/CONNECTING/CONNECTED、通道、会话、安全锁和请求计数 |
-| `stats` | 返回 host、channel、local queue 统计及缺失网络字节/capture 的明确限制 |
+| `stats` | 返回 host、channel、local queue、capture 快照及缺失网络字节的明确限制 |
 | `connect` | 创建 Manager -> TCP Client Channel -> Master，等待通道 OPEN |
 | `disconnect` | 取消任务并按顺序关闭 Master/Channel/Manager，令牌失效 |
 | `wait_event` | 等待并消费有界的通道状态事件；不返回测点变化 |
 | `enable_unsolicited` | 发送 Enable Unsolicited，显式启用选定的 Class 1/2/3 |
 | `disable_unsolicited` | 发送 Disable Unsolicited，显式禁用选定的 Class 1/2/3 |
 | `wait_unsolicited` | 等待并消费持久、有限容量的主动上送测量队列 |
+| `capture.begin` | 启动本会话唯一的持续有界 measurement capture |
+| `capture.progress` | 返回准确 capture ID 的非消费只读快照 |
+| `capture.end` | 停止接收、在有界时间排空并幂等返回终态 |
 | `integrity_poll` | 一次读取 Class 0 和 Class 1/2/3 |
 | `class_poll` | 一次读取选择的事件 Class 1/2/3 |
 | `read` | 执行 1～64 个严格 Header 的一次性 Read |
 | `select_and_operate` | 有响应 CROB/Analog Output SBO 批次 |
 | `direct_operate` | 有响应 CROB/Analog Output Direct Operate 批次 |
 | `shutdown` | 清理后返回 SHUTTING_DOWN，刷新响应并退出 |
-
-`capture.begin` 是保留的已知命令，但当前返回 `UNSUPPORTED_BY_BACKEND`。`hello` 不会把它列入 `supported_commands`。
 
 `hello`、`get_status`、`stats`、`disconnect` 和 `shutdown` 只接受空 `params`。
 
@@ -107,6 +108,53 @@
 `wait_unsolicited` 的参数为 `{"timeout_ms":10000,"max_events":256}`；等待时间为 0～60000 ms，单批数量为 1～256。结果包含 `session_id`、当前 `enabled/classes`、`measurements`、`timed_out` 和 `summary`。每条 measurement 的 `source` 为 `unsolicited`，并带当前 `session_id`。
 
 主动上送队列默认容量 4,096，溢出采用 drop-oldest 并在 `summary.dropped_total` 中累计。任何非零丢弃数都表示事件流不完整，测试不得继续宣称 SOE 完整或顺序正确。断开会话会停止收集并清空该队列。Confirm 丢失、重发、重复检测及应用层序号回绕仍属于待独立验证项。
+
+## Capture v1
+
+`capture.begin` 的公共形态：
+
+```json
+{
+  "mode":"static_set",
+  "sources":["solicited"],
+  "duration_limit_ms":15000,
+  "mismatch_sample_limit":100,
+  "queue_capacity":8192,
+  "expected":{"point_ranges":[
+    {"kind":"binary_input","start":0,"stop":1023},
+    {"kind":"analog_input","start":0,"stop":1023}
+  ]}
+}
+```
+
+mode 为 `static_set`、`event_sequence` 或 `observation`；来源为 solicited、
+unsolicited 或两者。点范围最多 256 段/1,000,000 点，队列 1～65,536，异常
+样本最多 1,024，duration 为 100 ms～7 天。静态范围不允许同 kind 重叠。
+
+`event_sequence` 不接收点范围，而接收严格 manifest：generator/version、
+scenario ID、seed、连续 start/end sequence、event total、SHA-256 和固定
+`match_rule=ordered_kind_index_value`。collector 对每条接收对象生成紧凑
+`[kind,index,value]` JSON 加 LF 的有序 SHA-256；只有总数和摘要同时相等才把
+`sequence_match` 置 true。`observation` 禁止 expected，完整性保持 unknown。
+
+```json
+{"capture_id":"cap-1-1"}
+```
+
+上式是 `capture.progress` 参数。`capture.end` 可再带
+`drain_timeout_ms`（50～300000）。每个会话最多一个 ACTIVE capture；错误 ID
+返回 `INVALID_STATE`。progress 不消费数据；同一 ID 的 end 幂等，直到下一次
+成功 begin。断开和 shutdown 产生 `ABORTED`，deadline 产生 `TIMED_OUT`。
+
+终态包含 offered/received/unique/duplicate/missing/unmatched、fragment、按 kind
+和 GV 的计数、duration/throughput、当前/最大队列水位、overflow、有限 mismatch
+样本、事件摘要和 source/scope。任何缺失、重复、意外点、事件摘要不一致、
+counter/dimension/processing 错误或队列溢出都会 `valid=false`。队列溢出还返回
+`QUEUE_OVERFLOW`，完整终态位于 `error.details.operation_result`，不得忽略。
+
+严格请求/结果合同分别见 `schemas/request.schema.json` 和
+`schemas/capture-result.schema.json`；Python 用例应调用类型化
+`begin_capture/capture_progress/end_capture`。
 
 ## Read 命令
 

@@ -1,6 +1,6 @@
 # OpenDNP3 3.1.2 缺口分析
 
-> 状态：`IN_PROGRESS`。TCP Client、核心 solicited Read/IIN 和有响应控制的公共 API 已完成定向复核与本机同栈测试；其余能力仍需按真实 EMS PICS 逐项分析。任何本机结论均不等同于独立互操作。
+> 状态：`IN_PROGRESS`。TCP Client、核心 solicited Read/IIN、有响应控制以及持续 capture/本机性能工具链已完成定向复核与同栈测试；其余能力仍需按真实 EMS PICS 逐项分析。任何本机结论均不等同于独立互操作或正式目标环境性能结论。
 
 ## 固定依赖记录
 
@@ -51,6 +51,7 @@
 | Command Status | `CommandPointResult`、`CommandStatusSpec`、`Ieee1815_2012.h` | `IMPLEMENTED_UNVERIFIED`：2012 规范视图、后端别名和请求关联已接入；点级 TIMEOUT、13～125 保留状态和 decoded 127 歧义均触发事故锁/会话销毁。固定栈把未知线上值 19～125 折叠为 127，原始值全保真仍 `BLOCKED` |
 | Unsolicited | `EnableUnsolicited/DisableUnsolicited`、持久 `ISOEHandler`、有界 SOE 队列 | `IMPLEMENTED_UNVERIFIED`：FC20/FC21、G2V2/G32V7、FC130 接收、禁用和溢出已做同栈本机回归；Confirm 丢失、重发、重复及序号回绕仍待独立故障注入 |
 | Direct Operate No Response | 3.1.2 `ICommandProcessor` 公共接口仅提供结果回调型 Direct Operate | `UNSUPPORTED_BY_BACKEND`：明确失败，不用有响应命令模拟 |
+| 持续 capture/本机性能 | `MeasurementCapture`、SOE/Read 投递点、`capture.begin/progress/end`、Windows 进程资源采样和严格 Profile/报告 | `IMPLEMENTED_UNVERIFIED`：静态集合、确定性事件摘要、观察模式、16,384 点 A/B、4,096 条 burst/定速事件的 capture 与 unsolicited 双路径无丢失核验，以及带 channel-event 审计的可中断 soak 已本机闭环；网络字节、DUT 资源、独立端及正式 24 小时结论仍待目标环境 |
 
 ## 尚未完成/需按 PICS 决策
 
@@ -59,7 +60,7 @@
 | Unsolicited 原始故障时序 | 基线路径已实现；缺 Confirm 丢失、重发/重复、序号回绕、启动空响应和独立端抓包 | 基线 `IMPLEMENTED_UNVERIFIED`；故障/互操作证据 `BLOCKED` |
 | 时间同步 | Delay Measure/Write Time、Record Current Time 流程和 DUT 延迟预算未接入 | `BLOCKED`（T13） |
 | Restart/Freeze/Assign Class/周期扫描 | 事务 API、风险门和真实 DUT 副作用未实现 | `BLOCKED`（T14，必须拆卡） |
-| 持续 capture/性能 | 只有单次 detail/summary 和有限 stats；无 capture/network bytes/resource timeline | `BLOCKED`（T15/T16） |
+| 目标环境性能/24 小时证据 | 本机 runner 不具备目标 EMS 点表/阈值、网络字节、DUT 资源、独立参考端和 PCAP | `BLOCKED`（T16e/H09b；工具实现已完成，不得把本机结果升级成 DUT 结论） |
 | TCP Server/TLS/UDP/Serial | 后端/构建或 API 可用性未按目标拓扑复核 | `BLOCKED` |
 | Group 0 Device Attributes | 对象支持、读取语义和 Profile 断言未闭环 | `BLOCKED` |
 | Group 31/33 Frozen Analog、G34 Deadband | codec/回调/公共 Header/事务需逐项确认 | `BLOCKED` |

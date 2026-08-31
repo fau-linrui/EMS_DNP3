@@ -1,4 +1,5 @@
 #include "dnp3host/OpenDnp3Backend.h"
+#include "dnp3host/MeasurementCapture.h"
 #include "dnp3host/OpenDnp3CommandSupport.h"
 #include "dnp3host/OpenDnp3ReadSupport.h"
 #include "dnp3host/OpenDnp3UnsolicitedSupport.h"
@@ -309,10 +310,11 @@ class OpenDnp3Backend final : public IMasterBackend {
 public:
     explicit OpenDnp3Backend(const std::size_t unsolicited_queue_capacity)
         : events_(std::make_shared<ChannelEventStore>()),
+          capture_(std::make_shared<MeasurementCapture>()),
           command_support_(std::make_unique<OpenDnp3CommandSupport>()),
-          read_support_(std::make_unique<OpenDnp3ReadSupport>()),
+          read_support_(std::make_unique<OpenDnp3ReadSupport>(capture_)),
           unsolicited_support_(std::make_unique<OpenDnp3UnsolicitedSupport>(
-              unsolicited_queue_capacity))
+              unsolicited_queue_capacity, capture_))
     {
     }
 
@@ -334,6 +336,9 @@ public:
     std::vector<std::string> supported_commands() const override
     {
         return {
+            "capture.begin",
+            "capture.end",
+            "capture.progress",
             "class_poll",
             "connect",
             "direct_operate",
@@ -370,12 +375,17 @@ public:
             {"implementation_revision", "t12-opendnp3-3.1.2"},
             {"verification_scope", "local_opendnp3_outstation"},
             {"queue_capacity", unsolicited_support_->capacity()}};
+        const auto capture_entry = Json{
+            {"status", "IMPLEMENTED_UNVERIFIED"},
+            {"implementation_revision", "t15-capture-v1"},
+            {"verification_scope", "local_opendnp3_outstation"},
+            {"modes", Json::array({"static_set", "event_sequence", "observation"})}};
         return Json{
             {"CHANNEL.TCP.CLIENT", channel_entry},
             {"CHANNEL.RECONNECT", channel_entry},
             {"APP.FC.01.READ", read_entry},
             {"APP.TASK.LIFECYCLE", read_entry},
-            {"APP.TASK.OBSERVABILITY", read_entry},
+            {"APP.TASK.OBSERVABILITY", capture_entry},
             {"APP.CLASS.EVENTS", read_entry},
             {"APP.UNSOLICITED", unsolicited_entry},
             {"APP.FC.14.ENABLE_UNSOLICITED", unsolicited_entry},
@@ -436,7 +446,8 @@ public:
             unsolicited.last_sequence,
             unsolicited.queued_events,
             unsolicited.dropped_events,
-            unsolicited.fragments};
+            unsolicited.fragments,
+            capture_->status()};
     }
 
     BackendOperationResult connect(const ConnectionConfig& config) override
@@ -589,6 +600,7 @@ public:
         }
 
         const auto session_id = status().session_id;
+        const auto capture_terminal = capture_->abort("CAPTURE_SESSION_DISCONNECTED");
         command_support_->cancel_active();
         read_support_->cancel_active();
         unsolicited_support_->cancel_active();
@@ -596,13 +608,16 @@ public:
             return BackendOperationResult::failure(
                 ErrorCode::InternalError,
                 "the DNP3 channel closed with a cleanup error",
-                Json{{"session_id", session_id}, {"backend_message", *cleanup_error}});
+                Json{{"session_id", session_id},
+                     {"backend_message", *cleanup_error},
+                     {"capture", capture_terminal}});
         }
         const auto snapshot = events_->snapshot();
         return BackendOperationResult::success(Json{
             {"state", "READY"},
             {"channel_state", snapshot.state},
-            {"session_id", session_id}});
+            {"session_id", session_id},
+            {"capture", capture_terminal}});
     }
 
     BackendOperationResult integrity_poll(const ReadOptions& options) override
@@ -658,6 +673,41 @@ public:
         return unsolicited_support_->wait(config);
     }
 
+    BackendOperationResult capture_begin(const CaptureConfig& config) override
+    {
+        std::uint64_t session_id = 0;
+        {
+            std::lock_guard<std::mutex> lock(resources_mutex_);
+            if (!session_active_ || !master_) {
+                return BackendOperationResult::failure(
+                    ErrorCode::NotConnected,
+                    "no active DNP3 master session is available for capture");
+            }
+            session_id = current_session_id_;
+        }
+        const auto channel = events_->snapshot();
+        if (channel.state != "OPEN") {
+            return BackendOperationResult::failure(
+                ErrorCode::InvalidState,
+                "measurement capture requires an open DNP3 channel",
+                Json{{"channel_state", channel.state},
+                     {"session_id", session_id}});
+        }
+        return capture_->begin(session_id, config);
+    }
+
+    BackendOperationResult capture_progress(
+        const CaptureReferenceConfig& config) override
+    {
+        return capture_->progress(config);
+    }
+
+    BackendOperationResult capture_end(
+        const CaptureReferenceConfig& config) override
+    {
+        return capture_->end(config);
+    }
+
     BackendOperationResult select_and_operate(const CommandConfig& config) override
     {
         std::shared_ptr<opendnp3::IMaster> master;
@@ -695,6 +745,7 @@ public:
         command_support_->cancel_active();
         read_support_->cancel_active();
         unsolicited_support_->cancel_active();
+        capture_->abort("CAPTURE_HOST_SHUTDOWN");
         shutdown_resources(detach_resources());
     }
 
@@ -784,6 +835,7 @@ private:
     }
 
     std::shared_ptr<ChannelEventStore> events_;
+    std::shared_ptr<MeasurementCapture> capture_;
     std::unique_ptr<OpenDnp3CommandSupport> command_support_;
     std::unique_ptr<OpenDnp3ReadSupport> read_support_;
     std::unique_ptr<OpenDnp3UnsolicitedSupport> unsolicited_support_;

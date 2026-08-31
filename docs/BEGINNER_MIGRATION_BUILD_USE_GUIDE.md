@@ -2,7 +2,7 @@
 
 本文面向不熟悉 C++ 的测试开发人员。正常使用时，你只需要写 Python/pytest；C++ 已封装在 `dnp3-master-host.exe` 中，不需要在测试代码里调用 OpenDNP3，也不需要理解 C++ 指针或编译器细节。
 
-> 当前版本：0.5.1，目标平台 Windows x64，固定协议栈 OpenDNP3 3.1.2。当前实现已完成本机 TCP、Read/Class Poll、主动上报、测量值/IIN、CROB 和四种 Analog Output 控制的同栈回归，并提供可编程回环从站、可复制的严格 EMS pytest 场景套件和不连接 DUT 的配置预检，但尚未代表真实 EMS 互操作或 IEEE 一致性认证。
+> 当前版本：0.6.0，目标平台 Windows x64，固定协议栈 OpenDNP3 3.1.2。当前实现已完成本机 TCP、Read/Class Poll、主动上报、测量值/IIN、CROB 和四种 Analog Output 控制的同栈回归，并提供持续 capture、大点表/事件性能和可中断 soak 工具；这些本机结果仍不代表真实 EMS 互操作、正式性能结论或 IEEE 一致性认证。
 
 ## 1. 先理解四个目录
 
@@ -10,7 +10,7 @@
 |---|---|---|
 | `python/src/dnp3_master/` | 给 pytest 使用的 Python 包、fixture、数据模型 | 通常只调用，不修改 |
 | `bin/dnp3-master-host.exe` | Python 与 DNP3 网络之间的 C++ 宿主进程 | 不修改 |
-| `config/` | 能力矩阵及 EMS PICS、点表、场景计划示例 | 复制示例并填写本地值 |
+| `config/` | 能力矩阵及 EMS PICS、点表、场景计划、性能/事件负载示例 | 复制示例并填写本地值 |
 | `schemas/` | JSON 协议和 EMS 配置格式校验 | 不修改 |
 
 > 路径约定：源码仓库构建出的 EXE 位于 `out\build\windows-msvc-release\bin\`；上表中的 `bin\` 是第 5 章生成的可移植包目录。不要把整个 `out\build\windows-msvc-release` 当作可移植包复制。
@@ -55,12 +55,12 @@ cd D:\Work\Code\EMS_DNP3
 产物位于：
 
 ```text
-out\package\ems-dnp3-pytest-0.5.1\
-out\package\ems-dnp3-pytest-0.5.1.zip
-out\package\ems-dnp3-pytest-0.5.1.zip.sha256
+out\package\ems-dnp3-pytest-0.6.0\
+out\package\ems-dnp3-pytest-0.6.0.zip
+out\package\ems-dnp3-pytest-0.6.0.zip.sha256
 ```
 
-打包过程会在临时目录解开 ZIP、逐文件验证 `package-manifest.json`，再执行一次 DNP3 读写回环自检。将 ZIP 和 `.sha256` 一起传入内网；传输后先用 `Get-FileHash -Algorithm SHA256` 与旁车文件第一列比对，再解压。包中包含主程序、只用于本机自检的测试从站、Python 源码、Schema、能力矩阵、严格点表/场景计划示例、可复制 EMS pytest 套件、依赖锁、许可证和本文档，不包含 IEEE 标准 PDF、EMS 本地配置、抓包或密钥。
+打包过程会在临时目录解开 ZIP、逐文件验证 `package-manifest.json`，再执行一次 DNP3 读写回环自检。将 ZIP 和 `.sha256` 一起传入内网；传输后先用 `Get-FileHash -Algorithm SHA256` 与旁车文件第一列比对，再解压。包中包含主程序、只用于本机自检的测试从站、Python 源码、Schema、能力矩阵、严格点表/场景/性能示例、可复制 EMS 与只读性能 pytest 套件、依赖锁、许可证和本文档，不包含 IEEE 标准 PDF、EMS 本地配置、抓包或密钥。
 
 内网目标机器若不安装 Build Tools，通常仍需安装 Microsoft Visual C++ 2015–2022 Redistributable x64 和 Python 3.10 或更高版本。
 
@@ -182,7 +182,7 @@ out\build\windows-msvc-release\bin\dnp3-local-test-outstation.exe
 两条路线最终都应得到以下可移植内容：
 
 ```text
-ems-dnp3-pytest-0.5.1\
+ems-dnp3-pytest-0.6.0\
   CHANGELOG.md
   bin\dnp3-master-host.exe
   python\
@@ -211,7 +211,7 @@ New-Item -ItemType Directory `
   -Path (Join-Path $targetProject 'third_party') `
   -Force | Out-Null
 Copy-Item `
-  -LiteralPath '.\out\package\ems-dnp3-pytest-0.5.1' `
+  -LiteralPath '.\out\package\ems-dnp3-pytest-0.6.0' `
   -Destination $packageRoot `
   -Recurse
 ```
@@ -221,7 +221,7 @@ Copy-Item `
 ```powershell
 $targetProject = 'D:\Automation\MyPytest'
 $packageRoot = Join-Path $targetProject 'third_party\ems_dnp3'
-$zip = (Resolve-Path '.\ems-dnp3-pytest-0.5.1.zip').Path
+$zip = (Resolve-Path '.\ems-dnp3-pytest-0.6.0.zip').Path
 $expectedHash = (
   (Get-Content -LiteralPath "$zip.sha256" -Raw).Trim() -split '\s+'
 )[0].ToLowerInvariant()
@@ -253,6 +253,7 @@ Expand-Archive `
     tools\dnp3-local-test-outstation.exe
     self-test.ps1
     examples\pytest_ems\
+    examples\pytest_performance\
     package-manifest.json
     ...
 ```
@@ -294,7 +295,11 @@ $env:DNP3_MASTER_HOST_EXE = (
 ).Path
 ```
 
-`self-test.ps1` 只启动包内本机测试从站，不连接真实 EMS。它通过后，再确认 pytest 已加载 DNP3 参数：
+`self-test.ps1` 只启动包内本机测试从站，不连接真实 EMS。除读回和控制反馈循环外，
+它还会精确采集 BI/AI/BOS/AOS 索引 0～1 共 8 点。成功输出中应看到
+`"capture_expected": 8`、`"capture_received_unique": 8` 和
+`"capture_valid": true`；缺少这些字段通常表示混用了旧 Python 包或旧 EXE。
+它通过后，再确认 pytest 已加载 DNP3 参数：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest --help |
@@ -303,27 +308,18 @@ $env:DNP3_MASTER_HOST_EXE = (
 
 到这里，第 5 章才算完成。接下来进入第 6 章，准备私有 PICS、点表和只读连接参数。
 
-### 5.5 最小复制清单
+### 5.5 不要人工裁剪可移植包
 
-若不能整包复制，至少保留：
+对普通移植，最小受支持的复制单位就是整个
+`ems-dnp3-pytest-0.6.0\` 目录或原始 ZIP。`package-manifest.json` 覆盖包内每个
+文件；手工删除 `tools`、Schema、许可证、文档或示例后，逐文件校验必然失效，
+也不能再把该目录称为经过验收的完整可移植包。
 
-```text
-python\src\dnp3_master\
-bin\dnp3-master-host.exe
-bin\build-info.json
-config\capability_matrix.csv
-config\ems_profile.example.json
-config\points.example.csv
-config\ems_test_plan.example.json
-schemas\
-examples\pytest_ems\
-dependency-locks\
-licenses\
-NOTICE.txt
-THIRD_PARTY_LICENSES.txt
-```
-
-`tools\dnp3-local-test-outstation.exe` 只用于本机自检；连接真实 EMS 时不需要，但建议保留以便快速区分“框架坏了”还是“EMS/网络配置有问题”。
+其中 `tools\dnp3-local-test-outstation.exe` 只在本机自检时启动，不会参与真实
+EMS 连接，但应与 `self-test.ps1` 一起保留，便于区分“框架坏了”还是“EMS/网络
+配置有问题”。如果内部制品规则确实要求更小的发布物，应另建一张受评审的重新
+打包任务，明确运行边界、重新生成清单和 SHA-256，并重新执行解包自检；不要在
+复制完成后临时删文件。
 
 ## 6. 第一次连接真实 EMS（只读）
 
@@ -513,6 +509,52 @@ finally:
 队列默认最多保留 4096 条并采用 drop-oldest；`dropped_total > 0` 必须判失败并保存证据。当前已完成 FC20/FC21、G60V2/V3/V4 和 G2V2/G32V7 的本机同栈验证；Confirm 丢失、序号回绕、重发/重复等原始时序仍需独立故障注入和真实 EMS 验证。
 
 推荐直接使用 `examples\pytest_ems\test_unsolicited_scenarios.py`：先在私有计划填写准确点号、Event Class/目标值和外部触发步骤，再把对应场景 `enabled` 改为 `true`。模板不会发送遥控来制造事件，会循环执行有界等待、精确匹配类型/索引/Event Group/Variation/值/可选时间戳，并保证在 `finally` 中 Disable。观察窗口内由批准的独立信号源按 `trigger_instructions` 改变输入。
+
+### 6.4 大点表、性能与 24 小时稳定性
+
+先把包内 `config\performance_profile.example.json` 复制为不提交 Git 的
+`config\performance_profile.local.json`。不要只改点数总和：每个场景的 Header、
+`expected_objects_per_iteration`、`expected_by_kind` 和
+`expected_by_group_variation` 必须与正式 PICS/点表逐项一致；把 `scope` 改为
+`TARGET_ENVIRONMENT_PENDING_REVIEW`，并由 EMS 负责人批准延迟、资源增长、重连和
+磁盘阈值。示例阈值只用于本机工具回归，不能直接作为 EMS 验收标准。
+
+公共示例为了日常运行速度只配置 BI/AI/BOS/AOS 各 1,024 点；仓库自动化边界
+回归实际覆盖各 4,096 点，共 16,384 点。这个数字仍只是同机同栈工具证据，不能
+直接写进真实 EMS 验收要求。
+
+把 `examples\pytest_performance` 整体复制到既有框架后，先只跑有界 benchmark：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest `
+  .\third_party\ems_dnp3\examples\pytest_performance\test_read_performance.py -v `
+  --dnp3-host-exe ".\third_party\ems_dnp3\bin\dnp3-master-host.exe" `
+  --dnp3-pics-file ".\config\ems.local.json" `
+  --dnp3-capability-matrix ".\third_party\ems_dnp3\config\capability_matrix.csv" `
+  --dnp3-performance-profile ".\config\performance_profile.local.json" `
+  --dnp3-performance-report-dir ".\evidence\local\performance" `
+  --dnp3-unknown-policy error `
+  --dnp3-outstation-host "192.0.2.10" `
+  --dnp3-outstation-port 20000 `
+  --dnp3-master-address 1 `
+  --dnp3-outstation-address 1024
+```
+
+确认 benchmark、Profile、磁盘空间和独占环境均通过人工评审后，才追加
+`--dnp3-run-soak`。它会按照 Profile 中的 `target_duration_seconds` 运行只读任务；
+示例值为 86,400 秒。Ctrl+C、watchdog、host 退出、证据上限或阈值失败都会留下
+明确的非通过终态，不会和下一次运行合并。runner 会消费 1,024 条有界的 native
+channel-event 队列来发现两次状态快照之间的短暂断线/重连；事件队列发生任何
+drop 都会失败。Profile 中的 watchdog 还必须严格覆盖 begin、Read、end/drain
+三段 RPC 的最大预算，加载器会在运行前拒绝过小配置。报告中的
+`formal_dut_conclusion=false` 是刻意的：正式结论还需要独立参考端、PCAP/网络
+字节、DUT 资源、测试机/电源/网卡身份和评审记录。
+
+本地突发/定速事件发生器只驱动包内回环从站，不会对真实 EMS 写点；其严格输入是
+`config\local_event_profile.example.json`。虽然底层发生器可表达最多 65,535 条，
+高层 benchmark 单块严格限制为 4,096 条，并同时核验 capture 与 master
+unsolicited 队列；长流必须拆成逐块对账的请求。完整字段、capture 真值和检查点说明见
+`docs\PERFORMANCE_AND_SOAK_GUIDE.md`。
 
 ## 7. 控制用例：默认永久锁住，只有实验室可解锁
 

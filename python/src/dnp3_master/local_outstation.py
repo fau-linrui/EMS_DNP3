@@ -4,22 +4,30 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import queue
 import socket
+import struct
 import subprocess
 import threading
 import time
 from types import MappingProxyType
 from typing import Any, BinaryIO, Mapping
 
+from .models import CaptureEventManifest
+
 
 _MAX_CONTROL_LINE_BYTES = 64 * 1024
 _MAX_RESPONSE_LINE_BYTES = 1024 * 1024
 _STDERR_TAIL_BYTES = 16 * 1024
 _QUEUE_CAPACITY = 128
+_MAX_GENERATED_EVENTS = 65535
+_MAX_GENERATED_DURATION_US = 55 * 1000 * 1000
+_MAX_DNP3_TIMESTAMP = (1 << 48) - 1
 
 
 class LocalOutstationError(RuntimeError):
@@ -43,6 +51,87 @@ class LocalOutstationRequestError(LocalOutstationError):
 @dataclass(frozen=True, slots=True)
 class _StreamFailure:
     message: str
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedEventTruth:
+    """Compact, reproducible truth for one local generator request."""
+
+    scenario_id: str
+    point_type: str
+    seed: int
+    start_sequence: int
+    event_total: int
+    timestamp_base_ms: int
+    point_span: int
+    interval_us: int
+    records_sha256: str
+    generator: str = "local_deterministic_event_generator"
+    generator_version: str = "1"
+
+    @property
+    def end_sequence(self) -> int:
+        return self.start_sequence + self.event_total - 1
+
+    def capture_manifest(self) -> CaptureEventManifest:
+        return CaptureEventManifest(
+            generator=self.generator,
+            generator_version=self.generator_version,
+            scenario_id=self.scenario_id,
+            seed=self.seed,
+            start_sequence=self.start_sequence,
+            end_sequence=self.end_sequence,
+            event_total=self.event_total,
+            sha256=self.records_sha256,
+        )
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "generator": self.generator,
+            "generator_version": self.generator_version,
+            "scenario_id": self.scenario_id,
+            "point_type": self.point_type,
+            "seed": self.seed,
+            "start_sequence": self.start_sequence,
+            "end_sequence": self.end_sequence,
+            "event_total": self.event_total,
+            "timestamp_base_ms": self.timestamp_base_ms,
+            "point_span": self.point_span,
+            "interval_us": self.interval_us,
+            "match_rule": "ordered_kind_index_value",
+            "records_sha256": self.records_sha256,
+            "canonical_record_format": "compact-json-array-[kind,index,value]-plus-LF",
+        }
+
+    def write(self, path: Path | str) -> Path:
+        """Atomically persist the compact truth without storing every event."""
+
+        target = Path(path).expanduser().resolve(strict=False)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        encoded = (
+            json.dumps(
+                self.to_mapping(),
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+        temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+        try:
+            with temporary.open("xb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, target)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+        return target
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -72,6 +161,8 @@ class LocalTestOutstation:
         executable: Path | str,
         *,
         port: int | None = None,
+        point_count: int = 2,
+        event_buffer_capacity: int = 32,
         startup_timeout: float = 5.0,
         request_timeout: float = 3.0,
         shutdown_timeout: float = 3.0,
@@ -84,6 +175,16 @@ class LocalTestOutstation:
         self.port = _unused_loopback_port() if port is None else port
         if not 1 <= self.port <= 65535:
             raise ValueError("port must be between 1 and 65535")
+        for field_name, value in (
+            ("point_count", point_count),
+            ("event_buffer_capacity", event_buffer_capacity),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{field_name} must be an integer")
+            if not 1 <= value <= 65535:
+                raise ValueError(f"{field_name} must be between 1 and 65535")
+        self.point_count = point_count
+        self.event_buffer_capacity = event_buffer_capacity
         for field_name, value in (
             ("startup_timeout", startup_timeout),
             ("request_timeout", request_timeout),
@@ -132,7 +233,15 @@ class LocalTestOutstation:
                 f"local test outstation does not exist: {self.executable}"
             )
         self._process = subprocess.Popen(
-            [str(self.executable), "--port", str(self.port)],
+            [
+                str(self.executable),
+                "--port",
+                str(self.port),
+                "--point-count",
+                str(self.point_count),
+                "--event-buffer-capacity",
+                str(self.event_buffer_capacity),
+            ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -166,6 +275,9 @@ class LocalTestOutstation:
                 hello.get("role") != "local_test_outstation"
                 or hello.get("bind_host") != "127.0.0.1"
                 or hello.get("port") != self.port
+                or hello.get("point_count_per_type") != self.point_count
+                or hello.get("event_buffer_capacity_per_supported_type")
+                != self.event_buffer_capacity
             ):
                 raise LocalOutstationError(
                     f"unexpected local outstation identity: {hello!r}"
@@ -340,6 +452,152 @@ class LocalTestOutstation:
     def snapshot(self) -> Mapping[str, Any]:
         return self.request("snapshot", {})
 
+    def plan_events(
+        self,
+        point_type: str,
+        count: int,
+        *,
+        scenario_id: str,
+        seed: int,
+        start_sequence: int = 0,
+        timestamp_base_ms: int | None = None,
+        point_span: int | None = None,
+        interval_us: int = 0,
+    ) -> GeneratedEventTruth:
+        """Validate and hash a deterministic event stream without emitting it."""
+
+        if point_type not in {"binary_input", "analog_input"}:
+            raise ValueError("point_type must be binary_input or analog_input")
+        if (
+            not isinstance(scenario_id, str)
+            or not scenario_id.isascii()
+            or not 1 <= len(scenario_id) <= 128
+            or any(
+                character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-"
+                for character in scenario_id
+            )
+        ):
+            raise ValueError("scenario_id must be a 1-128 character ASCII token")
+        for field_name, value, minimum, maximum in (
+            ("count", count, 1, _MAX_GENERATED_EVENTS),
+            ("seed", seed, 0, (1 << 63) - 1),
+            ("start_sequence", start_sequence, 0, (1 << 63) - 1),
+            ("interval_us", interval_us, 0, _MAX_GENERATED_DURATION_US),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{field_name} must be an integer")
+            if not minimum <= value <= maximum:
+                raise ValueError(
+                    f"{field_name} must be between {minimum} and {maximum}"
+                )
+        if start_sequence > (1 << 63) - count:
+            raise ValueError("generated sequence range exceeds signed 64-bit bounds")
+        span = self.point_count if point_span is None else point_span
+        if isinstance(span, bool) or not isinstance(span, int):
+            raise TypeError("point_span must be an integer")
+        if not 1 <= span <= self.point_count:
+            raise ValueError("point_span must be between 1 and point_count")
+        base = int(time.time() * 1000) if timestamp_base_ms is None else timestamp_base_ms
+        if isinstance(base, bool) or not isinstance(base, int):
+            raise TypeError("timestamp_base_ms must be an integer")
+        if not 0 <= base <= _MAX_DNP3_TIMESTAMP - (count - 1):
+            raise ValueError("generated timestamps exceed the DNP3 48-bit range")
+        if interval_us and count * interval_us > _MAX_GENERATED_DURATION_US:
+            raise ValueError("generated stream duration must not exceed 55 seconds")
+
+        digest = hashlib.sha256()
+        kind = point_type
+        for offset in range(count):
+            sequence = start_sequence + offset
+            index = (seed + sequence) % span
+            value: bool | float
+            if point_type == "binary_input":
+                value = ((seed ^ sequence) & 1) != 0
+            else:
+                value = float(sequence % 1_000_000) + float(seed % 1000) / 1000.0
+                # The bundled outstation advertises G32V7, so the expected
+                # event value is the post-wire IEEE-754 float32 value seen by
+                # the master, not the generator's pre-serialization double.
+                value = struct.unpack("<f", struct.pack("<f", value))[0]
+            canonical = json.dumps(
+                [kind, index, value],
+                ensure_ascii=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("ascii")
+            digest.update(canonical)
+            digest.update(b"\n")
+        return GeneratedEventTruth(
+            scenario_id=scenario_id,
+            point_type=point_type,
+            seed=seed,
+            start_sequence=start_sequence,
+            event_total=count,
+            timestamp_base_ms=base,
+            point_span=span,
+            interval_us=interval_us,
+            records_sha256=digest.hexdigest(),
+        )
+
+    def generate_events(
+        self,
+        point_type: str,
+        count: int,
+        *,
+        scenario_id: str,
+        seed: int,
+        start_sequence: int = 0,
+        timestamp_base_ms: int | None = None,
+        point_span: int | None = None,
+        interval_us: int = 0,
+    ) -> GeneratedEventTruth:
+        """Generate a pre-verifiable bounded burst or paced local event stream."""
+
+        truth = self.plan_events(
+            point_type,
+            count,
+            scenario_id=scenario_id,
+            seed=seed,
+            start_sequence=start_sequence,
+            timestamp_base_ms=timestamp_base_ms,
+            point_span=point_span,
+            interval_us=interval_us,
+        )
+        expected = {
+            "generator": truth.generator,
+            "generator_version": truth.generator_version,
+            "type": truth.point_type,
+            "event_total": truth.event_total,
+            "seed": truth.seed,
+            "start_sequence": truth.start_sequence,
+            "end_sequence": truth.end_sequence,
+            "timestamp_base_ms": truth.timestamp_base_ms,
+            "point_span": truth.point_span,
+            "interval_us": truth.interval_us,
+            "event_mode": "force",
+        }
+        duration_seconds = truth.event_total * truth.interval_us / 1_000_000.0
+        response = dict(
+            self.request(
+                "generate_events",
+                {
+                    "type": truth.point_type,
+                    "count": truth.event_total,
+                    "seed": truth.seed,
+                    "start_sequence": truth.start_sequence,
+                    "timestamp_base_ms": truth.timestamp_base_ms,
+                    "point_span": truth.point_span,
+                    "interval_us": truth.interval_us,
+                },
+                timeout=min(60.0, max(self.request_timeout, duration_seconds + 5.0)),
+            )
+        )
+        if response != expected:
+            raise self._fatal_protocol_error(
+                f"local generator result does not match its request: {response!r}"
+            )
+        return truth
+
     def close(self) -> None:
         if self._process is None:
             return
@@ -389,7 +647,7 @@ class LocalTestOutstation:
         )
         if isinstance(timestamp_value, bool) or not isinstance(timestamp_value, int):
             raise TypeError("timestamp_ms must be an integer")
-        if not 0 <= timestamp_value <= (1 << 48) - 1:
+        if not 0 <= timestamp_value <= _MAX_DNP3_TIMESTAMP:
             raise ValueError("timestamp_ms must fit the unsigned DNP3 48-bit range")
         return self.request(
             "update",
@@ -420,12 +678,13 @@ class LocalTestOutstation:
             },
         )
 
-    @staticmethod
-    def _validate_update_common(index: int, event_mode: str) -> None:
+    def _validate_update_common(self, index: int, event_mode: str) -> None:
         if isinstance(index, bool) or not isinstance(index, int):
             raise TypeError("index must be an integer")
-        if not 0 <= index < 2:
-            raise ValueError("the bundled outstation exposes indexes 0 and 1")
+        if not 0 <= index < self.point_count:
+            raise ValueError(
+                f"index must be between 0 and {self.point_count - 1}"
+            )
         if event_mode not in {"detect", "force", "suppress", "event_only"}:
             raise ValueError(
                 "event_mode must be detect, force, suppress, or event_only"
@@ -575,6 +834,7 @@ class LocalTestOutstation:
 
 
 __all__ = [
+    "GeneratedEventTruth",
     "LocalOutstationError",
     "LocalOutstationRequestError",
     "LocalTestOutstation",

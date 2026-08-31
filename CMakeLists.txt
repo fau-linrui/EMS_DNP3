@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
     dnp3_master_test_framework
-    VERSION 0.5.1
+    VERSION 0.6.0
     DESCRIPTION "Windows DNP3 master automation test framework"
     LANGUAGES CXX
 )
@@ -257,10 +257,12 @@ endif()
 add_library(
     dnp3host_core
     STATIC
+        native/src/CaptureConfig.cpp
         native/src/CommandConfig.cpp
         native/src/ConnectionConfig.cpp
         native/src/HostController.cpp
         native/src/JsonLineProtocol.cpp
+        native/src/MeasurementCapture.cpp
         native/src/OpenDnp3Backend.cpp
         native/src/OpenDnp3CommandSupport.cpp
         native/src/OpenDnp3ReadSupport.cpp
@@ -275,6 +277,9 @@ target_link_libraries(
     PRIVATE
         opendnp3
 )
+if(WIN32)
+    target_link_libraries(dnp3host_core PRIVATE bcrypt)
+endif()
 
 add_executable(dnp3-master-host native/src/main.cpp)
 target_link_libraries(dnp3-master-host PRIVATE dnp3host_core)
@@ -304,6 +309,12 @@ if(BUILD_TESTING)
 
     add_executable(dnp3host-protocol-tests native/tests/protocol_tests.cpp)
     target_link_libraries(dnp3host-protocol-tests PRIVATE dnp3host_core)
+
+    add_executable(
+        dnp3host-capture-tests
+        native/tests/measurement_capture_tests.cpp
+    )
+    target_link_libraries(dnp3host-capture-tests PRIVATE dnp3host_core)
 
     add_executable(
         opendnp3-runtime-tests
@@ -340,6 +351,7 @@ if(BUILD_TESTING)
 
     add_test(NAME native.project_info COMMAND dnp3host-unit-tests)
     add_test(NAME native.protocol COMMAND dnp3host-protocol-tests)
+    add_test(NAME native.capture COMMAND dnp3host-capture-tests)
     add_test(
         NAME native.host_smoke
         COMMAND
@@ -371,6 +383,8 @@ install(
         "${PROJECT_SOURCE_DIR}/config/capability_matrix.csv"
         "${PROJECT_SOURCE_DIR}/config/ems_profile.example.json"
         "${PROJECT_SOURCE_DIR}/config/ems_test_plan.example.json"
+        "${PROJECT_SOURCE_DIR}/config/performance_profile.example.json"
+        "${PROJECT_SOURCE_DIR}/config/local_event_profile.example.json"
         "${PROJECT_SOURCE_DIR}/config/points.example.csv"
     DESTINATION config
 )

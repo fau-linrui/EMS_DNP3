@@ -1,5 +1,6 @@
 #include "dnp3host/OpenDnp3UnsolicitedSupport.h"
 #include "dnp3host/Ieee1815_2012.h"
+#include "dnp3host/MeasurementCapture.h"
 
 #include <opendnp3/app/MeasurementTypes.h>
 #include <opendnp3/app/OctetString.h>
@@ -91,8 +92,10 @@ std::size_t validated_capacity(const std::size_t capacity)
 
 class UnsolicitedStore final {
 public:
-    explicit UnsolicitedStore(const std::size_t capacity)
-        : capacity_(capacity)
+    UnsolicitedStore(
+        const std::size_t capacity,
+        std::shared_ptr<MeasurementCapture> capture)
+        : capacity_(capacity), capture_(std::move(capture))
     {
     }
 
@@ -143,6 +146,9 @@ public:
         current_unsolicited_ = session_active_ && info.unsolicited;
         if (current_unsolicited_) {
             current_fragment_ = ++fragments_total_;
+            if (capture_) {
+                capture_->record_fragment("unsolicited", monotonic_ns());
+            }
         }
     }
 
@@ -173,6 +179,17 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         if (!session_active_ || !current_unsolicited_) {
             return;
+        }
+
+        if (capture_) {
+            capture_->record_object(
+                "unsolicited",
+                kind,
+                group,
+                variation,
+                index,
+                value,
+                received_at);
         }
 
         const auto receive_sequence = ++last_sequence_;
@@ -309,6 +326,7 @@ public:
 
 private:
     const std::size_t capacity_;
+    std::shared_ptr<MeasurementCapture> capture_;
     mutable std::mutex mutex_;
     std::condition_variable condition_;
     std::deque<Json> events_;
@@ -743,8 +761,11 @@ std::vector<opendnp3::Header> class_headers(const std::uint8_t mask)
 }  // namespace
 
 struct OpenDnp3UnsolicitedSupport::Impl final {
-    explicit Impl(const std::size_t queue_capacity)
-        : store(std::make_shared<UnsolicitedStore>(queue_capacity)),
+    Impl(
+        const std::size_t queue_capacity,
+        std::shared_ptr<MeasurementCapture> capture)
+        : store(std::make_shared<UnsolicitedStore>(
+              queue_capacity, std::move(capture))),
           soe_handler(std::make_shared<CollectingUnsolicitedHandler>(store))
     {
     }
@@ -842,8 +863,10 @@ struct OpenDnp3UnsolicitedSupport::Impl final {
 };
 
 OpenDnp3UnsolicitedSupport::OpenDnp3UnsolicitedSupport(
-    const std::size_t queue_capacity)
-    : impl_(std::make_shared<Impl>(validated_capacity(queue_capacity)))
+    const std::size_t queue_capacity,
+    std::shared_ptr<MeasurementCapture> capture)
+    : impl_(std::make_shared<Impl>(
+          validated_capacity(queue_capacity), std::move(capture)))
 {
 }
 

@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dnp3-master/local-event-report.schema.json",
+  "title": "DNP3 deterministic local event performance report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "report_type", "evidence_scope",
+    "formal_dut_conclusion", "scenario_id", "point_type", "mode",
+    "iterations_attempted", "iterations_completed", "events_expected",
+    "events_received", "queue_overflow", "max_queue_depth",
+    "unsolicited_queue",
+    "elapsed_seconds", "capture_throughput_per_sec", "cpu_core_percent",
+    "resource_maximums", "network_bytes", "dut_resources",
+    "threshold_checks", "failure", "iteration_samples",
+    "iteration_sample_limit", "started_utc", "ended_utc", "passed",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "report_type": { "const": "DNP3_LOCAL_EVENT_PERFORMANCE" },
+    "evidence_scope": { "const": "LOCAL_LOOPBACK_ONLY" },
+    "formal_dut_conclusion": { "const": false },
+    "scenario_id": { "$ref": "#/$defs/token" },
+    "point_type": { "enum": ["binary_input", "analog_input"] },
+    "mode": { "enum": ["burst", "paced_continuous_chunk"] },
+    "iterations_attempted": { "type": "integer", "minimum": 1, "maximum": 1000 },
+    "iterations_completed": { "type": "integer", "minimum": 0, "maximum": 1000 },
+    "events_expected": { "type": "integer", "minimum": 1, "maximum": 4096000 },
+    "events_received": { "type": "integer", "minimum": 0 },
+    "queue_overflow": { "type": "integer", "minimum": 0 },
+    "max_queue_depth": { "type": "integer", "minimum": 0, "maximum": 65536 },
+    "unsolicited_queue": { "$ref": "#/$defs/unsolicitedQueue" },
+    "elapsed_seconds": { "$ref": "#/$defs/distribution" },
+    "capture_throughput_per_sec": { "$ref": "#/$defs/distribution" },
+    "cpu_core_percent": { "$ref": "#/$defs/distribution" },
+    "resource_maximums": { "$ref": "#/$defs/resourceMaximums" },
+    "network_bytes": { "$ref": "#/$defs/unavailable" },
+    "dut_resources": { "$ref": "#/$defs/unavailable" },
+    "threshold_checks": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": { "$ref": "#/$defs/check" }
+    },
+    "failure": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/failure" }
+      ]
+    },
+    "iteration_samples": {
+      "type": "array", "maxItems": 32,
+      "items": { "$ref": "#/$defs/iterationSample" }
+    },
+    "iteration_sample_limit": { "const": 32 },
+    "started_utc": { "$ref": "#/$defs/utc" },
+    "ended_utc": { "$ref": "#/$defs/utc" },
+    "passed": { "type": "boolean" },
+    "limitations": {
+      "type": "array", "minItems": 1, "maxItems": 16,
+      "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+    }
+  },
+  "$defs": {
+    "token": {
+      "type": "string", "minLength": 1, "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "utc": {
+      "type": "string", "minLength": 20, "maxLength": 64,
+      "pattern": "Z$"
+    },
+    "distribution": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "sample_count", "p50", "p95", "p99", "max", "unit", "scope",
+        "percentile_method"
+      ],
+      "properties": {
+        "sample_count": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "p50": { "type": ["number", "null"], "minimum": 0 },
+        "p95": { "type": ["number", "null"], "minimum": 0 },
+        "p99": { "type": ["number", "null"], "minimum": 0 },
+        "max": { "type": ["number", "null"], "minimum": 0 },
+        "unit": {
+          "enum": [
+            "seconds", "objects_per_second", "percent_of_one_logical_core"
+          ]
+        },
+        "scope": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "percentile_method": { "const": "nearest_rank" }
+      }
+    },
+    "resourceMaximums": {
+      "type": "object", "additionalProperties": false,
+      "required": ["working_set_bytes", "private_bytes", "source", "scope"],
+      "properties": {
+        "working_set_bytes": { "type": ["integer", "null"], "minimum": 0 },
+        "private_bytes": { "type": ["integer", "null"], "minimum": 0 },
+        "source": { "const": "windows_process_api" },
+        "scope": { "const": "dnp3_master_host_process" }
+      }
+    },
+    "unsolicitedQueue": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "events_drained", "dropped_total", "queue_capacity", "source", "scope"
+      ],
+      "properties": {
+        "events_drained": { "type": "integer", "minimum": 0 },
+        "dropped_total": { "type": "integer", "minimum": 0 },
+        "queue_capacity": { "const": 4096 },
+        "source": { "const": "native_unsolicited_store" },
+        "scope": { "const": "master_session_since_enable" }
+      }
+    },
+    "unavailable": {
+      "type": "object", "additionalProperties": false,
+      "required": ["value", "reason", "scope"],
+      "properties": {
+        "value": { "type": "null" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "scope": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "check": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "observed", "limit", "passed"],
+      "properties": {
+        "name": { "enum": ["max_elapsed_seconds", "max_cpu_core_percent"] },
+        "observed": { "type": ["number", "null"], "minimum": 0 },
+        "limit": { "type": "number", "exclusiveMinimum": 0 },
+        "passed": { "type": "boolean" }
+      }
+    },
+    "failure": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "message"],
+      "properties": {
+        "type": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "message": { "type": "string", "maxLength": 2048 }
+      }
+    },
+    "truth": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "schema_version", "generator", "generator_version", "scenario_id",
+        "point_type", "seed", "start_sequence", "end_sequence",
+        "event_total", "timestamp_base_ms", "point_span", "interval_us",
+        "match_rule", "records_sha256", "canonical_record_format"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "generator": { "const": "local_deterministic_event_generator" },
+        "generator_version": { "const": "1" },
+        "scenario_id": { "$ref": "#/$defs/token" },
+        "point_type": { "enum": ["binary_input", "analog_input"] },
+        "seed": { "type": "integer", "minimum": 0 },
+        "start_sequence": { "type": "integer", "minimum": 0 },
+        "end_sequence": { "type": "integer", "minimum": 0 },
+        "event_total": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "timestamp_base_ms": { "type": "integer", "minimum": 0, "maximum": 281474976710655 },
+        "point_span": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "interval_us": { "type": "integer", "minimum": 0, "maximum": 55000000 },
+        "match_rule": { "const": "ordered_kind_index_value" },
+        "records_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "canonical_record_format": {
+          "const": "compact-json-array-[kind,index,value]-plus-LF"
+        }
+      }
+    },
+    "iterationSample": {
+      "type": "object", "additionalProperties": false,
+      "required": ["iteration", "truth", "capture", "elapsed_seconds", "cpu_core_percent"],
+      "properties": {
+        "iteration": { "type": "integer", "minimum": 0, "maximum": 999 },
+        "truth": { "$ref": "#/$defs/truth" },
+        "capture": { "$ref": "capture-result.schema.json#/$defs/capture" },
+        "elapsed_seconds": { "type": "number", "minimum": 0 },
+        "cpu_core_percent": { "type": ["number", "null"], "minimum": 0 }
+      }
+    }
+  }
+}

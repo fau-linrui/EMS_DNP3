@@ -37,8 +37,20 @@ from .errors import (
     SafetyIncidentPersistenceError,
     UnresolvedSafetyIncidentError,
 )
+from .local_benchmark import (
+    LOCAL_EVENT_PROFILE_SCHEMA_VERSION,
+    LocalEventLoad,
+    LocalEventProfile,
+    LocalEventProfileError,
+    load_local_event_profile,
+    run_local_event_benchmark,
+)
 from .models import (
     AnalogOutputCommand,
+    CaptureConfig,
+    CaptureEventManifest,
+    CapturePointRange,
+    CaptureResult,
     CommandPointResult,
     CommandTaskResult,
     CrobCommand,
@@ -60,18 +72,37 @@ from .point_table import (
     PointTableError,
     load_point_table,
 )
+from .performance import (
+    PERFORMANCE_PROFILE_SCHEMA_VERSION,
+    PerformanceProfile,
+    PerformanceProfileError,
+    PerformanceThresholds,
+    ReadPerformanceScenario,
+    SoakSettings,
+    execute_read_only_iteration,
+    load_performance_profile,
+    nearest_rank,
+    run_performance_suite,
+)
+from .process_metrics import ProcessResourceSample, ProcessResourceSampler
+from .reporting import PersistedReport, write_json_report
 from .safety_incidents import (
     SAFETY_INCIDENT_SCHEMA_VERSION,
     IncidentRecordResult,
     SafetyIncidentStore,
     dut_identity_sha256,
 )
+from .soak import SoakRunnerError, run_soak
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"
 TARGET_STANDARD = "IEEE1815-2012"
 
 __all__ = [
     "AnalogOutputCommand",
+    "CaptureConfig",
+    "CaptureEventManifest",
+    "CapturePointRange",
+    "CaptureResult",
     "ClientStateError",
     "CommandPointResult",
     "CommandTaskResult",
@@ -97,14 +128,24 @@ __all__ = [
     "HostStartError",
     "HostTimeoutError",
     "LabSafetyConfig",
+    "LOCAL_EVENT_PROFILE_SCHEMA_VERSION",
+    "LocalEventLoad",
+    "LocalEventProfile",
+    "LocalEventProfileError",
     "MeasurementRecord",
     "POINT_TABLE_COLUMNS",
     "POINT_TABLE_SCHEMA_VERSION",
+    "PERFORMANCE_PROFILE_SCHEMA_VERSION",
+    "PerformanceProfile",
+    "PerformanceProfileError",
+    "PerformanceThresholds",
+    "PersistedReport",
     "PointDefinition",
     "PointTable",
     "PointTableError",
     "PollScenario",
     "ReadHeader",
+    "ReadPerformanceScenario",
     "ReadTaskResult",
     "SAFETY_INCIDENT_SCHEMA_VERSION",
     "SafetyIncidentAcknowledgmentError",
@@ -112,6 +153,8 @@ __all__ = [
     "SafetyIncidentError",
     "SafetyIncidentPersistenceError",
     "SafetyIncidentStore",
+    "SoakRunnerError",
+    "SoakSettings",
     "TARGET_STANDARD",
     "TcpConnectionConfig",
     "UnsolicitedBatchResult",
@@ -120,9 +163,19 @@ __all__ = [
     "UnresolvedSafetyIncidentError",
     "IncidentRecordResult",
     "dut_identity_sha256",
+    "execute_read_only_iteration",
     "load_ems_test_plan",
     "load_ems_profile",
+    "load_local_event_profile",
     "load_point_table",
+    "load_performance_profile",
+    "nearest_rank",
+    "ProcessResourceSample",
+    "ProcessResourceSampler",
+    "run_performance_suite",
+    "run_local_event_benchmark",
+    "run_soak",
+    "write_json_report",
     "ValueExpectation",
     "__version__",
 ]

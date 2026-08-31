@@ -9,6 +9,10 @@ import pytest
 
 from dnp3_master import (
     AnalogOutputCommand,
+    CaptureConfig,
+    CaptureEventManifest,
+    CapturePointRange,
+    CaptureResult,
     ClientStateError,
     CommandTaskResult,
     CommandPointResult,
@@ -221,6 +225,9 @@ def test_host_command_error_is_typed_and_process_remains_usable() -> None:
         "read",
         "direct_operate",
         "select_and_operate",
+        "capture.begin",
+        "capture.progress",
+        "capture.end",
     ),
 )
 def test_public_raw_request_cannot_bypass_typed_state_and_safety(
@@ -288,6 +295,24 @@ def test_tcp_helpers_use_validated_protocol_parameters() -> None:
         explicit = client.read([header], timeout=0.25)
         assert explicit.raw["received"]["headers"] == [header.to_params()]
 
+        capture_config = CaptureConfig(
+            mode="static_set",
+            sources=("solicited",),
+            duration_limit=1.0,
+            point_ranges=(CapturePointRange("analog_input", 0, 9),),
+            mismatch_sample_limit=3,
+            queue_capacity=17,
+        )
+        capture = client.begin_capture(capture_config)
+        assert isinstance(capture, CaptureResult)
+        assert capture.state == "ACTIVE"
+        assert capture.expected_total == 10
+        assert client.capture_progress(capture.capture_id).state == "ACTIVE"
+        finalized = client.end_capture(capture.capture_id, drain_timeout=0.25)
+        assert finalized.state == "FINALIZED"
+        assert finalized.valid is False
+        assert finalized.missing == 10
+
         enabled = client.enable_unsolicited((1, 2), timeout=0.25)
         assert isinstance(enabled, UnsolicitedControlResult)
         assert enabled.action == "enable"
@@ -314,6 +339,63 @@ def test_tcp_helpers_use_validated_protocol_parameters() -> None:
         with pytest.raises(HostCommandError) as captured:
             client.disconnect()
         assert captured.value.code == "NOT_CONNECTED"
+
+
+def test_capture_models_keep_unknown_event_completeness_explicit() -> None:
+    manifest = CaptureEventManifest(
+        generator="local-outstation",
+        generator_version="1",
+        scenario_id="burst-1",
+        seed=7,
+        start_sequence=100,
+        end_sequence=109,
+        event_total=10,
+        sha256="a" * 64,
+    )
+    config = CaptureConfig(
+        mode="event_sequence",
+        sources=("unsolicited",),
+        duration_limit=2.0,
+        event_manifest=manifest,
+    )
+    assert config.to_params()["expected"]["manifest"]["sha256"] == "a" * 64
+
+    observation = CaptureConfig(
+        mode="observation",
+        sources=("solicited", "unsolicited"),
+        duration_limit=2.0,
+    )
+    assert "expected" not in observation.to_params()
+
+
+@pytest.mark.parametrize(
+    "factory",
+    (
+        lambda: CaptureConfig(
+            mode="static_set",
+            sources=("solicited",),
+            duration_limit=1.0,
+        ),
+        lambda: CaptureConfig(
+            mode="observation",
+            sources=("solicited",),
+            duration_limit=1.0,
+            point_ranges=(CapturePointRange("analog_input", 0, 1),),
+        ),
+        lambda: CaptureConfig(
+            mode="static_set",
+            sources=("solicited",),
+            duration_limit=1.0,
+            point_ranges=(
+                CapturePointRange("analog_input", 0, 10),
+                CapturePointRange("analog_input", 10, 20),
+            ),
+        ),
+    ),
+)
+def test_capture_config_rejects_false_or_ambiguous_truth(factory: object) -> None:
+    with pytest.raises(ValueError):
+        factory()
 
 
 @pytest.mark.parametrize(

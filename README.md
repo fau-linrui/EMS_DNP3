@@ -1,6 +1,6 @@
 # DNP3 Windows Master Automation Test Framework
 
-面向 Windows x64、IEEE 1815-2012 和 pytest 的可移植 DNP3 主站自动化测试框架。当前版本 0.5.1，固定使用 OpenDNP3 3.1.2，并支持完全离线的 C++ 构建。
+面向 Windows x64、IEEE 1815-2012 和 pytest 的可移植 DNP3 主站自动化测试框架。当前版本 0.6.0，固定使用 OpenDNP3 3.1.2，并支持完全离线的 C++ 构建。
 
 普通测试开发只使用 Python/pytest；C++ 协议栈封装在独立的 `dnp3-master-host.exe` 中：
 
@@ -17,6 +17,9 @@ pytest -> dnp3_master Python package -> NDJSON -> dnp3-master-host.exe
 - EMS 约定所需 G1V2/G2V2、G30V5/G32V7、G10V2、G40V3 和 G60V1～V4 的精确本机覆盖。
 - 索引、原始 flags、时间、接收顺序、IIN 原始值/解析位、任务状态/耗时和 detail/summary 有界结果；测量、分片或当前任务 IIN 丢失都会明确失败。
 - 显式 Enable/Disable Unsolicited、跨请求持续接收、会话/分片/顺序标识和 4096 条 drop-oldest 有界队列。
+- `capture.begin/progress/end` 持续有界采集；静态点集检查 missing/duplicate/unmatched，确定性事件流使用外部 manifest 和有序 SHA-256 真值。
+- 可扩展至每类 65,535 点的回环从站、确定性突发/定速事件发生器，以及 16,384 点大总召的 capture A/B 性能回归；本机事件基准以最多 4,096 条的有界块同时核验 capture 与 master unsolicited 队列，任一层丢失都失败。
+- 严格性能 Profile/报告、Windows host CPU/内存/句柄/线程采样和可中断 24 小时 read-only soak；原子检查点、哈希链、轮转、有界 watchdog、无丢失通道事件重连审计、磁盘与证据上限均 fail closed。
 - CROB Select-Before-Operate、有响应 Direct Operate、四种 Analog Output 和逐点 IEEE 1815-2012 Command Status 视图；固定栈对未知线上状态 19～125 的折叠会以歧义标志显式暴露。
 - pytest PICS 三态选择与框架能力双门禁、严格点表、实际限定符依赖、严格 EMS 场景计划、脱敏证据清单和状态改变安全门。
 - 可整体复制的真实 EMS pytest 套件：逐点 Static Read、完整性/Class Poll、外部触发的主动上报观察，以及控制前后读回和恢复闭环。
@@ -24,7 +27,7 @@ pytest -> dnp3_master Python package -> NDJSON -> dnp3-master-host.exe
 - PICS、点表、EMS 场景计划和能力矩阵的离线交叉预检；输出逐能力 blocker、输入 SHA-256 和机器可读 JSON，且不会连接 DUT。
 - 不确定控制结果的跨进程 DUT 事故锁、只读核对和显式读回确认归档；点级 TIMEOUT、2012 保留状态、raw 127 歧义或结果错配均会销毁会话。
 - Python/host 版本、固定 OpenDNP3 版本及 pytest 能力矩阵 SHA-256 启动握手，防止混用旧产物。
-- 环境体检、确定性 ZIP/SHA-256/逐文件清单、解包回环自检、Debug/Release/ASan 和 1,000 次生命周期验收入口。
+- 环境体检、确定性 ZIP/SHA-256/逐文件清单、包含 8 点精确静态 capture 的解包回环自检、Debug/Release/ASan 和 1,000 次生命周期验收入口。
 
 控制默认锁住。只有获批实验室运行显式提供允许开关、operator ID、DUT ID，并连接时取得一次性会话令牌后才能调用。控制超时不会自动重试；任何不确定结果都会销毁会话并留下持久事故锁，必须独立读回和显式确认。当前 `DIRECT_OPERATE_NR` 明确返回 `UNSUPPORTED_BY_BACKEND`。
 
@@ -66,7 +69,7 @@ out\build\windows-msvc-release\bin\build-info.json
 .\scripts\package.ps1 -Preset windows-msvc-release -Force
 ```
 
-产物目录、确定性 ZIP 和 SHA-256 校验文件位于 `out\package\ems-dnp3-pytest-0.5.1*`。包不会包含本地 IEEE 标准 PDF、EMS PICS、点表、场景计划、PCAP 或密钥。
+产物目录、确定性 ZIP 和 SHA-256 校验文件位于 `out\package\ems-dnp3-pytest-0.6.0*`。包不会包含本地 IEEE 标准 PDF、EMS PICS、点表、场景计划、PCAP 或密钥。
 
 ## 集成到现有 pytest
 
@@ -128,6 +131,7 @@ def test_integrity(connected_master):
 - [小白拉取、构建、移植与使用指南](docs/BEGINNER_MIGRATION_BUILD_USE_GUIDE.md)
 - [内网交接与剩余任务卡](docs/INTRANET_HANDOFF_REMAINING_TASKS.md)
 - [Python 客户端与 pytest 集成](docs/python_client.md)
+- [H08/H09 持续采集、性能、大点表与 24 小时指南](docs/PERFORMANCE_AND_SOAK_GUIDE.md)
 - [EMS 私有配置离线预检](docs/OFFLINE_PREFLIGHT.md)
 - [本机可编程 DNP3 测试从站](docs/LOCAL_TEST_OUTSTATION.md)
 - [不确定控制结果事故锁处理手册](docs/SAFETY_INCIDENT_RUNBOOK.md)

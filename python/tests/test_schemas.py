@@ -21,6 +21,102 @@ def test_request_schema_is_strict_and_versioned() -> None:
     assert {"hello", "get_status", "shutdown"}.issubset(
         schema["properties"]["cmd"]["enum"]
     )
+    assert {"capture.begin", "capture.progress", "capture.end"}.issubset(
+        schema["properties"]["cmd"]["enum"]
+    )
+    assert schema["$defs"]["captureBeginParams"]["additionalProperties"] is False
+    assert schema["$defs"]["captureEndParams"]["additionalProperties"] is False
+
+
+def test_capture_result_schema_is_bounded_and_truth_aware() -> None:
+    schema = load_schema("capture-result.schema.json")
+    capture = schema["$defs"]["capture"]
+    assert capture["additionalProperties"] is False
+    assert capture["properties"]["current_queue_depth"]["maximum"] == 65536
+    assert capture["properties"]["mismatch_sample"]["maxItems"] == 1024
+    assert {
+        "expected_total",
+        "missing",
+        "duplicates",
+        "unknown_reason",
+        "completeness_scope",
+        "received_sequence_sha256",
+        "sequence_match",
+    }.issubset(capture["required"])
+
+
+def test_performance_profile_schema_is_strict_and_threshold_driven() -> None:
+    schema = load_schema("performance-profile.schema.json")
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["schema_version"]["const"] == 1
+    assert schema["$defs"]["scenario"]["additionalProperties"] is False
+    assert "expected_objects_per_iteration" in schema["$defs"]["scenario"][
+        "required"
+    ]
+    assert {
+        "expected_by_kind",
+        "expected_by_group_variation",
+    }.issubset(schema["$defs"]["scenario"]["required"])
+    assert schema["$defs"]["thresholds"]["additionalProperties"] is False
+    assert schema["$defs"]["soak"]["properties"]["max_checkpoints"][
+        "maximum"
+    ] == 10000
+
+
+def test_local_event_profile_schema_binds_generator_and_outstation_bounds() -> None:
+    schema = load_schema("local-event-profile.schema.json")
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["scope"]["const"] == "LOCAL_LOOPBACK_ONLY"
+    load = schema["$defs"]["load"]
+    assert load["additionalProperties"] is False
+    assert load["properties"]["event_count"]["maximum"] == 4096
+    assert load["properties"]["queue_capacity"]["maximum"] == 65536
+
+
+def test_local_event_report_schema_is_strict_and_truth_bound() -> None:
+    schema = load_schema("local-event-report.schema.json")
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["evidence_scope"]["const"] == (
+        "LOCAL_LOOPBACK_ONLY"
+    )
+    assert schema["properties"]["formal_dut_conclusion"]["const"] is False
+    assert schema["$defs"]["truth"]["additionalProperties"] is False
+    assert schema["$defs"]["unsolicitedQueue"]["properties"][
+        "queue_capacity"
+    ]["const"] == 4096
+    assert schema["$defs"]["iterationSample"]["properties"]["capture"][
+        "$ref"
+    ] == "capture-result.schema.json#/$defs/capture"
+
+
+def test_performance_report_schema_is_strict_and_non_conclusive() -> None:
+    schema = load_schema("performance-report.schema.json")
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["schema_version"]["const"] == 1
+    assert schema["properties"]["formal_dut_conclusion"]["const"] is False
+    assert schema["$defs"]["scenario"]["additionalProperties"] is False
+    assert schema["$defs"]["resources"]["oneOf"][0][
+        "additionalProperties"
+    ] is False
+    assert schema["$defs"]["limitations"]["minItems"] == 1
+
+
+def test_soak_report_schema_requires_terminal_state_and_evidence_chain() -> None:
+    schema = load_schema("soak-report.schema.json")
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["schema_version"]["const"] == 1
+    assert schema["properties"]["formal_dut_conclusion"]["const"] is False
+    assert "INCOMPLETE_INTERRUPTED" in schema["properties"]["status"]["enum"]
+    assert schema["properties"]["checkpoint_chain_tail_sha256"][
+        "pattern"
+    ] == "^[0-9a-f]{64}$"
+    assert schema["$defs"]["scenario"]["additionalProperties"] is False
+    assert schema["$defs"]["channelEvents"]["properties"]["source"][
+        "const"
+    ] == "native_channel_event_store"
+    assert schema["$defs"]["resources"]["oneOf"][0][
+        "additionalProperties"
+    ] is False
 
 
 def test_response_schema_has_strict_success_and_error_envelopes() -> None:
@@ -123,15 +219,16 @@ def test_ems_test_plan_schema_keeps_controls_explicit_and_strict() -> None:
 def test_local_outstation_control_schema_is_bounded_and_strict() -> None:
     schema = load_schema("local-outstation-request.schema.json")
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
-    assert len(schema["oneOf"]) == 4
+    assert len(schema["oneOf"]) == 5
     assert schema["$defs"]["hello"]["additionalProperties"] is False
     assert schema["$defs"]["update"]["additionalProperties"] is False
     assert schema["$defs"]["inputUpdateBase"]["additionalProperties"] is False
     assert schema["$defs"]["outputUpdateBase"]["additionalProperties"] is False
+    assert schema["$defs"]["generateEvents"]["additionalProperties"] is False
     assert schema["$defs"]["inputUpdateBase"]["properties"]["index"] == {
         "type": "integer",
         "minimum": 0,
-        "maximum": 1,
+        "maximum": 65534,
     }
     assert schema["$defs"]["inputUpdateBase"]["properties"]["timestamp_ms"][
         "maximum"

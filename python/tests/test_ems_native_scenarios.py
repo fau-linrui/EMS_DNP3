@@ -15,9 +15,12 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from dnp3_master import (
+    CaptureConfig,
+    CapturePointRange,
     Dnp3MasterClient,
     HostProcessConfig,
     LabSafetyConfig,
+    ReadHeader,
     TcpConnectionConfig,
     load_ems_test_plan,
     load_point_table,
@@ -45,6 +48,10 @@ TC_EMS_NATIVE_STATIC_AND_POLL_LOCAL_001 = "TC_EMS_NATIVE_STATIC_AND_POLL_LOCAL_0
 TC_EMS_NATIVE_UNSOLICITED_LOCAL_001 = "TC_EMS_NATIVE_UNSOLICITED_LOCAL_001"
 TC_EMS_NATIVE_CONTROL_CYCLE_LOCAL_001 = "TC_EMS_NATIVE_CONTROL_CYCLE_LOCAL_001"
 TC_LOCAL_OUTSTATION_CONTROL_PROTOCOL_001 = "TC_LOCAL_OUTSTATION_CONTROL_PROTOCOL_001"
+TC_CAPTURE_STATIC_NATIVE_LOCAL_001 = "TC_CAPTURE_STATIC_NATIVE_LOCAL_001"
+TC_CAPTURE_EVENT_DIGEST_NATIVE_LOCAL_001 = (
+    "TC_CAPTURE_EVENT_DIGEST_NATIVE_LOCAL_001"
+)
 
 
 @pytest.fixture
@@ -154,6 +161,100 @@ def test_static_and_poll_templates_against_native_loopback(
     )
     run_poll_scenario(client, points, class_one)
     run_poll_scenario(client, points, class_two)
+
+
+def test_static_capture_against_native_loopback(
+    native_scenario_stack: tuple[Dnp3MasterClient, LocalTestOutstation],
+) -> None:
+    assert TC_CAPTURE_STATIC_NATIVE_LOCAL_001
+    client, _ = native_scenario_stack
+    capture = client.begin_capture(
+        CaptureConfig(
+            mode="static_set",
+            sources=("solicited",),
+            duration_limit=3.0,
+            point_ranges=(
+                CapturePointRange("binary_input", 0, 1),
+                CapturePointRange("analog_input", 0, 1),
+                CapturePointRange("binary_output_status", 0, 1),
+                CapturePointRange("analog_output_status", 0, 1),
+            ),
+            queue_capacity=64,
+            mismatch_sample_limit=8,
+        )
+    )
+    assert capture.state == "ACTIVE"
+    read = client.read(
+        (
+            ReadHeader.all_objects(1, 2),
+            ReadHeader.all_objects(30, 5),
+            ReadHeader.all_objects(10, 2),
+            ReadHeader.all_objects(40, 3),
+        ),
+        timeout=3.0,
+        max_measurements=100,
+        return_mode="summary",
+        request_timeout=4.0,
+    )
+    terminal = client.end_capture(capture.capture_id, drain_timeout=2.0)
+    assert terminal.state == "FINALIZED"
+    assert terminal.valid is True
+    assert terminal.expected_total == 8
+    assert terminal.received_unique == 8
+    assert terminal.missing == 0
+    assert terminal.queue_overflow == 0
+    assert terminal.offered_total == read.summary["received_total"]
+    assert terminal.received_total == terminal.offered_total
+    assert terminal.timings["first_fragment_monotonic_ns"] is not None
+    assert terminal.timings["first_object_monotonic_ns"] is not None
+    assert terminal.timings["last_object_monotonic_ns"] is not None
+
+
+def test_deterministic_event_digest_capture_against_native_loopback(
+    native_scenario_stack: tuple[Dnp3MasterClient, LocalTestOutstation],
+    tmp_path: Path,
+) -> None:
+    assert TC_CAPTURE_EVENT_DIGEST_NATIVE_LOCAL_001
+    client, outstation = native_scenario_stack
+    enabled = client.enable_unsolicited((2,), timeout=3.0)
+    assert enabled.task_status == "SUCCESS"
+    arguments = {
+        "point_type": "analog_input",
+        "count": 16,
+        "scenario_id": "native-event-digest",
+        "seed": 20260831,
+        "start_sequence": 100,
+        "timestamp_base_ms": 1700000000400,
+        "point_span": 2,
+    }
+    truth = outstation.plan_events(**arguments)
+    manifest_path = truth.write(tmp_path / "event-truth.json")
+    assert manifest_path.is_file()
+    capture = client.begin_capture(
+        CaptureConfig(
+            mode="event_sequence",
+            sources=("unsolicited",),
+            duration_limit=3.0,
+            event_manifest=truth.capture_manifest(),
+            queue_capacity=64,
+            mismatch_sample_limit=4,
+        )
+    )
+    assert outstation.generate_events(**arguments) == truth
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        progress = client.capture_progress(capture.capture_id)
+        if progress.received_total == truth.event_total:
+            break
+        time.sleep(0.02)
+    terminal = client.end_capture(capture.capture_id, drain_timeout=1.0)
+    assert terminal.state == "FINALIZED"
+    assert terminal.valid is True
+    assert terminal.received_total == truth.event_total
+    assert terminal.sequence_match is True
+    assert terminal.received_sequence_sha256 == truth.records_sha256
+    assert terminal.completeness_scope == "EXTERNAL_EVENT_MANIFEST_MATCHED"
+    assert terminal.unknown_reason is None
 
 
 def test_unsolicited_templates_against_native_loopback(

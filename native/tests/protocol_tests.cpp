@@ -1,4 +1,5 @@
 #include "dnp3host/Backend.h"
+#include "dnp3host/CaptureConfig.h"
 #include "dnp3host/CommandConfig.h"
 #include "dnp3host/ConnectionConfig.h"
 #include "dnp3host/HostController.h"
@@ -34,6 +35,9 @@ public:
     std::vector<std::string> supported_commands() const override
     {
         return {
+            "capture.begin",
+            "capture.end",
+            "capture.progress",
             "class_poll",
             "connect",
             "direct_operate",
@@ -149,6 +153,30 @@ public:
             {"summary", dnp3host::Json::object()}});
     }
 
+    dnp3host::BackendOperationResult capture_begin(
+        const dnp3host::CaptureConfig& config) override
+    {
+        ++capture_begin_calls;
+        last_capture_config = config;
+        return capture_result("ACTIVE");
+    }
+
+    dnp3host::BackendOperationResult capture_progress(
+        const dnp3host::CaptureReferenceConfig& config) override
+    {
+        ++capture_progress_calls;
+        last_capture_reference = config;
+        return capture_result("ACTIVE");
+    }
+
+    dnp3host::BackendOperationResult capture_end(
+        const dnp3host::CaptureReferenceConfig& config) override
+    {
+        ++capture_end_calls;
+        last_capture_reference = config;
+        return capture_result("FINALIZED");
+    }
+
     dnp3host::BackendOperationResult select_and_operate(
         const dnp3host::CommandConfig& config) override
     {
@@ -193,6 +221,9 @@ public:
     int direct_operate_calls{0};
     int enable_unsolicited_calls{0};
     int disable_unsolicited_calls{0};
+    int capture_begin_calls{0};
+    int capture_progress_calls{0};
+    int capture_end_calls{0};
     std::uint64_t session_id{0};
     std::optional<dnp3host::ConnectionConfig> last_config;
     std::optional<dnp3host::WaitEventConfig> last_wait_config;
@@ -202,9 +233,22 @@ public:
     std::optional<dnp3host::UnsolicitedControlConfig>
         last_unsolicited_control_config;
     std::optional<dnp3host::WaitUnsolicitedConfig> last_wait_unsolicited_config;
+    std::optional<dnp3host::CaptureConfig> last_capture_config;
+    std::optional<dnp3host::CaptureReferenceConfig> last_capture_reference;
     std::optional<dnp3host::CommandConfig> last_command_config;
 
 private:
+    dnp3host::BackendOperationResult capture_result(const char* state)
+    {
+        return dnp3host::BackendOperationResult::success(dnp3host::Json{
+            {"capture_id", "cap-1-1"},
+            {"session_id", session_id},
+            {"state", state},
+            {"valid", state == std::string_view{"FINALIZED"}
+                 ? dnp3host::Json(true)
+                 : dnp3host::Json(nullptr)}});
+    }
+
     dnp3host::BackendOperationResult read_result(const char* operation)
     {
         if (!connected) {
@@ -684,7 +728,10 @@ void test_controller()
     check(
         hello.response.at("result").at("supported_commands")
             == dnp3host::Json::array(
-                {"class_poll",
+                {"capture.begin",
+                 "capture.end",
+                 "capture.progress",
+                 "class_poll",
                  "connect",
                  "direct_operate",
                  "disable_unsolicited",
@@ -855,14 +902,43 @@ void test_controller()
         "disconnect without an active session must use NOT_CONNECTED");
 
     controller.record_request_received();
-    const auto backend_command = controller.dispatch(dnp3host::Request{
-        "capture-1", "capture.begin", dnp3host::Json::object()});
+    const auto capture_begin = controller.dispatch(dnp3host::Request{
+        "capture-1",
+        "capture.begin",
+        dnp3host::Json{
+            {"mode", "static_set"},
+            {"sources", dnp3host::Json::array({"solicited"})},
+            {"duration_limit_ms", 1000},
+            {"expected",
+             dnp3host::Json{{"point_ranges",
+                             dnp3host::Json::array({dnp3host::Json{
+                                 {"kind", "analog_input"},
+                                 {"start", 0},
+                                 {"stop", 9}}})}}}}});
+    check(capture_begin.response.at("ok") == true, "capture.begin must reach backend");
+    check(backend->capture_begin_calls == 1, "capture.begin must be dispatched once");
     check(
-        backend_command.response.at("error").at("code") == "UNSUPPORTED_BY_BACKEND",
-        "known but unavailable backend commands must not report success");
+        backend->last_capture_config->point_ranges.front().stop == 9,
+        "capture expected range must be preserved");
+
+    controller.record_request_received();
+    const auto capture_progress = controller.dispatch(dnp3host::Request{
+        "capture-2",
+        "capture.progress",
+        dnp3host::Json{{"capture_id", "cap-1-1"}}});
     check(
-        backend_command.response.at("error").at("details").at("backend") == "fake",
-        "unsupported command must identify the active backend");
+        capture_progress.response.at("ok") == true,
+        "capture.progress must reach backend");
+
+    controller.record_request_received();
+    const auto capture_end = controller.dispatch(dnp3host::Request{
+        "capture-3",
+        "capture.end",
+        dnp3host::Json{{"capture_id", "cap-1-1"}, {"drain_timeout_ms", 1000}}});
+    check(capture_end.response.at("ok") == true, "capture.end must reach backend");
+    check(
+        backend->last_capture_reference->drain_timeout_ms == 1000,
+        "capture.end drain timeout must be preserved");
 
     controller.record_request_received();
     const auto unknown = controller.dispatch(
@@ -876,7 +952,7 @@ void test_controller()
         dnp3host::Request{"status-1", "get_status", dnp3host::Json::object()});
     check(status.response.at("result").at("state") == "READY", "host must be ready");
     check(
-        status.response.at("result").at("metrics").at("requests_received") == 20,
+        status.response.at("result").at("metrics").at("requests_received") == 22,
         "status must report received requests");
 
     controller.record_request_received();

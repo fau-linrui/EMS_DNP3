@@ -1,5 +1,6 @@
 #include "dnp3host/OpenDnp3ReadSupport.h"
 #include "dnp3host/Ieee1815_2012.h"
+#include "dnp3host/MeasurementCapture.h"
 
 #include <opendnp3/app/IINField.h>
 #include <opendnp3/app/MeasurementTypes.h>
@@ -237,12 +238,14 @@ public:
         const int task_id,
         const ReadOptions options,
         std::shared_ptr<std::atomic<std::uint64_t>> receive_sequence,
-        const std::uint64_t iin_start_sequence)
+        const std::uint64_t iin_start_sequence,
+        std::shared_ptr<MeasurementCapture> capture)
         : task_id_(task_id),
           options_(options),
           receive_sequence_(std::move(receive_sequence)),
           iin_start_sequence_(iin_start_sequence),
-          submitted_monotonic_ns_(monotonic_ns())
+          submitted_monotonic_ns_(monotonic_ns()),
+          capture_(std::move(capture))
     {
     }
 
@@ -328,9 +331,17 @@ public:
 
     void begin_fragment(const opendnp3::ResponseInfo& info)
     {
+        const auto began_at = monotonic_ns();
         std::lock_guard<std::mutex> lock(mutex_);
+        if (!first_fragment_monotonic_ns_) {
+            first_fragment_monotonic_ns_ = began_at;
+        }
         current_fragment_index_ = fragment_count_++;
         current_unsolicited_ = info.unsolicited;
+        if (capture_) {
+            capture_->record_fragment(
+                info.unsolicited ? "unsolicited" : "solicited", began_at);
+        }
         current_fragment_recorded_ = fragments_.size() < kFragmentRecordCapacity;
         if (!current_fragment_recorded_) {
             ++fragment_overflow_;
@@ -341,7 +352,7 @@ public:
             {"source", info.unsolicited ? "unsolicited" : "solicited"},
             {"fir", info.fir},
             {"fin", info.fin},
-            {"begin_monotonic_ns", monotonic_ns()},
+            {"begin_monotonic_ns", began_at},
             {"ended", false}});
     }
 
@@ -372,6 +383,20 @@ public:
         const auto variation = static_cast<std::uint8_t>(encoded_gv & 0xFFU);
 
         std::lock_guard<std::mutex> lock(mutex_);
+        if (!first_object_monotonic_ns_) {
+            first_object_monotonic_ns_ = received_at;
+        }
+        last_object_monotonic_ns_ = received_at;
+        if (capture_) {
+            capture_->record_object(
+                current_unsolicited_ ? "unsolicited" : "solicited",
+                kind,
+                group,
+                variation,
+                index,
+                value,
+                received_at);
+        }
         ++received_total_;
         ++by_kind_[kind];
         ++by_group_variation_[
@@ -485,6 +510,16 @@ public:
              Json{{"submitted_monotonic_ns", submitted_monotonic_ns_},
                   {"started_monotonic_ns",
                    started_monotonic_ns_ ? Json(*started_monotonic_ns_) : Json(nullptr)},
+                  {"first_fragment_monotonic_ns",
+                   first_fragment_monotonic_ns_
+                       ? Json(*first_fragment_monotonic_ns_)
+                       : Json(nullptr)},
+                  {"first_object_monotonic_ns",
+                   first_object_monotonic_ns_ ? Json(*first_object_monotonic_ns_)
+                                              : Json(nullptr)},
+                  {"last_object_monotonic_ns",
+                   last_object_monotonic_ns_ ? Json(*last_object_monotonic_ns_)
+                                             : Json(nullptr)},
                   {"completed_monotonic_ns", completed_at},
                   {"duration_ms", static_cast<double>(duration_ns) / 1000000.0}}}};
 
@@ -527,6 +562,7 @@ private:
     std::shared_ptr<std::atomic<std::uint64_t>> receive_sequence_;
     const std::uint64_t iin_start_sequence_;
     const std::uint64_t submitted_monotonic_ns_;
+    std::shared_ptr<MeasurementCapture> capture_;
 
     mutable std::mutex mutex_;
     std::condition_variable condition_;
@@ -537,6 +573,9 @@ private:
     std::optional<opendnp3::TaskCompletion> completion_;
     std::optional<std::uint64_t> started_monotonic_ns_;
     std::optional<std::uint64_t> completed_monotonic_ns_;
+    std::optional<std::uint64_t> first_fragment_monotonic_ns_;
+    std::optional<std::uint64_t> first_object_monotonic_ns_;
+    std::optional<std::uint64_t> last_object_monotonic_ns_;
     std::uint64_t fragment_count_{0};
     std::uint64_t current_fragment_index_{0};
     bool current_unsolicited_{false};
@@ -866,11 +905,12 @@ opendnp3::Header make_header(const ReadHeader& header)
 }  // namespace
 
 struct OpenDnp3ReadSupport::Impl final {
-    Impl()
+    explicit Impl(std::shared_ptr<MeasurementCapture> capture_value)
         : iin(std::make_shared<IinStore>()),
           completion_gate(std::make_shared<CompletionGate>()),
           receive_sequence(std::make_shared<std::atomic<std::uint64_t>>(0)),
-          application(std::make_shared<TrackingMasterApplication>(iin, completion_gate))
+          application(std::make_shared<TrackingMasterApplication>(iin, completion_gate)),
+          capture(std::move(capture_value))
     {
     }
 
@@ -892,7 +932,11 @@ struct OpenDnp3ReadSupport::Impl final {
             }
             const auto task_id = ++next_task_id;
             operation = std::make_shared<ReadOperation>(
-                task_id, options, receive_sequence, iin->last_sequence());
+                task_id,
+                options,
+                receive_sequence,
+                iin->last_sequence(),
+                capture);
             active = operation;
             completion_gate->set_active(operation);
         }
@@ -962,12 +1006,14 @@ struct OpenDnp3ReadSupport::Impl final {
     std::shared_ptr<CompletionGate> completion_gate;
     std::shared_ptr<std::atomic<std::uint64_t>> receive_sequence;
     std::shared_ptr<TrackingMasterApplication> application;
+    std::shared_ptr<MeasurementCapture> capture;
     std::shared_ptr<ReadOperation> active;
     int next_task_id{0};
 };
 
-OpenDnp3ReadSupport::OpenDnp3ReadSupport()
-    : impl_(std::make_shared<Impl>())
+OpenDnp3ReadSupport::OpenDnp3ReadSupport(
+    std::shared_ptr<MeasurementCapture> capture)
+    : impl_(std::make_shared<Impl>(std::move(capture)))
 {
 }
 

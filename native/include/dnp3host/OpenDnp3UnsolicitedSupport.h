@@ -13,6 +13,8 @@ class ISOEHandler;
 
 namespace dnp3host {
 
+class MeasurementCapture;
+
 struct UnsolicitedSnapshot {
     bool session_active{false};
     bool enabled{false};
@@ -28,7 +30,8 @@ public:
     static constexpr std::size_t kDefaultQueueCapacity = 4096;
 
     explicit OpenDnp3UnsolicitedSupport(
-        std::size_t queue_capacity = kDefaultQueueCapacity);
+        std::size_t queue_capacity = kDefaultQueueCapacity,
+        std::shared_ptr<MeasurementCapture> capture = nullptr);
     ~OpenDnp3UnsolicitedSupport();
 
     OpenDnp3UnsolicitedSupport(const OpenDnp3UnsolicitedSupport&) = delete;

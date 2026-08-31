@@ -46,7 +46,7 @@ def error(
 def hello_result(mode: str = "normal") -> dict[str, Any]:
     tcp_api = mode in {"tcp_api", "hello_backend_mismatch"}
     return {
-        "host_version": "0.5.1" if mode != "hello_version_mismatch" else "9.9.9",
+        "host_version": "0.6.0" if mode != "hello_version_mismatch" else "9.9.9",
         "backend": "opendnp3" if tcp_api else "none",
         "backend_version": (
             "9.9.9" if mode == "hello_backend_mismatch" else "3.1.2"
@@ -59,6 +59,9 @@ def hello_result(mode: str = "normal") -> dict[str, Any]:
         ),
         "supported_commands": (
             [
+                "capture.begin",
+                "capture.end",
+                "capture.progress",
                 "class_poll",
                 "connect",
                 "direct_operate",
@@ -265,6 +268,103 @@ def unsolicited_batch(enabled_classes: set[int]) -> dict[str, Any]:
     }
 
 
+def capture_result(
+    params: dict[str, Any],
+    *,
+    capture_id: str = "cap-1-1",
+    state: str = "ACTIVE",
+) -> dict[str, Any]:
+    mode = params["mode"]
+    expected_total: int | None = None
+    if mode == "static_set":
+        expected_total = sum(
+            item["stop"] - item["start"] + 1
+            for item in params["expected"]["point_ranges"]
+        )
+    elif mode == "event_sequence":
+        expected_total = params["expected"]["manifest"]["event_total"]
+    terminal = state != "ACTIVE"
+    native_truth = mode == "static_set"
+    event_truth = mode == "event_sequence"
+    static_complete = native_truth and expected_total == 0
+    return {
+        "capture_id": capture_id,
+        "session_id": 1,
+        "state": state,
+        "valid": (
+            False if event_truth and terminal
+            else static_complete if state == "FINALIZED" and native_truth
+            else True if state == "FINALIZED"
+            else False if terminal
+            else None
+        ),
+        "mode": mode,
+        "sources": params["sources"],
+        "expected_total": expected_total,
+        "offered_total": 0,
+        "received_total": 0,
+        "received_unique": 0 if native_truth else None,
+        "duplicates": 0 if native_truth else None,
+        "missing": expected_total if native_truth else None,
+        "unmatched_total": 0,
+        "fragments_total": 0,
+        "duration_ms": 1.0,
+        "throughput_per_sec": 0.0,
+        "current_queue_depth": 0,
+        "max_queue_depth": 0,
+        "queue_capacity": params.get("queue_capacity", 4096),
+        "queue_overflow": 0,
+        "discarded_on_abort": 0,
+        "invalid_reasons": (
+            ["EVENT_SEQUENCE_MISMATCH"] if event_truth and terminal
+            else ["STATIC_SET_MISMATCH"]
+            if native_truth and terminal and not static_complete
+            else []
+        ),
+        "completeness_scope": (
+            "NATIVE_STATIC_SET"
+            if native_truth
+            else "EXTERNAL_EVENT_MANIFEST_REQUIRED" if event_truth
+            else "OBSERVATION_ONLY"
+        ),
+        "unknown_reason": (
+            None if native_truth
+            else (
+                "EVENT_SEQUENCE_MISMATCH_REQUIRES_MANIFEST_DIFF"
+                if event_truth and terminal
+                else "EVENT_SEQUENCE_NOT_FINALIZED"
+            ) if event_truth
+            else "UNKNOWN_WITHOUT_GROUND_TRUTH_MATCH"
+        ),
+        "received_sequence_sha256": (
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            if event_truth and terminal
+            else None
+        ),
+        "sequence_match": False if event_truth and terminal else None,
+        "canonical_record_format": (
+            "compact-json-array-[kind,index,value]-plus-LF"
+            if event_truth
+            else None
+        ),
+        "mismatch_sample": [],
+        "mismatch_sample_limit": params.get("mismatch_sample_limit", 100),
+        "by_kind": {},
+        "by_group_variation": {},
+        "timings": {
+            "started_monotonic_ns": 1,
+            "deadline_monotonic_ns": 2,
+            "first_fragment_monotonic_ns": None,
+            "first_object_monotonic_ns": None,
+            "last_object_monotonic_ns": None,
+            "ended_monotonic_ns": 2 if terminal else None,
+        },
+        "event_manifest": (
+            params["expected"]["manifest"] if mode == "event_sequence" else None
+        ),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", default="normal")
@@ -274,6 +374,7 @@ def main() -> int:
     connected = False
     safety_token: str | None = None
     unsolicited_classes: set[int] = set()
+    active_capture: dict[str, Any] | None = None
     for line in sys.stdin:
         request = json.loads(line)
         request_id = request["id"]
@@ -360,6 +461,7 @@ def main() -> int:
             else:
                 connected = True
                 unsolicited_classes.clear()
+                active_capture = None
                 safety = request["params"].get("safety")
                 authorized = bool(
                     isinstance(safety, dict)
@@ -391,6 +493,7 @@ def main() -> int:
                 connected = False
                 safety_token = None
                 unsolicited_classes.clear()
+                active_capture = None
                 write_json(
                     success(
                         request_id,
@@ -431,6 +534,58 @@ def main() -> int:
                 write_json(error(request_id, "NOT_CONNECTED"))
             else:
                 write_json(success(request_id, unsolicited_batch(unsolicited_classes)))
+        elif command == "capture.begin" and args.mode == "tcp_api":
+            if not connected:
+                write_json(error(request_id, "NOT_CONNECTED"))
+            elif active_capture is not None and active_capture["state"] == "ACTIVE":
+                write_json(error(request_id, "ALREADY_EXECUTING"))
+            else:
+                active_capture = capture_result(request["params"])
+                write_json(success(request_id, active_capture))
+        elif command in {"capture.progress", "capture.end"} and args.mode == "tcp_api":
+            requested_capture_id = request["params"].get("capture_id")
+            if (
+                active_capture is None
+                or requested_capture_id != active_capture["capture_id"]
+            ):
+                write_json(error(request_id, "INVALID_STATE"))
+            else:
+                if command == "capture.end":
+                    mode = active_capture["mode"]
+                    static_complete = (
+                        mode == "static_set"
+                        and active_capture["missing"] == 0
+                        and active_capture["duplicates"] == 0
+                        and active_capture["unmatched_total"] == 0
+                    )
+                    event = mode == "event_sequence"
+                    active_capture = {
+                        **active_capture,
+                        "state": "FINALIZED",
+                        "valid": static_complete if mode == "static_set" else not event,
+                        "invalid_reasons": (
+                            ["STATIC_SET_MISMATCH"]
+                            if mode == "static_set" and not static_complete
+                            else ["EVENT_SEQUENCE_MISMATCH"] if event
+                            else []
+                        ),
+                        "unknown_reason": (
+                            "EVENT_SEQUENCE_MISMATCH_REQUIRES_MANIFEST_DIFF"
+                            if event
+                            else active_capture["unknown_reason"]
+                        ),
+                        "received_sequence_sha256": (
+                            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                            if event
+                            else None
+                        ),
+                        "sequence_match": False if event else None,
+                        "timings": {
+                            **active_capture["timings"],
+                            "ended_monotonic_ns": 2,
+                        },
+                    }
+                write_json(success(request_id, active_capture))
         elif command in {"integrity_poll", "class_poll", "read"} and args.mode == "tcp_api":
             if not connected:
                 write_json(error(request_id, "NOT_CONNECTED"))

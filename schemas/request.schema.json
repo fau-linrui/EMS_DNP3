@@ -36,11 +36,165 @@
         "wait_event",
         "wait_unsolicited",
         "stats",
-        "capture.begin"
+        "capture.begin",
+        "capture.progress",
+        "capture.end"
       ]
     },
     "params": {
       "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "cmd": { "const": "capture.begin" } } },
+      "then": { "properties": { "params": { "$ref": "#/$defs/captureBeginParams" } } }
+    },
+    {
+      "if": { "properties": { "cmd": { "const": "capture.progress" } } },
+      "then": { "properties": { "params": { "$ref": "#/$defs/captureProgressParams" } } }
+    },
+    {
+      "if": { "properties": { "cmd": { "const": "capture.end" } } },
+      "then": { "properties": { "params": { "$ref": "#/$defs/captureEndParams" } } }
+    }
+  ],
+  "$defs": {
+    "captureId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "captureSource": {
+      "enum": ["solicited", "unsolicited"]
+    },
+    "capturePointKind": {
+      "enum": [
+        "analog_command_event",
+        "analog_input",
+        "analog_output_status",
+        "binary_command_event",
+        "binary_input",
+        "binary_output_status",
+        "counter",
+        "double_bit_binary_input",
+        "frozen_counter",
+        "octet_string",
+        "time_and_interval"
+      ]
+    },
+    "capturePointRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "start", "stop"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/capturePointKind" },
+        "start": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "stop": { "type": "integer", "minimum": 0, "maximum": 65535 }
+      }
+    },
+    "captureStaticExpected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["point_ranges"],
+      "properties": {
+        "point_ranges": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/capturePointRange" }
+        }
+      }
+    },
+    "captureEventManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generator",
+        "generator_version",
+        "scenario_id",
+        "seed",
+        "start_sequence",
+        "end_sequence",
+        "event_total",
+        "sha256",
+        "match_rule"
+      ],
+      "properties": {
+        "generator": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[!-~]+$" },
+        "generator_version": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[!-~]+$" },
+        "scenario_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[!-~]+$" },
+        "seed": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+        "start_sequence": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+        "end_sequence": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+        "event_total": { "type": "integer", "minimum": 1, "maximum": 1000000000 },
+        "sha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+        "match_rule": { "const": "ordered_kind_index_value" }
+      }
+    },
+    "captureEventExpected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest"],
+      "properties": {
+        "manifest": { "$ref": "#/$defs/captureEventManifest" }
+      }
+    },
+    "captureBeginParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "sources", "duration_limit_ms"],
+      "properties": {
+        "mode": { "enum": ["static_set", "event_sequence", "observation"] },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/captureSource" }
+        },
+        "expected": {
+          "oneOf": [
+            { "$ref": "#/$defs/captureStaticExpected" },
+            { "$ref": "#/$defs/captureEventExpected" }
+          ]
+        },
+        "mismatch_sample_limit": { "type": "integer", "minimum": 0, "maximum": 1024 },
+        "queue_capacity": { "type": "integer", "minimum": 1, "maximum": 65536 },
+        "duration_limit_ms": { "type": "integer", "minimum": 100, "maximum": 604800000 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "static_set" } } },
+          "then": { "required": ["expected"], "properties": { "expected": { "$ref": "#/$defs/captureStaticExpected" } } }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "event_sequence" } } },
+          "then": { "required": ["expected"], "properties": { "expected": { "$ref": "#/$defs/captureEventExpected" } } }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "observation" } } },
+          "then": { "not": { "required": ["expected"] } }
+        }
+      ]
+    },
+    "captureProgressParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capture_id"],
+      "properties": {
+        "capture_id": { "$ref": "#/$defs/captureId" }
+      }
+    },
+    "captureEndParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capture_id"],
+      "properties": {
+        "capture_id": { "$ref": "#/$defs/captureId" },
+        "drain_timeout_ms": { "type": "integer", "minimum": 50, "maximum": 300000 }
+      }
     }
   }
 }

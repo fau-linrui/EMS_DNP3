@@ -1,9 +1,10 @@
 # dnp3-master-test-framework Python package
 
-This directory is the portable pytest-facing layer. Version 0.5.1 provides the
+This directory is the portable pytest-facing layer. Version 0.6.0 provides the
 synchronous `Dnp3MasterClient`, validated TCP/read/control models, typed task
 results, strict process/protocol exceptions, bounded diagnostics, PICS-aware
 selection, strict EMS scenario plans, an offline configuration preflight,
+continuous capture, bounded performance/soak runners, Windows process metrics,
 state-change safety gates, and opt-in fixtures without exposing OpenDNP3-specific
 C++ APIs to test cases.
 
@@ -43,6 +44,16 @@ authorized with an operator ID and lab DUT ID. The bundled real-EMS templates
 also require an enabled private plan entry and an exact per-run
 `--dnp3-control-scenario` selection.
 
+Use `--dnp3-performance-profile`/`DNP3_PERFORMANCE_PROFILE` for a hashed,
+strict read-only performance and soak profile. The copyable
+`examples/pytest_performance` suite persists immutable reports and requires an
+extra `--dnp3-run-soak` before starting the configured duration. Local event
+loads use `--dnp3-local-event-profile`; each benchmark chunk is capped at 4,096
+events and must pass both the native capture truth check and the independent
+master unsolicited-queue no-drop check. Soak runs also audit the bounded native
+channel-event queue between state snapshots. These local loads are only for the
+packaged loopback outstation and never constitute a DUT result.
+
 Full integration, safety, timeout, diagnostic and copy boundaries are
 documented in `docs/python_client.md` and
-`docs/BEGINNER_MIGRATION_BUILD_USE_GUIDE.md`.
+`docs/PERFORMANCE_AND_SOAK_GUIDE.md`.

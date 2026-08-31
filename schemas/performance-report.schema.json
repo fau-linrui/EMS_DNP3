@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ems-dnp3/performance-report.schema.json",
+  "title": "DNP3 read-only performance report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "report_type", "evidence_scope", "formal_dut_conclusion",
+    "profile", "host", "started_utc", "ended_utc", "duration_seconds",
+    "scenarios", "capture_overhead", "passed", "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "report_type": { "const": "DNP3_READ_ONLY_PERFORMANCE" },
+    "evidence_scope": { "enum": ["LOCAL_LOOPBACK_ONLY", "TARGET_ENVIRONMENT_PENDING_REVIEW"] },
+    "formal_dut_conclusion": { "const": false },
+    "profile": { "$ref": "#/$defs/profile" },
+    "host": { "$ref": "#/$defs/host" },
+    "started_utc": { "$ref": "#/$defs/utc" },
+    "ended_utc": { "$ref": "#/$defs/utc" },
+    "duration_seconds": { "type": "number", "minimum": 0 },
+    "scenarios": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/$defs/scenario" } },
+    "capture_overhead": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/overhead" } },
+    "passed": { "type": "boolean" },
+    "limitations": { "$ref": "#/$defs/limitations" }
+  },
+  "$defs": {
+    "utc": { "type": "string", "minLength": 20, "maxLength": 64, "pattern": "Z$" },
+    "token": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]+$" },
+    "nullableSha256": { "oneOf": [{ "type": "string", "pattern": "^[0-9a-f]{64}$" }, { "type": "null" }] },
+    "profile": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile_id", "sha256", "seed"],
+      "properties": {
+        "profile_id": { "$ref": "#/$defs/token" },
+        "sha256": { "$ref": "#/$defs/nullableSha256" },
+        "seed": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "host": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pid", "hello"],
+      "properties": {
+        "pid": { "type": "integer", "minimum": 1 },
+        "hello": { "type": "object" }
+      }
+    },
+    "distributionValue": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sample_count", "p50", "p95", "p99", "max"],
+      "properties": {
+        "sample_count": { "type": "integer", "minimum": 0 },
+        "p50": { "type": ["number", "null"] },
+        "p95": { "type": ["number", "null"] },
+        "p99": { "type": ["number", "null"] },
+        "max": { "type": ["number", "null"] }
+      }
+    },
+    "distribution": {
+      "type": "object", "additionalProperties": false,
+      "required": ["available", "value", "source", "scope", "unit", "population", "percentile_method", "reason"],
+      "properties": {
+        "available": { "type": "boolean" },
+        "value": { "$ref": "#/$defs/distributionValue" },
+        "source": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "scope": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "unit": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "population": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "percentile_method": { "const": "nearest_rank" },
+        "reason": { "type": ["string", "null"], "maxLength": 128 }
+      }
+    },
+    "resourceRange": {
+      "type": "object", "additionalProperties": false,
+      "required": ["unit", "minimum", "maximum", "first", "last"],
+      "properties": {
+        "unit": { "enum": ["bytes", "count"] },
+        "minimum": { "type": "integer", "minimum": 0 },
+        "maximum": { "type": "integer", "minimum": 0 },
+        "first": { "type": "integer", "minimum": 0 },
+        "last": { "type": "integer", "minimum": 0 },
+        "growth_per_hour": { "type": "number" }
+      }
+    },
+    "cpu": {
+      "type": "object", "additionalProperties": false,
+      "required": ["unit", "definition", "maximum", "sample_count"],
+      "properties": {
+        "unit": { "const": "percent_of_one_logical_core" },
+        "definition": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "maximum": { "type": ["number", "null"], "minimum": 0 },
+        "sample_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "resources": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["available", "source", "scope", "sample_count", "first_monotonic_ns", "last_monotonic_ns", "working_set_bytes", "private_bytes", "handle_count", "thread_count", "cpu_core_percent"],
+          "properties": {
+            "available": { "const": true },
+            "source": { "type": "string", "minLength": 1 },
+            "scope": { "type": "string", "minLength": 1 },
+            "sample_count": { "type": "integer", "minimum": 1 },
+            "first_monotonic_ns": { "type": "integer", "minimum": 0 },
+            "last_monotonic_ns": { "type": "integer", "minimum": 0 },
+            "working_set_bytes": { "$ref": "#/$defs/resourceRange" },
+            "private_bytes": { "$ref": "#/$defs/resourceRange" },
+            "handle_count": { "$ref": "#/$defs/resourceRange" },
+            "thread_count": { "$ref": "#/$defs/resourceRange" },
+            "cpu_core_percent": { "$ref": "#/$defs/cpu" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["available", "source", "scope", "reason"],
+          "properties": {
+            "available": { "const": false },
+            "source": { "type": "string", "minLength": 1 },
+            "scope": { "type": "string", "minLength": 1 },
+            "reason": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "captureAggregate": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["available", "reason"],
+          "properties": {
+            "available": { "const": false },
+            "reason": { "const": "CAPTURE_DISABLED_FOR_BASELINE" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": [
+            "available", "completed_runs", "valid_runs", "expected_total",
+            "offered_total", "received_total", "received_unique", "duplicates",
+            "missing", "unmatched_total", "fragments_total", "queue_overflow",
+            "max_queue_depth", "sequence_mismatch_runs",
+            "completeness_scopes", "invalid_reasons"
+          ],
+          "properties": {
+            "available": { "const": true },
+            "completed_runs": { "type": "integer", "minimum": 0 },
+            "valid_runs": { "type": "integer", "minimum": 0 },
+            "expected_total": { "type": ["integer", "null"], "minimum": 0 },
+            "offered_total": { "type": "integer", "minimum": 0 },
+            "received_total": { "type": "integer", "minimum": 0 },
+            "received_unique": { "type": ["integer", "null"], "minimum": 0 },
+            "duplicates": { "type": ["integer", "null"], "minimum": 0 },
+            "missing": { "type": ["integer", "null"], "minimum": 0 },
+            "unmatched_total": { "type": "integer", "minimum": 0 },
+            "fragments_total": { "type": "integer", "minimum": 0 },
+            "queue_overflow": { "type": "integer", "minimum": 0 },
+            "max_queue_depth": { "type": "integer", "minimum": 0, "maximum": 65536 },
+            "sequence_mismatch_runs": { "type": "integer", "minimum": 0 },
+            "completeness_scopes": {
+              "type": "array", "maxItems": 3, "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+            },
+            "invalid_reasons": {
+              "type": "array", "maxItems": 32, "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+            }
+          }
+        }
+      ]
+    },
+    "kindCounts": {
+      "type": "object", "maxProperties": 256,
+      "propertyNames": {
+        "enum": [
+          "binary_input", "double_bit_binary_input", "analog_input", "counter",
+          "frozen_counter", "binary_output_status", "analog_output_status",
+          "octet_string", "time_and_interval"
+        ]
+      },
+      "additionalProperties": { "type": "integer", "minimum": 1 }
+    },
+    "groupVariationCounts": {
+      "type": "object", "maxProperties": 256,
+      "propertyNames": {
+        "pattern": "^(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]):(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"
+      },
+      "additionalProperties": { "type": "integer", "minimum": 1 }
+    },
+    "unavailable": {
+      "type": "object", "additionalProperties": false,
+      "required": ["available", "value", "source", "scope", "unit", "reason"],
+      "properties": {
+        "available": { "const": false }, "value": { "type": "null" }, "source": { "type": "null" },
+        "scope": { "type": "string", "minLength": 1 }, "unit": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "check": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "observed", "limit", "comparison", "passed", "reason"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 }, "observed": { "type": ["number", "null"] },
+        "limit": { "type": "number" }, "comparison": { "enum": ["<=", ">="] },
+        "passed": { "type": "boolean" }, "reason": { "type": ["string", "null"] }
+      }
+    },
+    "scenario": {
+      "type": "object", "additionalProperties": false,
+      "required": ["scenario_id", "operation", "capture_enabled", "baseline_scenario_id", "attempted_iterations", "completed_iterations", "expected_objects_per_iteration", "expected_by_kind", "expected_by_group_variation", "received_objects", "received_by_kind", "received_by_group_variation", "fragments", "task_latency_ms", "capture_throughput_per_sec", "capture", "resources", "network_rx_bytes", "network_tx_bytes", "dut_resources", "failures", "threshold_checks", "passed"],
+      "properties": {
+        "scenario_id": { "$ref": "#/$defs/token" }, "operation": { "enum": ["read", "integrity_poll", "class_poll"] },
+        "capture_enabled": { "type": "boolean" }, "baseline_scenario_id": { "oneOf": [{ "$ref": "#/$defs/token" }, { "type": "null" }] },
+        "attempted_iterations": { "type": "integer", "minimum": 1 }, "completed_iterations": { "type": "integer", "minimum": 0 },
+        "expected_objects_per_iteration": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "expected_by_kind": { "$ref": "#/$defs/kindCounts" },
+        "expected_by_group_variation": { "$ref": "#/$defs/groupVariationCounts" },
+        "received_objects": { "type": "integer", "minimum": 0 },
+        "received_by_kind": { "$ref": "#/$defs/kindCounts" },
+        "received_by_group_variation": { "$ref": "#/$defs/groupVariationCounts" },
+        "fragments": { "type": "integer", "minimum": 0 },
+        "task_latency_ms": { "$ref": "#/$defs/distribution" }, "capture_throughput_per_sec": { "$ref": "#/$defs/distribution" },
+        "capture": { "$ref": "#/$defs/captureAggregate" },
+        "resources": { "$ref": "#/$defs/resources" }, "network_rx_bytes": { "$ref": "#/$defs/unavailable" },
+        "network_tx_bytes": { "$ref": "#/$defs/unavailable" }, "dut_resources": { "$ref": "#/$defs/unavailable" },
+        "failures": { "type": "array", "maxItems": 2, "items": { "type": "string", "maxLength": 4096 } },
+        "threshold_checks": { "type": "array", "minItems": 13, "maxItems": 13, "items": { "$ref": "#/$defs/check" } },
+        "passed": { "type": "boolean" }
+      }
+    },
+    "overhead": {
+      "type": "object", "additionalProperties": false,
+      "required": ["scenario_id", "baseline_scenario_id", "population", "capture_overhead_percent", "limit", "passed"],
+      "properties": {
+        "scenario_id": { "$ref": "#/$defs/token" }, "baseline_scenario_id": { "$ref": "#/$defs/token" },
+        "population": { "type": "string", "minLength": 1 }, "capture_overhead_percent": { "type": ["number", "null"] },
+        "limit": { "type": "number", "minimum": 0 }, "passed": { "type": "boolean" }
+      }
+    },
+    "limitations": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "type": "string", "minLength": 1, "maxLength": 512 } }
+  }
+}

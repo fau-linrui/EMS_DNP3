@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "profile_id": "local-burst-and-paced-events-v1",
+  "scope": "LOCAL_LOOPBACK_ONLY",
+  "outstation_point_count": 1024,
+  "event_buffer_capacity": 8192,
+  "loads": [
+    {
+      "scenario_id": "analog-burst-4096",
+      "point_type": "analog_input",
+      "event_count": 4096,
+      "iterations": 5,
+      "seed": 20260831,
+      "start_sequence": 0,
+      "timestamp_base_ms": 1700001000000,
+      "point_span": 1024,
+      "interval_us": 0,
+      "capture_duration_seconds": 30.0,
+      "completion_timeout_seconds": 20.0,
+      "queue_capacity": 8192,
+      "max_elapsed_seconds": 20.0,
+      "max_cpu_core_percent": 400.0
+    },
+    {
+      "scenario_id": "analog-paced-4096-at-1000-per-second",
+      "point_type": "analog_input",
+      "event_count": 4096,
+      "iterations": 5,
+      "seed": 20260831,
+      "start_sequence": 100000,
+      "timestamp_base_ms": 1700002000000,
+      "point_span": 1024,
+      "interval_us": 1000,
+      "capture_duration_seconds": 15.0,
+      "completion_timeout_seconds": 10.0,
+      "queue_capacity": 8192,
+      "max_elapsed_seconds": 10.0,
+      "max_cpu_core_percent": 400.0
+    }
+  ]
+}

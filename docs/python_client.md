@@ -1,4 +1,4 @@
-# Python 子进程客户端与 pytest 集成（0.5.1）
+# Python 子进程客户端与 pytest 集成（0.6.0）
 
 `dnp3_master` 核心只依赖 Python 标准库。它启动 `dnp3-master-host.exe`、自动完成 hello、串行化单个在途请求、持续排空 stdout/stderr、验证严格响应、处理超时/异常退出，并在 Windows Job Object 中拥有整个子进程树。
 
@@ -91,6 +91,42 @@ finally:
 
 每条 `MeasurementRecord` 包含 `source="unsolicited"`、`session_id`、分片和接收顺序。持久队列默认上限 4096，满时 drop-oldest 并增加 `dropped_total`；调用方不能忽略丢弃计数。断开会结束收集并清队列。本机已覆盖启停、G2V2/G32V7、禁用后无新事件和队列溢出；Confirm 丢失、重发/重复、序号回绕等原始时序仍保持未验证。
 
+## 持续 Capture API
+
+`begin_capture(CaptureConfig)`、`capture_progress(capture_id)` 和
+`end_capture(capture_id)` 提供跨 Read/unsolicited 回调的持续有界汇总。一个
+会话最多一个 ACTIVE capture；断开、shutdown、deadline、drain timeout 和
+queue overflow 都会得到明确无效终态。静态点集模式检查 missing/duplicate/
+unmatched，事件模式用外部 manifest 的总数与有序 SHA-256 对账，observation
+模式不声称完整性。完整示例和 canonical event 规则见
+`docs/PERFORMANCE_AND_SOAK_GUIDE.md`。
+
+`end_capture()` 遇到队列溢出会抛 `HostCommandError(code="QUEUE_OVERFLOW")`，
+但不会丢失诊断；严格终态位于 `error.details["operation_result"]`。调用方不得
+捕获后继续把该轮标为通过。
+
+## 性能与 soak API
+
+`load_performance_profile()` 对 Profile 做严格字段/边界/基线检查并绑定源文件
+SHA-256。每个场景必须声明总对象数、按 kind 和按 `group:variation` 的精确每轮
+分布；`run_performance_suite()` 会逐轮核对，输出 capture A/B 开销、最近秩
+p50/p95/p99/max 和 Windows host 资源阈值结果。
+
+`load_local_event_profile()` 和 `run_local_event_benchmark()` 只服务于包内回环
+从站。底层发生器最多能表达 65,535 条请求，但严格 Profile/Schema 把每个负载块
+限制为 4,096 条，并要求不超过从站事件缓冲。runner 会分别核验 native capture
+的总数/有序 SHA-256/overflow，以及 master unsolicited 队列的排空数和
+`dropped_total`；任一证据路径不完整，报告都不会通过。
+
+`run_soak()` 只循环只读 Read/Integrity/Class Poll，使用 watchdog、固定容量
+样本、连接次数、磁盘余量、证据字节上限、原子检查点、哈希链和轮转。它还会
+消费 native 的 1,024 条有界 channel-event 队列，捕获状态快照之间的短暂断线；
+任何 drop 都使重连历史不可证明并 fail closed。Profile 加载时要求 watchdog
+严格大于单场景 begin、Read、end/drain 的全部有界 RPC 预算。
+`write_json_report()` 原子保存普通性能/事件报告并默认拒绝覆盖；返回 path、
+size 和 SHA-256。可直接复制 `examples/pytest_performance`，24 小时用例还要求
+显式 `--dnp3-run-soak`。
+
 ## 控制 API
 
 控制只有在连接时显式声明获批 LAB 会话才会解锁：
@@ -148,6 +184,8 @@ pytest_plugins = ("dnp3_master.pytest_plugin",)
 | `dnp3_pics` | session；已校验的 capability -> 三态映射 |
 | `dnp3_point_table` | session；严格加载的只读点表，未配置时为 `None` |
 | `dnp3_ems_test_plan` | session；与点表交叉校验的完整性/Class、主动上报和控制场景计划，未配置时为 `None` |
+| `dnp3_performance_profile` | session；严格且已绑定 SHA-256 的性能/soak Profile，未配置时为 `None` |
+| `dnp3_local_event_profile` | session；仅本机从站使用的确定性事件负载 Profile，未配置时为 `None` |
 | `dnp3_host_config` | session；可覆盖的 `HostProcessConfig` |
 | `host_process` | session；已完成 hello 的客户端，teardown 幂等清理 |
 | `master_client` | session；`host_process` 的别名边界 |
@@ -238,6 +276,8 @@ python -m dnp3_master.preflight `
 | `--dnp3-capability-matrix` | `DNP3_CAPABILITY_MATRIX` | 自动查找 `config/capability_matrix.csv` |
 | `--dnp3-points-file` | `DNP3_POINTS_FILE` | 无；提供时在收集前严格校验 |
 | `--dnp3-ems-plan` | `DNP3_EMS_PLAN` | 无；使用时必须同时提供点表 |
+| `--dnp3-performance-profile` | `DNP3_PERFORMANCE_PROFILE` | 无；严格加载并把 SHA-256 写入证据清单 |
+| `--dnp3-local-event-profile` | `DNP3_LOCAL_EVENT_PROFILE` | 无；仅本机确定性事件发生器 |
 | `--dnp3-control-scenario` | 无 | 无；每次精确选择一个已启用控制场景 |
 | `--dnp3-evidence-dir` | `DNP3_EVIDENCE_DIR` | 无；提供时生成脱敏运行清单 |
 | `--dnp3-safety-incident-dir` | `DNP3_SAFETY_INCIDENT_DIR` | `evidence/local/safety-incidents` |
@@ -293,8 +333,13 @@ config/capability_matrix.csv
 config/ems_profile.example.json
 config/points.example.csv
 config/ems_test_plan.example.json
+config/performance_profile.example.json
+config/local_event_profile.example.json
 examples/pytest_ems/
+examples/pytest_performance/
 package-manifest.json
 ```
 
-完整迁移、构建、首次 EMS 连接和排错步骤见 `docs/BEGINNER_MIGRATION_BUILD_USE_GUIDE.md`。
+完整迁移、构建、首次 EMS 连接和排错步骤见
+`docs/BEGINNER_MIGRATION_BUILD_USE_GUIDE.md`；性能与 24 小时步骤见
+`docs/PERFORMANCE_AND_SOAK_GUIDE.md`。

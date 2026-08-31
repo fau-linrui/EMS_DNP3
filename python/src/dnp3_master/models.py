@@ -584,6 +584,542 @@ class ReadTaskResult:
         return tuple(item for item in self.measurements if item.kind == kind)
 
 
+_CAPTURE_MODES = frozenset({"static_set", "event_sequence", "observation"})
+_CAPTURE_SOURCES = frozenset({"solicited", "unsolicited"})
+_CAPTURE_POINT_KINDS = frozenset(
+    {
+        "analog_command_event",
+        "analog_input",
+        "analog_output_status",
+        "binary_command_event",
+        "binary_input",
+        "binary_output_status",
+        "counter",
+        "double_bit_binary_input",
+        "frozen_counter",
+        "octet_string",
+        "time_and_interval",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CapturePointRange:
+    """One compact indexed point range used as static capture ground truth."""
+
+    kind: str
+    start: int
+    stop: int
+
+    def __post_init__(self) -> None:
+        if self.kind not in _CAPTURE_POINT_KINDS:
+            raise ValueError("kind is not a supported indexed capture point type")
+        _unsigned_integer(self.start, "start", 0, 65535)
+        _unsigned_integer(self.stop, "stop", 0, 65535)
+        if self.start > self.stop:
+            raise ValueError("start must not exceed stop")
+
+    @property
+    def point_count(self) -> int:
+        return self.stop - self.start + 1
+
+    def to_params(self) -> dict[str, Any]:
+        return {"kind": self.kind, "start": self.start, "stop": self.stop}
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureEventManifest:
+    """Immutable external truth identity for event-sequence reconciliation."""
+
+    generator: str
+    generator_version: str
+    scenario_id: str
+    seed: int
+    start_sequence: int
+    end_sequence: int
+    event_total: int
+    sha256: str
+    match_rule: str = "ordered_kind_index_value"
+
+    def __post_init__(self) -> None:
+        for field_name in ("generator", "generator_version", "scenario_id"):
+            _endpoint_text(getattr(self, field_name), field_name, 128)
+        for field_name in ("seed", "start_sequence", "end_sequence"):
+            _unsigned_integer(
+                getattr(self, field_name), field_name, 0, (1 << 63) - 1
+            )
+        _unsigned_integer(self.event_total, "event_total", 1, 1_000_000_000)
+        if (
+            self.start_sequence > self.end_sequence
+            or self.end_sequence - self.start_sequence + 1 != self.event_total
+        ):
+            raise ValueError(
+                "event_total must equal end_sequence - start_sequence + 1"
+            )
+        if not isinstance(self.sha256, str) or re.fullmatch(
+            r"[0-9a-fA-F]{64}", self.sha256
+        ) is None:
+            raise ValueError("sha256 must contain 64 hexadecimal characters")
+        object.__setattr__(self, "sha256", self.sha256.lower())
+        if self.match_rule != "ordered_kind_index_value":
+            raise ValueError("match_rule must be 'ordered_kind_index_value'")
+
+    def to_params(self) -> dict[str, Any]:
+        return {
+            "generator": self.generator,
+            "generator_version": self.generator_version,
+            "scenario_id": self.scenario_id,
+            "seed": self.seed,
+            "start_sequence": self.start_sequence,
+            "end_sequence": self.end_sequence,
+            "event_total": self.event_total,
+            "sha256": self.sha256,
+            "match_rule": self.match_rule,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureConfig:
+    """Strict Capture v1 configuration with explicit truth semantics."""
+
+    mode: str
+    sources: tuple[str, ...]
+    duration_limit: float
+    point_ranges: tuple[CapturePointRange, ...] = ()
+    event_manifest: CaptureEventManifest | None = None
+    mismatch_sample_limit: int = 100
+    queue_capacity: int = 4096
+
+    def __post_init__(self) -> None:
+        if self.mode not in _CAPTURE_MODES:
+            raise ValueError(
+                "mode must be 'static_set', 'event_sequence', or 'observation'"
+            )
+        if isinstance(self.sources, (str, bytes)):
+            raise TypeError("sources must be a tuple of capture source names")
+        normalized_sources = tuple(self.sources)
+        if (
+            not 1 <= len(normalized_sources) <= 2
+            or any(source not in _CAPTURE_SOURCES for source in normalized_sources)
+            or len(set(normalized_sources)) != len(normalized_sources)
+        ):
+            raise ValueError(
+                "sources must contain one or both unique values: solicited, unsolicited"
+            )
+        object.__setattr__(self, "sources", normalized_sources)
+        _milliseconds(
+            self.duration_limit,
+            "duration_limit",
+            100,
+            604_800_000,
+        )
+        _unsigned_integer(
+            self.mismatch_sample_limit,
+            "mismatch_sample_limit",
+            0,
+            1024,
+        )
+        _unsigned_integer(self.queue_capacity, "queue_capacity", 1, 65536)
+
+        if isinstance(self.point_ranges, (str, bytes)):
+            raise TypeError("point_ranges must contain CapturePointRange objects")
+        ranges = tuple(self.point_ranges)
+        if not all(isinstance(item, CapturePointRange) for item in ranges):
+            raise TypeError("point_ranges must contain CapturePointRange objects")
+        if len(ranges) > 256:
+            raise ValueError("point_ranges may contain at most 256 ranges")
+        object.__setattr__(self, "point_ranges", ranges)
+
+        if self.mode == "static_set":
+            if not ranges:
+                raise ValueError("static_set capture requires point_ranges")
+            if self.event_manifest is not None:
+                raise ValueError("static_set capture does not accept event_manifest")
+            if sum(item.point_count for item in ranges) > 1_000_000:
+                raise ValueError("static_set expected set may contain at most 1000000 points")
+            ordered = sorted(ranges, key=lambda item: (item.kind, item.start))
+            for previous, current in zip(ordered, ordered[1:]):
+                if previous.kind == current.kind and current.start <= previous.stop:
+                    raise ValueError(
+                        "point_ranges must not overlap for the same point kind"
+                    )
+        elif self.mode == "event_sequence":
+            if ranges:
+                raise ValueError("event_sequence capture does not accept point_ranges")
+            if not isinstance(self.event_manifest, CaptureEventManifest):
+                raise ValueError(
+                    "event_sequence capture requires a CaptureEventManifest"
+                )
+        else:
+            if ranges or self.event_manifest is not None:
+                raise ValueError(
+                    "observation capture cannot claim point or event ground truth"
+                )
+
+    @property
+    def duration_limit_ms(self) -> int:
+        return _milliseconds(
+            self.duration_limit,
+            "duration_limit",
+            100,
+            604_800_000,
+        )
+
+    def to_params(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "mode": self.mode,
+            "sources": list(self.sources),
+            "duration_limit_ms": self.duration_limit_ms,
+            "mismatch_sample_limit": self.mismatch_sample_limit,
+            "queue_capacity": self.queue_capacity,
+        }
+        if self.mode == "static_set":
+            result["expected"] = {
+                "point_ranges": [item.to_params() for item in self.point_ranges]
+            }
+        elif self.mode == "event_sequence":
+            assert self.event_manifest is not None
+            result["expected"] = {"manifest": self.event_manifest.to_params()}
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureResult:
+    """Validated non-consuming Capture v1 progress or terminal snapshot."""
+
+    capture_id: str
+    session_id: int
+    state: str
+    valid: bool | None
+    mode: str
+    sources: tuple[str, ...]
+    expected_total: int | None
+    offered_total: int
+    received_total: int
+    received_unique: int | None
+    duplicates: int | None
+    missing: int | None
+    unmatched_total: int
+    fragments_total: int
+    duration_ms: float
+    throughput_per_sec: float
+    current_queue_depth: int
+    max_queue_depth: int
+    queue_capacity: int
+    queue_overflow: int
+    invalid_reasons: tuple[str, ...]
+    completeness_scope: str
+    unknown_reason: str | None
+    received_sequence_sha256: str | None
+    sequence_match: bool | None
+    canonical_record_format: str | None
+    mismatch_sample: tuple[Mapping[str, Any], ...]
+    timings: Mapping[str, Any]
+    raw: Mapping[str, Any]
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> CaptureResult:
+        required = {
+            "capture_id",
+            "session_id",
+            "state",
+            "valid",
+            "mode",
+            "sources",
+            "expected_total",
+            "offered_total",
+            "received_total",
+            "received_unique",
+            "duplicates",
+            "missing",
+            "unmatched_total",
+            "fragments_total",
+            "duration_ms",
+            "throughput_per_sec",
+            "current_queue_depth",
+            "max_queue_depth",
+            "queue_capacity",
+            "queue_overflow",
+            "discarded_on_abort",
+            "invalid_reasons",
+            "completeness_scope",
+            "unknown_reason",
+            "received_sequence_sha256",
+            "sequence_match",
+            "canonical_record_format",
+            "mismatch_sample",
+            "mismatch_sample_limit",
+            "by_kind",
+            "by_group_variation",
+            "timings",
+            "event_manifest",
+        }
+        missing_fields = required.difference(value)
+        if missing_fields:
+            raise ValueError(
+                "capture result is missing fields: "
+                + ", ".join(sorted(missing_fields))
+            )
+        capture_id = value["capture_id"]
+        if not isinstance(capture_id, str) or re.fullmatch(
+            r"[A-Za-z0-9._:-]{1,64}", capture_id
+        ) is None:
+            raise ValueError("capture result capture_id is invalid")
+        if type(value["session_id"]) is not int or value["session_id"] <= 0:
+            raise ValueError("capture result session_id must be positive")
+        state = value["state"]
+        if state not in {"ACTIVE", "FINALIZED", "TIMED_OUT", "ABORTED"}:
+            raise ValueError("capture result state is invalid")
+        valid = value["valid"]
+        if state == "ACTIVE":
+            if valid is not None:
+                raise ValueError("active capture validity must be null")
+        elif type(valid) is not bool:
+            raise ValueError("terminal capture validity must be boolean")
+        if state in {"TIMED_OUT", "ABORTED"} and valid is not False:
+            raise ValueError("timed-out or aborted capture must be invalid")
+        mode = value["mode"]
+        if mode not in _CAPTURE_MODES:
+            raise ValueError("capture result mode is invalid")
+        sources = value["sources"]
+        if (
+            not isinstance(sources, list)
+            or not 1 <= len(sources) <= 2
+            or any(source not in _CAPTURE_SOURCES for source in sources)
+            or len(set(sources)) != len(sources)
+        ):
+            raise ValueError("capture result sources are invalid")
+
+        nullable_counts = ("expected_total", "received_unique", "duplicates", "missing")
+        for field_name in nullable_counts:
+            field_value = value[field_name]
+            if field_value is not None and (
+                type(field_value) is not int or field_value < 0
+            ):
+                raise ValueError(f"capture result {field_name} must be null or non-negative")
+        count_fields = (
+            "offered_total",
+            "received_total",
+            "unmatched_total",
+            "fragments_total",
+            "current_queue_depth",
+            "max_queue_depth",
+            "queue_capacity",
+            "queue_overflow",
+            "discarded_on_abort",
+            "mismatch_sample_limit",
+        )
+        for field_name in count_fields:
+            field_value = value[field_name]
+            if type(field_value) is not int or field_value < 0:
+                raise ValueError(f"capture result {field_name} must be non-negative")
+        if value["queue_capacity"] < 1 or value["queue_capacity"] > 65536:
+            raise ValueError("capture result queue_capacity is invalid")
+        if not (
+            value["current_queue_depth"]
+            <= value["max_queue_depth"]
+            <= value["queue_capacity"]
+        ):
+            raise ValueError("capture result queue depths are inconsistent")
+        if value["received_total"] > value["offered_total"]:
+            raise ValueError("capture received_total exceeds offered_total")
+        if value["mismatch_sample_limit"] > 1024:
+            raise ValueError("capture mismatch_sample_limit is invalid")
+        for field_name in ("duration_ms", "throughput_per_sec"):
+            field_value = value[field_name]
+            if (
+                isinstance(field_value, bool)
+                or not isinstance(field_value, (int, float))
+                or not math.isfinite(float(field_value))
+                or field_value < 0
+            ):
+                raise ValueError(f"capture result {field_name} must be finite and non-negative")
+        reasons = value["invalid_reasons"]
+        if not isinstance(reasons, list) or not all(
+            isinstance(reason, str) and reason for reason in reasons
+        ) or len(set(reasons)) != len(reasons):
+            raise ValueError("capture invalid_reasons must be a unique string array")
+        samples = value["mismatch_sample"]
+        if (
+            not isinstance(samples, list)
+            or len(samples) > value["mismatch_sample_limit"]
+            or not all(isinstance(sample, Mapping) for sample in samples)
+        ):
+            raise ValueError("capture mismatch samples are invalid or unbounded")
+        if not isinstance(value["timings"], Mapping):
+            raise ValueError("capture timings must be an object")
+        for field_name in ("by_kind", "by_group_variation"):
+            dimension = value[field_name]
+            if (
+                not isinstance(dimension, Mapping)
+                or len(dimension) > 256
+                or any(
+                    not isinstance(key, str)
+                    or not key
+                    or type(count) is not int
+                    or count < 0
+                    for key, count in dimension.items()
+                )
+            ):
+                raise ValueError(f"capture result {field_name} counters are invalid")
+        if valid is True and (reasons or value["queue_overflow"] != 0):
+            raise ValueError("valid capture result reports an invalid condition")
+
+        received_digest = value["received_sequence_sha256"]
+        if received_digest is not None and (
+            not isinstance(received_digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", received_digest) is None
+        ):
+            raise ValueError(
+                "capture received_sequence_sha256 must be null or lowercase SHA-256"
+            )
+        sequence_match = value["sequence_match"]
+        if sequence_match is not None and type(sequence_match) is not bool:
+            raise ValueError("capture sequence_match must be null or boolean")
+        canonical_format = value["canonical_record_format"]
+        if canonical_format not in {
+            None,
+            "compact-json-array-[kind,index,value]-plus-LF",
+        }:
+            raise ValueError("capture canonical_record_format is invalid")
+
+        if mode == "static_set":
+            if any(value[name] is None for name in nullable_counts):
+                raise ValueError("static_set capture must report provable completeness counts")
+            if value["completeness_scope"] != "NATIVE_STATIC_SET" or value["unknown_reason"] is not None:
+                raise ValueError("static_set capture completeness scope is inconsistent")
+            if value["received_unique"] > value["expected_total"] or value[
+                "missing"
+            ] != value["expected_total"] - value["received_unique"]:
+                raise ValueError("static_set capture completeness counts are inconsistent")
+            if value["event_manifest"] is not None:
+                raise ValueError("static_set capture must not report an event manifest")
+            if any(
+                item is not None
+                for item in (received_digest, sequence_match, canonical_format)
+            ):
+                raise ValueError("static_set capture must not report event sequence proof")
+        else:
+            if any(value[name] is not None for name in ("received_unique", "duplicates", "missing")):
+                raise ValueError("capture without native point truth must use null completeness counts")
+            if mode == "event_sequence":
+                manifest_value = value["event_manifest"]
+                if not isinstance(manifest_value, Mapping):
+                    raise ValueError("event capture must report its truth manifest")
+                manifest_fields = {
+                    "generator",
+                    "generator_version",
+                    "scenario_id",
+                    "seed",
+                    "start_sequence",
+                    "end_sequence",
+                    "event_total",
+                    "sha256",
+                    "match_rule",
+                }
+                if set(manifest_value) != manifest_fields:
+                    raise ValueError("event capture manifest fields are invalid")
+                manifest = CaptureEventManifest(**dict(manifest_value))
+                if value["expected_total"] != manifest.event_total:
+                    raise ValueError("event capture expected_total does not match manifest")
+                if canonical_format != "compact-json-array-[kind,index,value]-plus-LF":
+                    raise ValueError("event capture must declare its canonical record format")
+                if sequence_match is True:
+                    if (
+                        received_digest != manifest.sha256
+                        or value["received_total"] != manifest.event_total
+                        or value["completeness_scope"]
+                        != "EXTERNAL_EVENT_MANIFEST_MATCHED"
+                        or value["unknown_reason"] is not None
+                    ):
+                        raise ValueError("matched event capture proof is inconsistent")
+                elif sequence_match is False:
+                    if (
+                        received_digest is None
+                        or value["completeness_scope"]
+                        != "EXTERNAL_EVENT_MANIFEST_REQUIRED"
+                        or value["unknown_reason"]
+                        != "EVENT_SEQUENCE_MISMATCH_REQUIRES_MANIFEST_DIFF"
+                        or valid is not False
+                    ):
+                        raise ValueError("mismatched event capture proof is inconsistent")
+                elif (
+                    received_digest is not None
+                    or value["completeness_scope"]
+                    != "EXTERNAL_EVENT_MANIFEST_REQUIRED"
+                    or value["unknown_reason"] != "EVENT_SEQUENCE_NOT_FINALIZED"
+                    or state == "FINALIZED"
+                ):
+                    raise ValueError("unfinished event capture proof is inconsistent")
+            else:
+                if value["completeness_scope"] != "OBSERVATION_ONLY":
+                    raise ValueError("observation capture completeness scope is inconsistent")
+                if value["expected_total"] is not None or value["event_manifest"] is not None:
+                    raise ValueError("observation capture must not report ground truth")
+                if value["unknown_reason"] != "UNKNOWN_WITHOUT_GROUND_TRUTH_MATCH":
+                    raise ValueError(
+                        "observation capture must explain unknown completeness"
+                    )
+                if any(
+                    item is not None
+                    for item in (received_digest, sequence_match, canonical_format)
+                ):
+                    raise ValueError(
+                        "observation capture must not report event sequence proof"
+                    )
+
+        if mode == "static_set":
+            truth_complete = (
+                value["missing"] == 0
+                and value["duplicates"] == 0
+                and value["unmatched_total"] == 0
+            )
+        elif mode == "event_sequence":
+            truth_complete = sequence_match is True
+        else:
+            truth_complete = True
+        expected_valid = (
+            state == "FINALIZED"
+            and truth_complete
+            and not reasons
+            and value["queue_overflow"] == 0
+        )
+        if valid is not expected_valid and state != "ACTIVE":
+            raise ValueError("capture terminal validity is inconsistent with truth")
+
+        return cls(
+            capture_id=capture_id,
+            session_id=value["session_id"],
+            state=state,
+            valid=valid,
+            mode=mode,
+            sources=tuple(sources),
+            expected_total=value["expected_total"],
+            offered_total=value["offered_total"],
+            received_total=value["received_total"],
+            received_unique=value["received_unique"],
+            duplicates=value["duplicates"],
+            missing=value["missing"],
+            unmatched_total=value["unmatched_total"],
+            fragments_total=value["fragments_total"],
+            duration_ms=float(value["duration_ms"]),
+            throughput_per_sec=float(value["throughput_per_sec"]),
+            current_queue_depth=value["current_queue_depth"],
+            max_queue_depth=value["max_queue_depth"],
+            queue_capacity=value["queue_capacity"],
+            queue_overflow=value["queue_overflow"],
+            invalid_reasons=tuple(reasons),
+            completeness_scope=value["completeness_scope"],
+            unknown_reason=value["unknown_reason"],
+            received_sequence_sha256=received_digest,
+            sequence_match=sequence_match,
+            canonical_record_format=canonical_format,
+            mismatch_sample=tuple(deepcopy(sample) for sample in samples),
+            timings=deepcopy(dict(value["timings"])),
+            raw=deepcopy(dict(value)),
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class UnsolicitedControlResult:
     """Typed result for one explicit Enable/Disable Unsolicited task."""
@@ -1094,7 +1630,7 @@ class HostProcessConfig:
     shutdown_timeout: float = 2.0
     diagnostic_tail_bytes: int = 64 * 1024
     max_response_bytes: int = 16 * 1024 * 1024
-    expected_host_version: str | None = "0.5.1"
+    expected_host_version: str | None = "0.6.0"
     expected_capability_matrix_sha256: str | None = None
 
     def __post_init__(self) -> None:

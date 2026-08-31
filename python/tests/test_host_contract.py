@@ -70,6 +70,9 @@ def test_hello_status_and_shutdown(host_executable: Path) -> None:
     assert result["platform"] == "windows-x64"
     assert result["capability_matrix_version"] == "1"
     assert result["supported_commands"] == [
+        "capture.begin",
+        "capture.end",
+        "capture.progress",
         "class_poll",
         "connect",
         "direct_operate",
@@ -139,6 +142,14 @@ def test_hello_status_and_shutdown(host_executable: Path) -> None:
         "dropped_measurements": 0,
         "fragments": 0,
     }
+    assert status["result"]["capture"] == {
+        "capture_id": None,
+        "state": "IDLE",
+        "valid": None,
+        "current_queue_depth": 0,
+        "max_queue_depth": 0,
+        "queue_overflow": 0,
+    }
     assert status["result"]["metrics"]["requests_received"] == 2
 
     shutdown = responses[2]
@@ -194,7 +205,7 @@ def test_duplicate_request_id_is_rejected(host_executable: Path) -> None:
     assert responses[1]["error"]["details"]["reason"] == "duplicate_id"
 
 
-def test_invalid_unavailable_and_unknown_commands_are_distinct(
+def test_invalid_capture_and_unknown_commands_are_distinct(
     host_executable: Path,
 ) -> None:
     responses = run_host(
@@ -208,8 +219,11 @@ def test_invalid_unavailable_and_unknown_commands_are_distinct(
         "field": "host",
         "reason": "missing_field",
     }
-    assert responses[1]["error"]["code"] == "UNSUPPORTED_BY_BACKEND"
-    assert responses[1]["error"]["details"]["backend"] == "opendnp3"
+    assert responses[1]["error"]["code"] == "INVALID_REQUEST"
+    assert responses[1]["error"]["details"] == {
+        "field": "mode",
+        "reason": "missing_field",
+    }
     assert responses[2]["error"]["code"] == "INVALID_REQUEST"
     assert responses[2]["error"]["details"]["reason"] == "unknown_command"
 

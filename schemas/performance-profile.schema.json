@@ -1,0 +1,243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ems-dnp3/performance-profile.schema.json",
+  "title": "DNP3 read-only performance and soak profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "profile_id",
+    "scope",
+    "seed",
+    "scenarios",
+    "thresholds",
+    "soak"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "profile_id": { "$ref": "#/$defs/token" },
+    "scope": {
+      "enum": ["LOCAL_LOOPBACK_ONLY", "TARGET_ENVIRONMENT_PENDING_REVIEW"]
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/scenario" }
+    },
+    "thresholds": { "$ref": "#/$defs/thresholds" },
+    "soak": { "$ref": "#/$defs/soak" }
+  },
+  "$defs": {
+    "token": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "readHeader": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["group", "variation", "qualifier", "start", "stop", "count"],
+      "properties": {
+        "group": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "variation": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "qualifier": {
+          "enum": ["all_objects", "range8", "range16", "count8", "count16"]
+        },
+        "start": { "type": ["integer", "null"], "minimum": 0, "maximum": 65535 },
+        "stop": { "type": ["integer", "null"], "minimum": 0, "maximum": 65535 },
+        "count": { "type": ["integer", "null"], "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "pointRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "start", "stop"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "binary_input", "double_bit_binary_input", "analog_input", "counter",
+            "frozen_counter", "binary_output_status", "analog_output_status",
+            "octet_string", "time_and_interval"
+          ]
+        },
+        "start": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "stop": { "type": "integer", "minimum": 0, "maximum": 65535 }
+      }
+    },
+    "eventManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generator", "generator_version", "scenario_id", "seed",
+        "start_sequence", "end_sequence", "event_total", "sha256", "match_rule"
+      ],
+      "properties": {
+        "generator": { "$ref": "#/$defs/token" },
+        "generator_version": { "$ref": "#/$defs/token" },
+        "scenario_id": { "$ref": "#/$defs/token" },
+        "seed": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+        "start_sequence": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+        "end_sequence": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+        "event_total": { "type": "integer", "minimum": 1, "maximum": 1000000000 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+        "match_rule": { "const": "ordered_kind_index_value" }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "sources", "duration_limit_seconds"],
+      "properties": {
+        "mode": { "enum": ["static_set", "event_sequence", "observation"] },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "enum": ["solicited", "unsolicited"] }
+        },
+        "duration_limit_seconds": { "type": "number", "minimum": 0.1, "maximum": 604800 },
+        "point_ranges": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/pointRange" }
+        },
+        "event_manifest": { "$ref": "#/$defs/eventManifest" },
+        "mismatch_sample_limit": { "type": "integer", "minimum": 0, "maximum": 1024 },
+        "queue_capacity": { "type": "integer", "minimum": 1, "maximum": 65536 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "static_set" } } },
+          "then": { "required": ["point_ranges"] }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "event_sequence" } } },
+          "then": { "required": ["event_manifest"] }
+        }
+      ]
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_id", "operation", "headers", "classes", "capture",
+        "warmup_iterations", "measurement_iterations", "interval_seconds",
+        "cooldown_seconds", "task_timeout_seconds", "max_measurements",
+        "expected_objects_per_iteration", "expected_by_kind",
+        "expected_by_group_variation", "baseline_scenario_id"
+      ],
+      "properties": {
+        "scenario_id": { "$ref": "#/$defs/token" },
+        "operation": { "enum": ["read", "integrity_poll", "class_poll"] },
+        "headers": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/readHeader" }
+        },
+        "classes": {
+          "type": "array",
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 1, "maximum": 3 }
+        },
+        "capture": {
+          "oneOf": [{ "$ref": "#/$defs/capture" }, { "type": "null" }]
+        },
+        "warmup_iterations": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "measurement_iterations": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "interval_seconds": { "type": "number", "minimum": 0, "maximum": 3600 },
+        "cooldown_seconds": { "type": "number", "minimum": 0, "maximum": 3600 },
+        "task_timeout_seconds": { "type": "number", "minimum": 0.05, "maximum": 300 },
+        "max_measurements": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "expected_objects_per_iteration": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "expected_by_kind": {
+          "type": "object",
+          "maxProperties": 256,
+          "propertyNames": {
+            "enum": [
+              "binary_input", "double_bit_binary_input", "analog_input",
+              "counter", "frozen_counter", "binary_output_status",
+              "analog_output_status", "octet_string", "time_and_interval"
+            ]
+          },
+          "additionalProperties": {
+            "type": "integer", "minimum": 1, "maximum": 1000000
+          }
+        },
+        "expected_by_group_variation": {
+          "type": "object",
+          "maxProperties": 256,
+          "propertyNames": {
+            "pattern": "^(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]):(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"
+          },
+          "additionalProperties": {
+            "type": "integer", "minimum": 1, "maximum": 1000000
+          }
+        },
+        "baseline_scenario_id": {
+          "oneOf": [{ "$ref": "#/$defs/token" }, { "type": "null" }]
+        }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimum_samples", "max_task_p95_ms", "max_task_p99_ms", "max_task_ms",
+        "max_cpu_core_percent", "max_working_set_bytes", "max_private_bytes",
+        "max_handle_count", "max_thread_count", "max_private_growth_bytes_per_hour",
+        "max_working_set_growth_bytes_per_hour", "max_handle_growth",
+        "max_thread_growth", "max_capture_overhead_percent"
+      ],
+      "properties": {
+        "minimum_samples": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "max_task_p95_ms": { "$ref": "#/$defs/nonnegativeNumber" },
+        "max_task_p99_ms": { "$ref": "#/$defs/nonnegativeNumber" },
+        "max_task_ms": { "$ref": "#/$defs/nonnegativeNumber" },
+        "max_cpu_core_percent": { "$ref": "#/$defs/nonnegativeNumber" },
+        "max_working_set_bytes": { "$ref": "#/$defs/nonnegativeInteger" },
+        "max_private_bytes": { "$ref": "#/$defs/nonnegativeInteger" },
+        "max_handle_count": { "$ref": "#/$defs/nonnegativeInteger" },
+        "max_thread_count": { "$ref": "#/$defs/nonnegativeInteger" },
+        "max_private_growth_bytes_per_hour": { "$ref": "#/$defs/nonnegativeNumber" },
+        "max_working_set_growth_bytes_per_hour": { "$ref": "#/$defs/nonnegativeNumber" },
+        "max_handle_growth": { "$ref": "#/$defs/nonnegativeInteger" },
+        "max_thread_growth": { "$ref": "#/$defs/nonnegativeInteger" },
+        "max_capture_overhead_percent": { "$ref": "#/$defs/nonnegativeNumber" }
+      }
+    },
+    "soak": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_duration_seconds", "cycle_interval_seconds", "checkpoint_interval_seconds",
+        "resource_sample_interval_seconds", "watchdog_timeout_seconds", "max_checkpoints",
+        "max_evidence_bytes", "min_free_disk_bytes", "allowed_reconnects",
+        "max_consecutive_failures"
+      ],
+      "properties": {
+        "target_duration_seconds": { "type": "number", "minimum": 0.1, "maximum": 604800 },
+        "cycle_interval_seconds": { "type": "number", "minimum": 0, "maximum": 3600 },
+        "checkpoint_interval_seconds": { "type": "number", "minimum": 0.1, "maximum": 86400 },
+        "resource_sample_interval_seconds": { "type": "number", "minimum": 0.1, "maximum": 3600 },
+        "watchdog_timeout_seconds": { "type": "number", "minimum": 0.1, "maximum": 3600 },
+        "max_checkpoints": { "type": "integer", "minimum": 2, "maximum": 10000 },
+        "max_evidence_bytes": { "type": "integer", "minimum": 65536, "maximum": 1099511627776 },
+        "min_free_disk_bytes": { "type": "integer", "minimum": 0, "maximum": 1152921504606846976 },
+        "allowed_reconnects": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "max_consecutive_failures": { "type": "integer", "minimum": 0, "maximum": 10000 }
+      }
+    },
+    "nonnegativeNumber": { "type": "number", "minimum": 0 },
+    "nonnegativeInteger": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 }
+  }
+}

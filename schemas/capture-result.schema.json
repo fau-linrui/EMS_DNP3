@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dnp3-master/capture-result.schema.json",
+  "title": "DNP3 native measurement capture v1 result",
+  "oneOf": [
+    { "$ref": "#/$defs/idle" },
+    { "$ref": "#/$defs/capture" }
+  ],
+  "$defs": {
+    "nullableUnsigned": {
+      "oneOf": [
+        { "type": "integer", "minimum": 0 },
+        { "type": "null" }
+      ]
+    },
+    "nullableBoolean": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "null" }
+      ]
+    },
+    "idle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capture_id",
+        "state",
+        "valid",
+        "current_queue_depth",
+        "max_queue_depth",
+        "queue_overflow"
+      ],
+      "properties": {
+        "capture_id": { "type": "null" },
+        "state": { "const": "IDLE" },
+        "valid": { "type": "null" },
+        "current_queue_depth": { "const": 0 },
+        "max_queue_depth": { "const": 0 },
+        "queue_overflow": { "const": 0 }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capture_id",
+        "session_id",
+        "state",
+        "valid",
+        "mode",
+        "sources",
+        "expected_total",
+        "offered_total",
+        "received_total",
+        "received_unique",
+        "duplicates",
+        "missing",
+        "unmatched_total",
+        "fragments_total",
+        "duration_ms",
+        "throughput_per_sec",
+        "current_queue_depth",
+        "max_queue_depth",
+        "queue_capacity",
+        "queue_overflow",
+        "discarded_on_abort",
+        "invalid_reasons",
+        "completeness_scope",
+        "unknown_reason",
+        "received_sequence_sha256",
+        "sequence_match",
+        "canonical_record_format",
+        "mismatch_sample",
+        "mismatch_sample_limit",
+        "by_kind",
+        "by_group_variation",
+        "timings",
+        "event_manifest"
+      ],
+      "properties": {
+        "capture_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9._:-]+$" },
+        "session_id": { "type": "integer", "minimum": 1 },
+        "state": { "enum": ["ACTIVE", "FINALIZED", "TIMED_OUT", "ABORTED"] },
+        "valid": { "$ref": "#/$defs/nullableBoolean" },
+        "mode": { "enum": ["static_set", "event_sequence", "observation"] },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "enum": ["solicited", "unsolicited"] }
+        },
+        "expected_total": { "$ref": "#/$defs/nullableUnsigned" },
+        "offered_total": { "type": "integer", "minimum": 0 },
+        "received_total": { "type": "integer", "minimum": 0 },
+        "received_unique": { "$ref": "#/$defs/nullableUnsigned" },
+        "duplicates": { "$ref": "#/$defs/nullableUnsigned" },
+        "missing": { "$ref": "#/$defs/nullableUnsigned" },
+        "unmatched_total": { "type": "integer", "minimum": 0 },
+        "fragments_total": { "type": "integer", "minimum": 0 },
+        "duration_ms": { "type": "number", "minimum": 0 },
+        "throughput_per_sec": { "type": "number", "minimum": 0 },
+        "current_queue_depth": { "type": "integer", "minimum": 0, "maximum": 65536 },
+        "max_queue_depth": { "type": "integer", "minimum": 0, "maximum": 65536 },
+        "queue_capacity": { "type": "integer", "minimum": 1, "maximum": 65536 },
+        "queue_overflow": { "type": "integer", "minimum": 0 },
+        "discarded_on_abort": { "type": "integer", "minimum": 0 },
+        "invalid_reasons": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+        },
+        "completeness_scope": { "enum": ["NATIVE_STATIC_SET", "EXTERNAL_EVENT_MANIFEST_REQUIRED", "EXTERNAL_EVENT_MANIFEST_MATCHED", "OBSERVATION_ONLY"] },
+        "unknown_reason": {
+          "oneOf": [
+            { "const": "UNKNOWN_WITHOUT_GROUND_TRUTH_MATCH" },
+            { "const": "EVENT_SEQUENCE_NOT_FINALIZED" },
+            { "const": "EVENT_SEQUENCE_MISMATCH_REQUIRES_MANIFEST_DIFF" },
+            { "type": "null" }
+          ]
+        },
+        "received_sequence_sha256": {
+          "oneOf": [
+            { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            { "type": "null" }
+          ]
+        },
+        "sequence_match": { "$ref": "#/$defs/nullableBoolean" },
+        "canonical_record_format": {
+          "oneOf": [
+            { "const": "compact-json-array-[kind,index,value]-plus-LF" },
+            { "type": "null" }
+          ]
+        },
+        "mismatch_sample": { "type": "array", "maxItems": 1024, "items": { "type": "object" } },
+        "mismatch_sample_limit": { "type": "integer", "minimum": 0, "maximum": 1024 },
+        "by_kind": { "$ref": "#/$defs/counters" },
+        "by_group_variation": { "$ref": "#/$defs/counters" },
+        "timings": { "$ref": "#/$defs/timings" },
+        "event_manifest": {
+          "oneOf": [
+            { "$ref": "request.schema.json#/$defs/captureEventManifest" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "counters": {
+      "type": "object",
+      "maxProperties": 256,
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "timings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "started_monotonic_ns",
+        "deadline_monotonic_ns",
+        "first_fragment_monotonic_ns",
+        "first_object_monotonic_ns",
+        "last_object_monotonic_ns",
+        "ended_monotonic_ns"
+      ],
+      "properties": {
+        "started_monotonic_ns": { "type": "integer", "minimum": 0 },
+        "deadline_monotonic_ns": { "type": "integer", "minimum": 0 },
+        "first_fragment_monotonic_ns": { "$ref": "#/$defs/nullableUnsigned" },
+        "first_object_monotonic_ns": { "$ref": "#/$defs/nullableUnsigned" },
+        "last_object_monotonic_ns": { "$ref": "#/$defs/nullableUnsigned" },
+        "ended_monotonic_ns": { "$ref": "#/$defs/nullableUnsigned" }
+      }
+    }
+  }
+}

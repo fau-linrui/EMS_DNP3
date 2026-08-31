@@ -11,9 +11,12 @@ class IMasterApplication;
 
 namespace dnp3host {
 
+class MeasurementCapture;
+
 class OpenDnp3ReadSupport final {
 public:
-    OpenDnp3ReadSupport();
+    explicit OpenDnp3ReadSupport(
+        std::shared_ptr<MeasurementCapture> capture = nullptr);
     ~OpenDnp3ReadSupport();
 
     OpenDnp3ReadSupport(const OpenDnp3ReadSupport&) = delete;

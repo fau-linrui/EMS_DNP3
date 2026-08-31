@@ -1,6 +1,7 @@
 #include "dnp3host/HostController.h"
 
 #include "dnp3host/ConnectionConfig.h"
+#include "dnp3host/CaptureConfig.h"
 #include "dnp3host/CommandConfig.h"
 #include "dnp3host/JsonLineProtocol.h"
 #include "dnp3host/OpenDnp3Backend.h"
@@ -95,10 +96,10 @@ DispatchResult HostController::dispatch(const Request& request)
                      {"host", status.at("metrics")},
                      {"channel", status.at("channel")},
                      {"safety", status.at("safety")},
+                     {"capture", status.at("capture")},
                      {"limitations",
-                      Json::array(
-                          {"network byte counters are not exposed by OpenDNP3 3.1.2",
-                           "per-object performance capture is a later milestone"})}}),
+                      Json::array({
+                          "network byte counters are not exposed by OpenDNP3 3.1.2"})}}),
             false};
     }
     if (request.command == "shutdown") {
@@ -209,6 +210,31 @@ DispatchResult HostController::dispatch(const Request& request)
         }
         return backend_result(request.id, backend_->wait_unsolicited(config));
     }
+    if (request.command == "capture.begin") {
+        CaptureConfig config;
+        if (const auto error = parse_capture_config(request.params, config)) {
+            ++requests_failed_;
+            return DispatchResult{
+                JsonLineProtocol::error_response(ProtocolError{
+                    request.id, error->code, error->message, error->details}),
+                false};
+        }
+        return backend_result(request.id, backend_->capture_begin(config));
+    }
+    if (request.command == "capture.progress" || request.command == "capture.end") {
+        CaptureReferenceConfig config;
+        if (const auto error = parse_capture_reference_config(
+                request.params, request.command == "capture.end", config)) {
+            ++requests_failed_;
+            return DispatchResult{
+                JsonLineProtocol::error_response(ProtocolError{
+                    request.id, error->code, error->message, error->details}),
+                false};
+        }
+        return request.command == "capture.progress"
+            ? backend_result(request.id, backend_->capture_progress(config))
+            : backend_result(request.id, backend_->capture_end(config));
+    }
     if (is_known_backend_command(request.command)) {
         ++requests_failed_;
         return DispatchResult{
@@ -310,6 +336,7 @@ Json HostController::status_result() const
               {"dropped_measurements",
                backend_status.dropped_unsolicited_events},
               {"fragments", backend_status.unsolicited_fragments}}},
+        {"capture", backend_status.capture},
         {"metrics",
          Json{
              {"requests_received", requests_received_},
@@ -331,8 +358,10 @@ const char* HostController::state_name(const BackendStatus& backend_status) cons
 
 bool HostController::is_known_backend_command(const std::string& command)
 {
-    static constexpr std::array<const char*, 13> commands{
+    static constexpr std::array<const char*, 15> commands{
         "capture.begin",
+        "capture.progress",
+        "capture.end",
         "connect",
         "disconnect",
         "enable_unsolicited",

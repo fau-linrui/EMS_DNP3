@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 
 $dnp3RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $dnp3PackageRoot = Join-Path $dnp3RepoRoot 'out\package'
-$dnp3PackageVersion = '0.5.1'
+$dnp3PackageVersion = '0.6.0'
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $dnp3PackageRoot "ems-dnp3-pytest-$dnp3PackageVersion"
 }
@@ -66,6 +66,8 @@ try {
     New-Item -ItemType Directory -Path $dnp3ExamplesStage -Force | Out-Null
     Copy-Item -LiteralPath 'examples\pytest_ems' `
         -Destination $dnp3ExamplesStage -Recurse
+    Copy-Item -LiteralPath 'examples\pytest_performance' `
+        -Destination $dnp3ExamplesStage -Recurse
 
     $dnp3DocsStage = Join-Path $dnp3Stage 'docs'
     New-Item -ItemType Directory -Path $dnp3DocsStage -Force | Out-Null
@@ -76,6 +78,7 @@ try {
         'docs\LOCAL_TEST_OUTSTATION.md',
         'docs\OFFLINE_PREFLIGHT.md',
         'docs\SAFETY_INCIDENT_RUNBOOK.md',
+        'docs\PERFORMANCE_AND_SOAK_GUIDE.md',
         'docs\BEGINNER_MIGRATION_BUILD_USE_GUIDE.md',
         'docs\INTRANET_HANDOFF_REMAINING_TASKS.md'
     )) {

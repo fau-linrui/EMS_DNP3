@@ -2,6 +2,51 @@
 
 本文件记录用户可见行为和移植边界的变化。能力是否适用于某台 EMS，仍以该设备的正式 PICS、私有配置和不可变测试证据为准；版本记录不能替代互操作或一致性结论。
 
+## 0.6.0（2026-08-31）
+
+### 持续 Capture
+
+- 新增类型化 `capture.begin/progress/end`，支持 `static_set`、
+  `event_sequence` 和 `observation` 三种模式；每个会话最多一个 ACTIVE capture。
+- 静态点集报告 missing/duplicate/unmatched，确定性事件流使用外部 manifest、连续
+  sequence 和有序 SHA-256 真值；无外部真值时完整性明确为 unknown。
+- 队列、范围、点数、异常样本、duration 和响应均有硬上限；deadline、断开、
+  shutdown、错 ID、并发 begin 与 overflow 都有稳定终态和 native/Python/回环测试。
+
+### 性能、大点表与稳定性
+
+- 本地参考从站扩展到每种类型 65,535 点，并新增基于 seed/sequence 的 BI/AI
+  突发与定速事件发生器及可复算 manifest；定速模式使用单调时钟绝对 deadline
+  逐事件 Apply，避免 Windows 相对 sleep 漂移。
+- 本机边界回归实际覆盖 BI/AI/BOS/AOS 各 4,096 点（总计 16,384 点），以及
+  4,096 条 burst 和 1,000 events/s 的 4,096 条 paced event chunk；公共示例
+  Profile 保持较小默认规模，不代表工具已验证上限。
+- 新增严格性能 Profile/报告 Schema、输入 SHA-256、按 kind 和 Group/Variation 的
+  精确对象真值、nearest-rank p50/p95/p99/max、capture A/B 开销和阈值判定。
+- 新增 Windows host CPU、工作集、private bytes、句柄和线程采样；网络字节、
+  DUT 资源及其他无可靠数据源的指标保持 `null`，不会估算。
+- 新增只读可中断 soak runner，包含 watchdog、原子检查点与轮转、磁盘/证据上限、
+  资源增长、无丢失 channel-event 重连审计和连续失败门禁；事件基准还会清空并
+  核验固定 4,096 条 master unsolicited 队列。CI 只跑缩短场景；本版本没有声称已完成真实 EMS
+  或正式 24 小时环境验证。
+
+### pytest、移植与文档
+
+- 新增可复制的 `examples/pytest_performance`；benchmark 默认有界，24 小时运行必须
+  显式传入 `--dnp3-run-soak`，且仅允许只读任务。
+- 性能/事件 Profile 在 pytest 收集阶段严格加载并哈希，场景按实际 FC、对象与
+  Qualifier 能力 ID 受 PICS 和公共能力矩阵共同门控。
+- 可移植包加入性能/事件 Profile、报告 Schema、性能 pytest 套件和
+  `PERFORMANCE_AND_SOAK_GUIDE.md`；包内 self-test 还会对 BI/AI/BOS/AOS 共 8 点
+  执行精确静态 capture 并核验无缺失、重复、意外点或 overflow；版本提升为 0.6.0。
+
+### 证据边界
+
+- H08a/T15 与 H09a/T16a～T16d 的本机工具基线已完成；H08b 的目标 Profile 映射和
+  H09b/T16e 的独立参考端、目标 EMS、PCAP、DUT 资源及正式 24 小时证据仍留在内网。
+- 同栈回环和短时 soak 只能证明工具行为，相关能力继续保持
+  `IMPLEMENTED_UNVERIFIED`。
+
 ## 0.5.1（2026-08-31）
 
 ### 安全与控制
