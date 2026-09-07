@@ -107,6 +107,7 @@ class TcpConnectionConfig:
     outstation_address: int = 1024
     keep_alive_timeout: float = 60.0
     safety: LabSafetyConfig | None = None
+    simulator: bool = False
 
     def __post_init__(self) -> None:
         _endpoint_text(self.host, "host", 253)
@@ -132,6 +133,10 @@ class TcpConnectionConfig:
             raise ValueError("master_address and outstation_address must differ")
         if self.safety is not None and not isinstance(self.safety, LabSafetyConfig):
             raise ValueError("safety must be a LabSafetyConfig or None")
+        if type(self.simulator) is not bool:
+            raise ValueError("simulator must be boolean")
+        if self.simulator and self.safety is not None:
+            raise ValueError("simulator and LabSafetyConfig are mutually exclusive")
 
         _milliseconds(self.connect_timeout, "connect_timeout", 50, 300000)
         retry_min_ms = _milliseconds(self.retry_min, "retry_min", 10, 300000)
@@ -180,6 +185,8 @@ class TcpConnectionConfig:
         }
         if self.safety is not None:
             result["safety"] = self.safety.to_params()
+        elif self.simulator:
+            result["safety"] = {"environment": "SIMULATOR"}
         return result
 
 
@@ -1632,6 +1639,7 @@ class HostProcessConfig:
     max_response_bytes: int = 16 * 1024 * 1024
     expected_host_version: str | None = "0.6.1"
     expected_capability_matrix_sha256: str | None = None
+    max_request_bytes: int = 1024 * 1024
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -1694,6 +1702,8 @@ class HostProcessConfig:
             or not self.expected_host_version.strip()
         ):
             raise ValueError("expected_host_version must be a non-empty string or None")
+        if type(self.max_request_bytes) is not int or not 64 <= self.max_request_bytes <= 16 * 1024 * 1024:
+            raise ValueError("max_request_bytes must be between 64 and 16777216")
         if self.expected_capability_matrix_sha256 is not None:
             if (
                 not isinstance(self.expected_capability_matrix_sha256, str)

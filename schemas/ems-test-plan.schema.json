@@ -12,6 +12,7 @@
   ],
   "properties": {
     "schema_version": { "const": 1 },
+    "environment": { "enum": ["LAB", "SIMULATOR"], "default": "LAB" },
     "poll_scenarios": {
       "type": "array",
       "maxItems": 128,
@@ -29,6 +30,22 @@
     },
     "notes": { "$ref": "#/$defs/notes" }
   },
+  "allOf": [{
+    "if": {
+      "required": ["environment"],
+      "properties": { "environment": { "const": "SIMULATOR" } }
+    },
+    "then": {},
+    "else": {
+      "properties": {
+        "control_scenarios": {
+          "items": {
+            "required": ["authorization_reference", "precondition", "restore_command", "restore_expectation"]
+          }
+        }
+      }
+    }
+  }],
   "$defs": {
     "identifier": {
       "type": "string",
@@ -228,18 +245,18 @@
       "required": [
         "scenario_id",
         "enabled",
-        "authorization_reference",
         "control_mode",
         "command",
         "feedback_point_id",
-        "precondition",
         "postcondition",
-        "restore_command",
-        "restore_expectation",
         "command_timeout_seconds",
         "feedback_timeout_seconds",
         "feedback_poll_interval_seconds"
       ],
+      "dependentRequired": {
+        "restore_command": ["restore_expectation"],
+        "restore_expectation": ["restore_command"]
+      },
       "properties": {
         "scenario_id": { "$ref": "#/$defs/identifier" },
         "enabled": { "type": "boolean" },

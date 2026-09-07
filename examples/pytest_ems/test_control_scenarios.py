@@ -28,6 +28,7 @@ def _execute_once(
     command_definition = (
         scenario.restore_command if restore else scenario.command
     )
+    assert command_definition is not None
     command = command_definition.to_command()
     if scenario.control_mode == "select_and_operate":
         return client.select_and_operate(
@@ -47,28 +48,36 @@ def test_approved_control_with_feedback_and_restore(
     dnp3_point_table: PointTable | None,
     ems_control_scenario: ControlScenario | None,
 ) -> None:
-    """Execute one explicitly selected command cycle without any control retry."""
+    """Assert control feedback; LAB additionally requires the approved restore cycle."""
 
     if ems_control_scenario is None or dnp3_point_table is None:
         pytest.skip("no approved EMS control scenario was selected")
     scenario = ems_control_scenario
-    assert scenario.scenario_id not in _ATTEMPTED_CONTROL_SCENARIOS, (
-        f"{scenario.scenario_id}: refusing a repeated control attempt in the same "
-        "pytest process; automatic rerun/repeat plugins are unsafe for controls"
+    simulator = getattr(connected_master, "simulator_mode", False) is True
+    assert simulator or scenario.environment != "SIMULATOR", (
+        "SIMULATOR scenarios require a simulator connection"
     )
-    _ATTEMPTED_CONTROL_SCENARIOS.add(scenario.scenario_id)
+    if not simulator:
+        assert scenario.precondition is not None and scenario.restore_command is not None
+        assert scenario.restore_expectation is not None
+        assert scenario.scenario_id not in _ATTEMPTED_CONTROL_SCENARIOS, (
+            f"{scenario.scenario_id}: refusing a repeated control attempt in the same "
+            "pytest process; automatic rerun/repeat plugins are unsafe for controls"
+        )
+        _ATTEMPTED_CONTROL_SCENARIOS.add(scenario.scenario_id)
     feedback_point = dnp3_point_table.by_id[scenario.feedback_point_id]
 
-    baseline = read_exact_static_point(
-        connected_master,
-        feedback_point,
-        timeout_seconds=min(5.0, scenario.feedback_timeout_seconds),
-    )
-    assert scenario.precondition.matches(baseline.value), (
-        f"{scenario.scenario_id}: precondition is not satisfied at feedback "
-        f"point {feedback_point.point_id!r}; observed={baseline.value!r}. "
-        "No control was sent."
-    )
+    if scenario.precondition is not None:
+        baseline = read_exact_static_point(
+            connected_master,
+            feedback_point,
+            timeout_seconds=min(5.0, scenario.feedback_timeout_seconds),
+        )
+        assert scenario.precondition.matches(baseline.value), (
+            f"{scenario.scenario_id}: precondition is not satisfied at feedback "
+            f"point {feedback_point.point_id!r}; observed={baseline.value!r}. "
+            "No control was sent."
+        )
 
     operated = _execute_once(connected_master, scenario, restore=False)
     assert_single_command_success(
@@ -86,6 +95,9 @@ def test_approved_control_with_feedback_and_restore(
         phase="post-control",
     )
 
+    if scenario.restore_command is None:
+        return
+    assert scenario.restore_expectation is not None
     restored = _execute_once(connected_master, scenario, restore=True)
     assert_single_command_success(
         restored,

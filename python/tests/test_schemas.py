@@ -208,7 +208,10 @@ def test_ems_test_plan_schema_keeps_controls_explicit_and_strict() -> None:
         "postcondition",
         "restore_command",
         "restore_expectation",
-    }.issubset(control["required"])
+    }.issubset(
+        set(control["required"])
+        | set(schema["allOf"][0]["else"]["properties"]["control_scenarios"]["items"]["required"])
+    )
     assert schema["$defs"]["crobCommand"]["additionalProperties"] is False
     assert "null" not in schema["$defs"]["crobCommand"]["properties"][
         "operation"

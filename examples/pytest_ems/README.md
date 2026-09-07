@@ -7,7 +7,13 @@
 - `test_unsolicited_scenarios.py`：显式启用主动上报，等待外部信号源制造的确定事件，并在 `finally` 中禁用。
 - `test_control_scenarios.py`：仅运行命令行精确点名的一个控制场景，执行前读回、单次控制、控制后读回、单次恢复和恢复读回。
 
-所有真实 DUT 用例都受 PICS 门禁约束。未提供配置时安全跳过；能力为 `UNKNOWN` 时默认 `xfail(run=False)`；所有主动上报和控制示例均默认关闭。
+以上控制限制针对 LAB。纯模拟器请使用 [模拟器模式](../../docs/SIMULATOR_MODE.md)
+和 `config/ems_test_plan.simulator.example.json`：启用模式后可直接批量/重复执行，
+审批、前置状态和恢复动作不再强制要求；没有 PICS/UNKNOWN 不阻止已实现功能。
+模拟器模板中的两个控制场景已启用，测试实际发送命令并检查反馈。
+
+LAB 用例继续受 PICS 门禁约束。未提供配置时安全跳过；能力为 `UNKNOWN` 时默认
+`xfail(run=False)`；旧 `ems_test_plan.example.json` 的主动上报和控制仍默认关闭。
 
 ## 1. 准备文件
 

@@ -93,6 +93,26 @@ if (-not $AllowNonCleanBuild) {
     }
 }
 
+$dnp3VenvPython = Join-Path $dnp3RepoRoot '.venv\Scripts\python.exe'
+if (Test-Path -LiteralPath $dnp3VenvPython -PathType Leaf) {
+    $dnp3Python = $dnp3VenvPython
+}
+else {
+    $dnp3PythonCommand = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $dnp3PythonCommand) {
+        throw 'Python 3.10 or newer was not found for deterministic packaging.'
+    }
+    $dnp3Python = $dnp3PythonCommand.Source
+}
+
+$dnp3SourceManifest = Join-Path $PSScriptRoot 'package-source-files.json'
+$dnp3SourceStager = Join-Path $PSScriptRoot 'stage_package_sources.py'
+& $dnp3Python $dnp3SourceStager `
+    --repository $dnp3RepoRoot --manifest $dnp3SourceManifest --check-only
+if ($LASTEXITCODE -ne 0) {
+    throw 'Package source allowlist validation failed before staging.'
+}
+
 if (Test-Path -LiteralPath $dnp3Stage) {
     if (-not $Force) {
         throw "Package directory already exists: $dnp3Stage. Re-run with -Force to replace it."
@@ -108,99 +128,32 @@ foreach ($dnp3ExistingArtifact in @($dnp3Archive, $dnp3ArchiveHash)) {
     }
 }
 
-. (Join-Path $PSScriptRoot 'Initialize-BuildEnvironment.ps1')
 New-Item -ItemType Directory -Path $dnp3Stage -Force | Out-Null
-Push-Location $dnp3RepoRoot
-try {
-    & cmake --install "out\build\$Preset" --prefix $dnp3Stage
-    if ($LASTEXITCODE -ne 0) {
-        throw "CMake install failed with exit code $LASTEXITCODE."
-    }
-
-    $dnp3PythonStage = Join-Path $dnp3Stage 'python'
-    New-Item -ItemType Directory -Path $dnp3PythonStage -Force | Out-Null
-    Copy-Item -LiteralPath 'python\pyproject.toml' -Destination $dnp3PythonStage
-    Copy-Item -LiteralPath 'python\README.md' -Destination $dnp3PythonStage
-    Copy-Item -LiteralPath 'python\src' -Destination $dnp3PythonStage -Recurse
-
-    $dnp3ExamplesStage = Join-Path $dnp3Stage 'examples'
-    New-Item -ItemType Directory -Path $dnp3ExamplesStage -Force | Out-Null
-    Copy-Item -LiteralPath 'examples\pytest_ems' `
-        -Destination $dnp3ExamplesStage -Recurse
-    Copy-Item -LiteralPath 'examples\pytest_performance' `
-        -Destination $dnp3ExamplesStage -Recurse
-
-    $dnp3DocsStage = Join-Path $dnp3Stage 'docs'
-    New-Item -ItemType Directory -Path $dnp3DocsStage -Force | Out-Null
-    foreach ($dnp3Document in @(
-        'docs\architecture.md',
-        'docs\protocol.md',
-        'docs\python_client.md',
-        'docs\LOCAL_TEST_OUTSTATION.md',
-        'docs\OFFLINE_PREFLIGHT.md',
-        'docs\SAFETY_INCIDENT_RUNBOOK.md',
-        'docs\PERFORMANCE_AND_SOAK_GUIDE.md',
-        'docs\RELEASE_AND_MIGRATION_ACCEPTANCE.md',
-        'docs\BEGINNER_MIGRATION_BUILD_USE_GUIDE.md',
-        'docs\INTRANET_HANDOFF_REMAINING_TASKS.md'
-    )) {
-        Copy-Item -LiteralPath $dnp3Document -Destination $dnp3DocsStage
-    }
-    Copy-Item -LiteralPath 'docs\standards' -Destination $dnp3DocsStage -Recurse
-    Copy-Item -LiteralPath 'README.md' -Destination $dnp3Stage
-    Copy-Item -LiteralPath 'CHANGELOG.md' -Destination $dnp3Stage
-    Copy-Item -LiteralPath 'scripts\run-local-self-test.ps1' `
-        -Destination (Join-Path $dnp3Stage 'self-test.ps1')
-    Copy-Item -LiteralPath 'scripts\test-compatibility.ps1' `
-        -Destination (Join-Path $dnp3Stage 'compatibility-test.ps1')
-    Copy-Item -LiteralPath 'scripts\fixtures\pytest_consumer' `
-        -Destination (Join-Path $dnp3Stage 'migration-consumer') `
-        -Recurse
-}
-finally {
-    Pop-Location
-}
-
-# Python bytecode is interpreter-specific runtime cache, not a portable input.
-# Resolve every removal target below the already validated staging directory.
-$dnp3StagePrefix = $dnp3Stage.TrimEnd('\') + '\'
-foreach ($dnp3CacheDirectory in @(
-    Get-ChildItem -LiteralPath $dnp3Stage -Directory -Recurse -Force |
-        Where-Object { $_.Name -eq '__pycache__' }
+# Fixed native outputs plus an explicit source allowlist; never recurse over
+# source directories (Git-ignored local files must not become release inputs).
+foreach ($dnp3NativeFile in @(
+    @{ Name = 'dnp3-master-host.exe'; Directory = 'bin' },
+    @{ Name = 'build-info.json'; Directory = 'bin' },
+    @{ Name = 'dnp3-local-test-outstation.exe'; Directory = 'tools' }
 )) {
-    $dnp3CachePath = [System.IO.Path]::GetFullPath($dnp3CacheDirectory.FullName)
-    if (-not $dnp3CachePath.StartsWith($dnp3StagePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Python cache cleanup target escaped the package staging directory.'
-    }
-    Remove-Item -LiteralPath $dnp3CachePath -Recurse -Force
+    $dnp3NativeSource = Join-Path $dnp3RepoRoot (
+        "out\build\$Preset\bin\" + $dnp3NativeFile.Name
+    )
+    $dnp3NativeTarget = Join-Path $dnp3Stage $dnp3NativeFile.Directory
+    New-Item -ItemType Directory -Path $dnp3NativeTarget -Force | Out-Null
+    Copy-Item -LiteralPath $dnp3NativeSource -Destination $dnp3NativeTarget
 }
-foreach ($dnp3BytecodeFile in @(
-    Get-ChildItem -LiteralPath $dnp3Stage -File -Recurse -Force |
-        Where-Object { $_.Extension -in @('.pyc', '.pyo') }
-)) {
-    $dnp3BytecodePath = [System.IO.Path]::GetFullPath($dnp3BytecodeFile.FullName)
-    if (-not $dnp3BytecodePath.StartsWith($dnp3StagePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Python bytecode cleanup target escaped the package staging directory.'
-    }
-    Remove-Item -LiteralPath $dnp3BytecodePath -Force
+& $dnp3Python $dnp3SourceStager `
+    --repository $dnp3RepoRoot --manifest $dnp3SourceManifest --stage $dnp3Stage
+if ($LASTEXITCODE -ne 0) {
+    throw 'Allowlisted package source staging failed.'
 }
+$dnp3PythonStage = Join-Path $dnp3Stage 'python'
 
 $dnp3BuildInfoPath = Join-Path $dnp3Stage 'bin\build-info.json'
 $dnp3BuildInfo = Get-Content -LiteralPath $dnp3BuildInfoPath -Raw | ConvertFrom-Json
 if ($dnp3BuildInfo.host_version -ne $dnp3PackageVersion) {
     throw "Installed host version '$($dnp3BuildInfo.host_version)' does not match package version '$dnp3PackageVersion'. Rebuild before packaging."
-}
-
-$dnp3VenvPython = Join-Path $dnp3RepoRoot '.venv\Scripts\python.exe'
-if (Test-Path -LiteralPath $dnp3VenvPython -PathType Leaf) {
-    $dnp3Python = $dnp3VenvPython
-}
-else {
-    $dnp3PythonCommand = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $dnp3PythonCommand) {
-        throw 'Python 3.10 or newer was not found for deterministic packaging.'
-    }
-    $dnp3Python = $dnp3PythonCommand.Source
 }
 
 $dnp3WheelStage = Join-Path $dnp3Stage 'python-dist'
@@ -274,6 +227,13 @@ if (-not $AllowNonCleanBuild) {
     if ($dnp3FinalGitCommit -ne $dnp3GitCommit -or $dnp3FinalGitStatus) {
         throw 'HEAD or the source worktree changed while the package was staged.'
     }
+}
+
+& $dnp3Python $dnp3SourceStager `
+    --repository $dnp3RepoRoot --manifest $dnp3SourceManifest `
+    --stage $dnp3Stage --verify-stage --version $dnp3PackageVersion
+if ($LASTEXITCODE -ne 0) {
+    throw 'Staged package contains missing or non-allowlisted files.'
 }
 
 & $dnp3Python (Join-Path $PSScriptRoot 'create_deterministic_zip.py') `

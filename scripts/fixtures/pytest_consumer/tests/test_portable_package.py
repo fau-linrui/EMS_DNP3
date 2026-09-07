@@ -43,8 +43,32 @@ def test_plugin_options_and_safe_empty_defaults_are_available(
 ) -> None:
     assert pytestconfig.getoption("--dnp3-host-exe") is None
     assert pytestconfig.getoption("--dnp3-allow-state-changing") is False
+    assert pytestconfig.getoption("--dnp3-simulator") is False
+    assert pytestconfig.getini("dnp3_simulator") is False
     assert dnp3_pics == {}
     assert dnp3_point_table is None
     assert dnp3_ems_test_plan is None
     assert dnp3_performance_profile is None
     assert dnp3_local_event_profile is None
+
+
+def test_packaged_simulator_mode_without_lab_identity_or_incident_store() -> None:
+    from dnp3_master.local_outstation import LocalTestOutstation
+
+    package_root = Path(os.environ["DNP3_EXPECTED_PACKAGE_ROOT"]).resolve()
+    points = dnp3_master.load_point_table(package_root / "config/points.example.csv")
+    plan = dnp3_master.load_ems_test_plan(
+        package_root / "config/ems_test_plan.simulator.example.json", points,
+    )
+    assert plan.environment == "SIMULATOR"
+    with LocalTestOutstation(package_root / "tools/dnp3-local-test-outstation.exe") as simulator:
+        with dnp3_master.Dnp3MasterClient(dnp3_master.HostProcessConfig(
+            package_root / "bin/dnp3-master-host.exe",
+        )) as client:
+            client.connect(dnp3_master.TcpConnectionConfig(
+                host="127.0.0.1", port=simulator.port, simulator=True,
+            ))
+            assert client.simulator_mode
+            for _ in range(2):
+                for scenario in plan.enabled_control_scenarios:
+                    assert client.direct_operate([scenario.command.to_command()]).all_success

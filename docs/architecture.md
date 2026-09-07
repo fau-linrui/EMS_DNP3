@@ -32,9 +32,19 @@ pytest/业务断言
 
 ## 生命周期与并发模型
 
+两种显式控制策略：LAB 使用操作人/DUT 授权和持久事故锁；SIMULATOR 由
+`TcpConnectionConfig.simulator=True` 声明，不需要身份或事故存储。
+两者均校验协议、保留有界等待并关闭不确定会话。pytest 模拟器 `connected_master`
+按用例创建独立 host，避免一次失败污染整个 session；LAB 保持原 session host。
+模拟器可批量/重复控制，计划中的审批、前置检查和恢复可选，反馈断言保留。
+详见 [模拟器模式](SIMULATOR_MODE.md)。
+
 - 一个 Python client 拥有一个 host 子进程；Windows 下 Job Object 保证父进程消失时回收整个子进程树。
 - 一个 host 最多创建一个 Manager、一个 TCP Client Channel 和一个 Master。
 - Python 用可重入锁保证同一时刻只有一个 NDJSON 请求在途；Read/命令支持层也拒绝重叠协议任务。
+- Python 每个 client 拥有一个容量为 1 的 stdin 写入队列及一个 writer 线程，写入与
+  响应等待使用同一截止时间；关闭时回收该线程及待写载荷。控制锁还覆盖结果校验和
+  事故处理，防止在不确定结果尚未处置时开始下一条操作。
 - 断开顺序为：停止/取消命令和 Read -> 取走共享资源 -> Master Disable/Shutdown -> Channel Shutdown -> Manager Shutdown -> 清除安全令牌。
 - OpenDNP3 回调只写入有界的任务状态/测量结构或 capture 队列；不会等待 Python 或 stdout。capture worker 在 native 层聚合，不构造跨任务逐点 JSON 数组。
 - stdout 由主协议线程独占，只输出 JSON；诊断写 stderr。
@@ -113,6 +123,11 @@ Python 客户端不公开令牌属性，只在内存中自动附加；高层连�
 构建时 `build-info.json` 固定 host 版本、Git commit、工作区 clean/dirty/unavailable 状态、OpenDNP3 commit、构建配置、目标架构、依赖锁哈希和能力矩阵哈希。pytest `EvidenceRecorder` 为每次运行原子生成脱敏 manifest/结果，私有 PICS、点表和场景计划只记文件名、大小和 SHA-256，已知项目/测试/host/输入/证据路径会替换为占位符。能力行升级到任一 `VERIFIED_*` 时，`evidence` 引用必须追加实际文件的 `#sha256=<64 hex>`，验证器会读取文件复算；仅有可变路径不能作为可审计证据。正式证据应使用 `git_worktree_state=clean` 的构建并保存这些文件，不应只记录 EXE 文件名；任意测试输出仍需人工审查后才能外发。
 
 发布脚本把安装树写入 `package-manifest.json`，再用固定时间戳、排序条目和固定压缩参数生成 ZIP/SHA-256；验证阶段在新目录解包、逐文件校验并执行真实本机回环，其中还包含 BI/AI/BOS/AOS 共 8 点的精确静态 capture。它保证相同安装树的 ZIP 字节稳定，但不声称 MSVC 输出本身已达到跨机器可复现。
+
+安装树的源码输入由 `scripts/package-source-files.json` 明确逐文件映射，原生制品仅
+复制两项已知 EXE 和 build-info。不会递归复制仓库目录；未列入允许清单的本地文件
+不读取、不复制。归档前要求文件集合恰好等于允许清单、原生制品及单个 wheel，
+拒绝额外文件、符号链接和 reparse point。
 
 ## 后续扩展顺序
 

@@ -1,5 +1,10 @@
 # EMS_DNP3 拉取、构建、移植与使用指南（Windows/pytest 小白版）
 
+如果 EMS 连接的全部是模拟设备，请先看 [模拟器入口](SIMULATOR_MODE.md)。构建和
+复制方法不变；pytest 配置一次 `dnp3_simulator = true`，本文中 LAB 的 operator/DUT ID、
+工单、事故解锁和逐次场景选择均不需要。使用精简的模拟器场景模板，不必照搬 LAB 的
+强制初值与恢复要求；本次需同时更新 Python、host 和场景文件。
+
 本文面向不熟悉 C++ 的测试开发人员。正常使用时，你只需要写 Python/pytest；C++ 已封装在 `dnp3-master-host.exe` 中，不需要在测试代码里调用 OpenDNP3，也不需要理解 C++ 指针或编译器细节。
 
 > 当前版本：0.6.1，目标平台 Windows x64，固定协议栈 OpenDNP3 3.1.2。当前实现已完成本机 TCP、Read/Class Poll、主动上报、测量值/IIN、CROB 和四种 Analog Output 控制的同栈回归，并提供持续 capture、大点表/事件性能和可中断 soak 工具；这些本机结果仍不代表真实 EMS 互操作、正式性能结论或 IEEE 一致性认证。

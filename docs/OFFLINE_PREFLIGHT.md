@@ -1,5 +1,9 @@
 # EMS 私有配置离线预检
 
+本入口保留 LAB 的正式身份/PICS 完备性检查，不是纯模拟器的运行门禁。
+模拟设备可直接使用 [模拟器模式](SIMULATOR_MODE.md)，由 pytest 校验点表和场景，
+无需先取得本工具的 READY，也不需为绕过预检伪造审批或 PICS。
+
 `python -m dnp3_master.preflight` 在建立任何 TCP 连接之前，交叉检查四个输入：
 
 1. EMS Device Profile/PICS JSON；

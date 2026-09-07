@@ -11,6 +11,11 @@ pytest -> dnp3_master Python package -> NDJSON -> dnp3-master-host.exe
 
 ## 当前能力
 
+如果 EMS 连接的全部是模拟设备，使用 [模拟器模式](docs/SIMULATOR_MODE.md)：
+在 pytest.ini 配置一次 `dnp3_simulator = true`，即可免审批、免事故解锁，批量/重复
+运行遥控遥调；无需 operator ID、DUT ID 或每次精确选一个场景。协议校验和失败断言保留。
+未显式启用时，以下 LAB 默认限制继续生效。
+
 - TCP Client 单会话连接、断开、连接超时、退避重连和有界状态事件。
 - 总召、Class 1/2/3 Poll、范围/计数/最多 64 Header 的 Read。
 - BI、DBBI、BOS、Counter、Frozen Counter、Analog、AOS、Octet String、Time-and-Interval 等公开测量回调的类型化交付。
@@ -29,7 +34,7 @@ pytest -> dnp3_master Python package -> NDJSON -> dnp3-master-host.exe
 - Python/host 版本、固定 OpenDNP3 版本及 pytest 能力矩阵 SHA-256 启动握手，防止混用旧产物。
 - 环境体检、clean-commit 发布门禁、可复现 wheel/ZIP/SHA-256/逐文件清单、包含 8 点精确静态 capture 的解包回环自检、空白 pytest 消费者迁移验收、Debug/Release/ASan 和 1,000 次生命周期验收入口。
 
-控制默认锁住。只有获批实验室运行显式提供允许开关、operator ID、DUT ID，并连接时取得一次性会话令牌后才能调用。控制超时不会自动重试；任何不确定结果都会销毁会话并留下持久事故锁，必须独立读回和显式确认。当前 `DIRECT_OPERATE_NR` 明确返回 `UNSUPPORTED_BY_BACKEND`。
+控制默认锁住。只有获批实验室运行显式提供允许开关、operator ID、DUT ID，并连接时取得一次性会话令牌后才能调用。控制超时不会自动重试；任何不确定结果，包括请求可能发出后被 Ctrl+C 中断，都会销毁会话并留下持久事故锁，必须独立读回和显式确认。当前 `DIRECT_OPERATE_NR` 明确返回 `UNSUPPORTED_BY_BACKEND`。
 
 > 重要：当前 DNP3 端到端回归的主站和测试从站都使用同一 OpenDNP3 版本，只是本机工程验证，不是与真实 EMS 的互操作结论，也不是 IEEE 一致性认证。能力矩阵中的对应状态因此保持 `IMPLEMENTED_UNVERIFIED`。
 
@@ -74,6 +79,8 @@ out\build\windows-msvc-release\bin\build-info.json
 校验文件位于 `out\package\ems-dnp3-pytest-0.6.1*`。`package.ps1` 默认也会拒绝
 dirty/stale build；`-AllowNonCleanBuild` 只能用于本地检查，产物不得发布。包不会包含
 本地 IEEE 标准 PDF、EMS PICS、点表、场景计划、PCAP 或密钥。
+源码复制严格遵循 `scripts/package-source-files.json`，不会递归打包被 Git 忽略的
+本地文件；新增需要随包交付的源码或文档时，必须同步更新这个逐文件允许清单。
 
 ## 集成到现有 pytest
 

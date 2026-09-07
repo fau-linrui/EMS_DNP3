@@ -294,6 +294,13 @@ std::optional<BackendError> parse_connection_config(
                 16)) {
             return error;
         }
+        if (output.safety_environment == "SIMULATOR") {
+            if (safety->size() != 1) {
+                return invalid_parameter("safety", "simulator_accepts_environment_only");
+            }
+            output.allow_state_change = true;
+            return std::nullopt;
+        }
         if (output.safety_environment != "LAB") {
             return invalid_parameter(
                 "safety.environment",

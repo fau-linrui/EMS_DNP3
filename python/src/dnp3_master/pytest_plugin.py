@@ -52,6 +52,14 @@ _FRAMEWORK_STATUSES = _FRAMEWORK_READY_STATUSES | frozenset(
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addini(
+        "dnp3_simulator", "Enable unrestricted simulated-device control tests",
+        type="bool", default=False,
+    )
+    parser.getgroup("dnp3-master").addoption(
+        "--dnp3-simulator", action="store_true", default=False,
+        help="Simulated devices: no operator approval or persistent incident locks",
+    )
     group = parser.getgroup("dnp3-master")
     group.addoption(
         "--dnp3-host-exe",
@@ -363,6 +371,8 @@ def _load_pics_capabilities(
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    simulator = _simulator_enabled(config)
+    setattr(config, "_dnp3_simulator", simulator)
     for marker in (
         "dnp3_capability(name): trace a test to one capability-matrix identifier",
         "dnp3_dut: apply PICS capability gating before touching a real DUT",
@@ -372,6 +382,7 @@ def pytest_configure(config: pytest.Config) -> None:
         "may change DUT state",
         "dnp3_performance: bounded performance or large-point-table test",
         "dnp3_soak: interruption-aware stability/soak runner test",
+        "dnp3_simulator: simulated-device execution, not real-DUT acceptance evidence",
     ):
         config.addinivalue_line("markers", marker)
 
@@ -436,6 +447,10 @@ def pytest_configure(config: pytest.Config) -> None:
         ems_plan_path = Path(configured_plan).expanduser().resolve(strict=False)
         try:
             ems_plan = load_ems_test_plan(ems_plan_path, point_table)
+            if ems_plan.environment == "SIMULATOR" and not simulator:
+                raise pytest.UsageError(
+                    "a SIMULATOR plan requires --dnp3-simulator or dnp3_simulator=true"
+                )
         except EmsTestPlanError as error:
             raise pytest.UsageError(f"invalid DNP3 EMS test plan: {error}") from error
     selected_control_id = config.getoption("--dnp3-control-scenario")
@@ -531,7 +546,10 @@ def pytest_configure(config: pytest.Config) -> None:
                     "performance_profile": performance_path,
                     "local_event_profile": local_event_path,
                 },
-                runner={"pytest_version": pytest.__version__},
+                runner={
+                    "pytest_version": pytest.__version__,
+                    "dnp3_environment": "SIMULATOR" if simulator else "LAB",
+                },
             )
         except (OSError, ValueError) as error:
             raise pytest.UsageError(
@@ -611,7 +629,26 @@ def _unknown_policy(config: pytest.Config) -> str:
     return configured
 
 
+def _simulator_enabled(config: pytest.Config) -> bool:
+    # Resolve once so collection, connection fixtures, and evidence use the
+    # same policy even if a test changes process environment variables later.
+    cached = getattr(config, "_dnp3_simulator", None)
+    if type(cached) is bool:
+        return cached
+    if bool(config.getoption("--dnp3-simulator")):
+        return True
+    raw = os.environ.get("DNP3_SIMULATOR")
+    if raw is not None:
+        value = raw.strip().lower()
+        if value not in _TRUE_VALUES | {"0", "false", "no", "off"}:
+            raise pytest.UsageError("DNP3_SIMULATOR must be a boolean (1/0, true/false)")
+        return value in _TRUE_VALUES
+    return bool(config.getini("dnp3_simulator"))
+
+
 def _state_changing_authorized(config: pytest.Config) -> bool:
+    if _simulator_enabled(config):
+        return True
     if bool(config.getoption("--dnp3-allow-state-changing")):
         return True
     return os.environ.get("DNP3_ALLOW_STATE_CHANGING", "").strip().lower() in _TRUE_VALUES
@@ -638,10 +675,12 @@ def pytest_collection_modifyitems(
     )
     policy = _unknown_policy(config)
     state_changing_authorized = _state_changing_authorized(config)
+    simulator = _simulator_enabled(config)
     collection_errors: list[str] = []
 
     if (
         state_changing_authorized
+        and not simulator
         and _xdist_active(config)
         and any(
             item.get_closest_marker("dnp3_state_changing") is not None
@@ -654,6 +693,8 @@ def pytest_collection_modifyitems(
         )
 
     for item in items:
+        if simulator:
+            item.add_marker(pytest.mark.dnp3_simulator)
         state_changing_test = item.get_closest_marker("dnp3_state_changing") is not None
         dut_test = item.get_closest_marker("dnp3_dut") is not None
         if state_changing_test and not dut_test:
@@ -671,7 +712,7 @@ def pytest_collection_modifyitems(
                     )
                 )
             )
-        elif state_changing_test:
+        elif state_changing_test and not simulator:
             operator_id = config.getoption("--dnp3-operator-id") or os.environ.get(
                 "DNP3_OPERATOR_ID"
             )
@@ -764,7 +805,7 @@ def pytest_collection_modifyitems(
             for capability_id, status in statuses.items()
             if status == "UNKNOWN"
         ]
-        if unknown:
+        if unknown and not simulator:
             reason = "DUT capability is UNKNOWN: " + ", ".join(sorted(unknown))
             if capabilities is None:
                 reason += "; no --dnp3-pics-file/DNP3_PICS_FILE was supplied"
@@ -941,7 +982,8 @@ def dnp3_connection_config(
     state_changing_test = (
         request.node.get_closest_marker("dnp3_state_changing") is not None
     )
-    if state_changing_test and _state_changing_authorized(pytestconfig):
+    simulator = _simulator_enabled(pytestconfig)
+    if state_changing_test and not simulator and _state_changing_authorized(pytestconfig):
         operator_id = pytestconfig.getoption("--dnp3-operator-id") or os.environ.get(
             "DNP3_OPERATOR_ID"
         )
@@ -1035,6 +1077,7 @@ def dnp3_connection_config(
                 )
             ),
             safety=safety,
+            simulator=simulator,
         )
     except ValueError as error:
         raise pytest.UsageError(f"invalid DNP3 connection configuration: {error}") from error
@@ -1042,11 +1085,18 @@ def dnp3_connection_config(
 
 @pytest.fixture
 def connected_master(
-    master_client: Dnp3MasterClient,
+    request: pytest.FixtureRequest,
     dnp3_connection_config: TcpConnectionConfig,
 ) -> Iterator[Dnp3MasterClient]:
-    master_client.connect(dnp3_connection_config)
+    # A failed simulator exchange must not poison every later test in the run.
+    owned = dnp3_connection_config.simulator
+    if owned:
+        master_client = Dnp3MasterClient(request.getfixturevalue("dnp3_host_config"))
+        master_client.start()
+    else:
+        master_client = request.getfixturevalue("master_client")
     try:
+        master_client.connect(dnp3_connection_config)
         yield master_client
     finally:
         try:
@@ -1055,3 +1105,8 @@ def connected_master(
         except HostCommandError as error:
             if error.code != "NOT_CONNECTED":
                 raise
+        finally:
+            if owned:
+                diagnostics = master_client.close()
+                if diagnostics.cleanup_error is not None:
+                    pytest.fail(f"DNP3 simulator host cleanup failed: {diagnostics.cleanup_error}")

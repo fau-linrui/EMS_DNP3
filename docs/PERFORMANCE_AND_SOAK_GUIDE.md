@@ -274,6 +274,11 @@ final-report.json
 有界窗口和 anchor。磁盘余量或证据字节上限不足会 fail closed。Ctrl+C/停止
 回调得到 `INCOMPLETE_INTERRUPTED`，不会与下次运行拼成 24 小时。
 
+结束判定先检查停止请求和 host 存活，再判断目标时长；成功结束前还会读取通道
+状态、排空连接事件、再次检查停止/存活，并保存最后一次资源样本。最后一次休眠
+期间 host 退出或出现停止请求不能得到 `passed=true`；最终通道必须保持 OPEN，
+连接事件不得丢失。
+
 主要终态：
 
 | status | 含义 |

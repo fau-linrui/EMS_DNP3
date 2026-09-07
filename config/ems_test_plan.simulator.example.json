@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "environment": "SIMULATOR",
+  "poll_scenarios": [],
+  "unsolicited_scenarios": [],
+  "control_scenarios": [
+    {
+      "scenario_id": "sim-binary-on",
+      "enabled": true,
+      "control_mode": "direct_operate",
+      "command": {
+        "type": "crob", "index": 0, "operation": "latch_on",
+        "trip_close": "null", "clear": false, "count": 1,
+        "on_time_ms": 0, "off_time_ms": 0
+      },
+      "feedback_point_id": "BO_DEMO_0001",
+      "postcondition": { "value": true, "absolute_tolerance": 0 },
+      "command_timeout_seconds": 5,
+      "feedback_timeout_seconds": 5,
+      "feedback_poll_interval_seconds": 0.1
+    },
+    {
+      "scenario_id": "sim-analog-set",
+      "enabled": true,
+      "control_mode": "direct_operate",
+      "command": { "type": "analog_output_float32", "index": 0, "value": 1.0 },
+      "feedback_point_id": "AO_DEMO_0001",
+      "postcondition": { "value": 1.0, "absolute_tolerance": 0.01 },
+      "command_timeout_seconds": 5,
+      "feedback_timeout_seconds": 5,
+      "feedback_poll_interval_seconds": 0.1
+    }
+  ],
+  "notes": "仅用于模拟设备；示例索引须与模拟器匹配。可重复、批量执行，不审批、不要求恢复初值。"
+}

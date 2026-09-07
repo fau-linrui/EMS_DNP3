@@ -1,6 +1,16 @@
 # Python 子进程客户端与 pytest 集成（0.6.1）
 
+纯模拟器环境推荐 [模拟器模式](SIMULATOR_MODE.md)：直接 API 在 `TcpConnectionConfig`
+设置 `simulator=True`，pytest 配置 `dnp3_simulator = true`。无需 LAB safety/身份/事故目录，
+也无需 PICS 才能执行已实现功能；控制可批量/重复执行。下文审批/事故要求针对 LAB。
+
 `dnp3_master` 核心只依赖 Python 标准库。它启动 `dnp3-master-host.exe`、自动完成 hello、串行化单个在途请求、持续排空 stdout/stderr、验证严格响应、处理超时/异常退出，并在 Windows Job Object 中拥有整个子进程树。
+
+每个 client 使用一个有界 stdin writer；管道写入与响应等待共用同一个超时预算，
+host 停止读输入时也会超时并回收。超时后的进程/线程清理还有独立的有限等待。
+`HostProcessConfig.max_request_bytes` 默认 1 MiB（不含末尾 LF），允许 64 B～16 MiB；
+超限在发送前抛出 `ValueError`，会话仍可使用。需要更大请求时应同时配置 host 的
+`--max-request-bytes`，客户端限制不会自动修改 host 限制。
 
 ## 直接使用
 
@@ -313,6 +323,13 @@ host 启动/请求/关闭 timeout 也可通过 `--dnp3-startup-timeout`、`--dnp
 ## 关闭与生命周期
 
 上下文退出时先发送 `shutdown`；若 host 无响应，关闭 Job Object 并强制回收进程树。`close()` 可重复调用，返回最终 `HostProcessDiagnostics`。超时/协议破坏后 client 进入不可复用状态，应新建实例。
+
+控制请求一旦进入写入队列，`KeyboardInterrupt` / `SystemExit` 也按可能已执行处理，
+包括等待响应和校验结果时发生的中断。持久事故锁写入后，清除令牌并回收 host 与
+IO 线程，再传播原中断；异常带 `incident_id` 和 `details.persistent_safety_lock`。
+事故存储失败仍回收会话，并抛出 `SafetyIncidentPersistenceError`（原中断保留为 cause）。
+输入校验/序列化阶段尚未入队的中断不会产生事故锁；该处理不包含断电或强制终止
+Python 等无法运行异常清理的情况。
 
 正式资源回收验收：
 

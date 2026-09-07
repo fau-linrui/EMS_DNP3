@@ -474,8 +474,9 @@ public:
         BackendResources created;
         std::string safety_token;
         try {
-            if (config.allow_state_change && config.safety_environment == "LAB"
-                && !config.operator_id.empty() && !config.dut_id.empty()) {
+            if (config.safety_environment == "SIMULATOR"
+                || (config.allow_state_change && config.safety_environment == "LAB"
+                    && !config.operator_id.empty() && !config.dut_id.empty())) {
                 safety_token = generate_safety_token();
             }
             created.manager = std::make_unique<opendnp3::DNP3Manager>(1);

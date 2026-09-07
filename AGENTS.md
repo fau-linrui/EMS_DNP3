@@ -136,11 +136,15 @@ ctest --preset windows-msvc-release --output-on-failure
 
 ## 安全硬约束
 
-- 控制默认锁定。不得为了让测试通过而删除、弱化或绕过 pytest 收集门、会话 safety token、operator ID、DUT ID 或持久事故锁。
+用户已确认当前 EMS 的设备为模拟器且允许不限下发。使用项目已实现的显式
+SIMULATOR 模式（见 `docs/SIMULATOR_MODE.md`），不要重新把 LAB 审批、身份、持久
+事故锁、单场景选择或强制恢复套到模拟器。仍不自行连接未被置于任务范围内的网络。
+
+- 未启用 SIMULATOR 时控制默认锁定。LAB 模式不得为了让测试通过而绕过 pytest 收集门、会话 safety token、operator ID、DUT ID 或持久事故锁。
 - 未获得用户明确授权时，不运行带 `dnp3_state_changing` 的测试，不设置状态改变开关，也不向真实 DUT 发送 CROB/Analog Output 命令。
-- 控制超时或结果不确定时绝不自动重试；必须销毁会话、保留事故锁，并通过独立只读读回和显式确认流程处置。
+- 控制超时或结果不确定时不隐藏重试，必须销毁会话。LAB 保留事故锁并独立读回/显式确认；SIMULATOR 不访问事故锁，新 client 或下一条 pytest 用例可继续，无需人工解锁。
 - 不直接删除、改名或编辑 `active/*.json` 事故锁。
-- 同一 DUT 的控制测试必须串行；不要使用 pytest-xdist 或多个主站并行控制同一设备。
+- LAB 同一 DUT 的控制测试必须串行，不使用 pytest-xdist。SIMULATOR 允许批量/重复；并行写同一点会干扰反馈，测试应自行隔离状态。
 - 未实现能力必须返回稳定且明确的错误，例如 `UNSUPPORTED_BY_BACKEND`；禁止空实现、伪造测量或返回假成功。
 
 ## 敏感数据与提交边界

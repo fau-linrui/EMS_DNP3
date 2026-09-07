@@ -437,6 +437,16 @@ void test_connection_config_contract()
     check(!error.has_value(), "explicit LAB authorization must parse");
     check(lab.allow_state_change, "LAB state-change authorization must be preserved");
 
+    dnp3host::ConnectionConfig simulator;
+    error = dnp3host::parse_connection_config(
+        dnp3host::Json{{"host", "127.0.0.1"},
+                       {"safety", dnp3host::Json{{"environment", "SIMULATOR"}}}},
+        simulator);
+    check(!error.has_value(), "simulator mode requires no operator or DUT identity");
+    check(simulator.allow_state_change, "simulator controls must be enabled");
+    check(simulator.operator_id.empty() && simulator.dut_id.empty(),
+        "simulator mode must not manufacture LAB identities");
+
     const auto expect_error = [](const dnp3host::Json& params,
                                  const std::string_view field,
                                  const std::string_view reason) {
@@ -457,6 +467,11 @@ void test_connection_config_contract()
     };
 
     expect_error(dnp3host::Json::object(), "host", "missing_field");
+    expect_error(
+        dnp3host::Json{{"host", "127.0.0.1"},
+                       {"safety", dnp3host::Json{{"environment", "SIMULATOR"},
+                                               {"allow_state_change", false}}}},
+        "safety", "simulator_accepts_environment_only");
     expect_error(
         dnp3host::Json{{"host", "127.0.0.1"}, {"extra", true}},
         "extra",

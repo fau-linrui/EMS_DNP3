@@ -557,10 +557,6 @@ def run_soak(
         while True:
             now = monotonic()
             elapsed = now - start
-            if elapsed >= profile.soak.target_duration_seconds:
-                status = "COMPLETED"
-                status_reason = "target duration reached"
-                break
             if stopper():
                 status = "INCOMPLETE_INTERRUPTED"
                 status_reason = "stop was requested"
@@ -568,6 +564,10 @@ def run_soak(
             if not client.is_running:
                 status = "INCOMPLETE_HOST_EXIT"
                 status_reason = "native host process exited"
+                break
+            if elapsed >= profile.soak.target_duration_seconds:
+                status = "COMPLETED"
+                status_reason = "target duration reached"
                 break
 
             observe_channel_events()
@@ -653,9 +653,34 @@ def run_soak(
                 checkpoint(now)
                 last_checkpoint = now
             if profile.soak.cycle_interval_seconds:
-                sleep(profile.soak.cycle_interval_seconds)
+                sleep(min(
+                    profile.soak.cycle_interval_seconds,
+                    max(0.0, profile.soak.target_duration_seconds - (now - start)),
+                ))
+        if status == "COMPLETED":
+            # Reaching the time target is necessary but not sufficient. Audit
+            # the final interval before accepting the run's terminal state.
+            terminal_status = client.get_status(
+                timeout=min(5.0, profile.soak.watchdog_timeout_seconds)
+            )
+            terminal_channel = terminal_status.get("channel")
+            if not isinstance(terminal_channel, Mapping) or terminal_channel.get("state") != "OPEN":
+                raise _ConnectionEvidenceError("soak must finish with an OPEN DNP3 channel")
         if client.is_running:
             observe_channel_events()
+        if status == "COMPLETED":
+            if stopper():
+                status = "INCOMPLETE_INTERRUPTED"
+                status_reason = "stop was requested during final verification"
+            elif not client.is_running:
+                status = "INCOMPLETE_HOST_EXIT"
+                status_reason = "native host process exited during final verification"
+            elif observed_channel_state != "OPEN":
+                raise _ConnectionEvidenceError("final channel event state is not OPEN")
+            else:
+                if len(resources) >= _MAX_RESOURCE_SAMPLES:
+                    raise SoakRunnerError("resource sample capacity reached")
+                resources.append(active_sampler.sample())
     except KeyboardInterrupt:
         status = "INCOMPLETE_INTERRUPTED"
         status_reason = "operator interrupted the run"

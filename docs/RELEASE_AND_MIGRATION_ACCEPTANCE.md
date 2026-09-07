@@ -62,6 +62,14 @@ out\release\release-closure-report.json
 检查未提交代码的包结构，可以显式使用 `-AllowNonCleanBuild`；该开关生成的产物
 不得发布、不得作为正式测试证据。正式闭环始终使用 `release.ps1`，不使用这个开关。
 
+Git clean 不能证明忽略文件适合发布。源码输入另外受
+`scripts/package-source-files.json` 的逐文件允许清单约束，未列入的本地文件不会
+读取或复制（包括示例目录内被忽略的抓包/密钥）。原生文件仅复制已知 EXE 和
+build-info，归档前再核对允许清单加单个 wheel 的完整文件集合，额外文件会失败。
+清单禁止私有配置、抓包、密钥、PDF 和缓存；输入/输出链接及 reparse point 也拒绝。
+新增需要交付的 Python 模块、示例、Schema 或文档时，要显式更新此清单并运行
+`scripts/tests/test_stage_package_sources.py`；它不包含真实设备文件或测试运行证据。
+
 ## 3. 为什么发布包包含 wheel
 
 发布包内同时保留可审阅源码 `python\` 和可安装文件：
@@ -84,6 +92,11 @@ python-dist\dnp3_master_test_framework-0.6.1-py3-none-any.whl
 批准 wheel 提供。
 
 ## 4. 在目标框架执行迁移验收
+
+迁移 consumer 还会从隔离安装的 wheel 加载 SIMULATOR 计划，在包内回环从站验证免
+身份/免事故目录的重复 CROB/Float32 控制，并检查默认模式仍未启用模拟器。
+这仍是本机工程检查；不使用你的 EMS 地址。模拟器功能的运行说明见
+[SIMULATOR_MODE.md](SIMULATOR_MODE.md)。
 
 把完整发布包放到 `third_party\ems_dnp3` 后，在目标 pytest 项目根目录执行：
 

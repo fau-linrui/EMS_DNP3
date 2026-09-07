@@ -96,6 +96,11 @@ def wait_for_static_value(
             break
         time.sleep(min(poll_interval_seconds, remaining))
     observed = None if last_measurement is None else last_measurement.value
+    if getattr(client, "simulator_mode", False) is True:
+        raise AssertionError(
+            f"{point.point_id}: {phase} feedback did not reach the expected value; "
+            f"last observed={observed!r}. Check simulator mapping and state; no control was retried."
+        )
     raise AssertionError(
         f"{point.point_id}: {phase} feedback did not reach the approved value; "
         f"last observed={observed!r}. Stop all further controls and perform "

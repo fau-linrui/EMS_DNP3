@@ -14,6 +14,7 @@ import queue
 import re
 import subprocess
 import threading
+import time
 from typing import Any, BinaryIO, Sequence
 import uuid
 
@@ -52,6 +53,7 @@ _DIAGNOSTIC_SAFETY_TOKEN_PATTERN = re.compile(
     r'("safety_token"\s*:\s*")[0-9a-fA-F]{32}(")'
 )
 _STDOUT_EOF = object()
+_STDIN_STOP = object()
 _TYPED_API_COMMANDS = frozenset(
     {
         "hello",
@@ -92,6 +94,13 @@ class _ProtocolViolation(ValueError):
 @dataclass(frozen=True, slots=True)
 class _StreamFailure:
     message: str
+
+
+@dataclass
+class _PendingWrite:
+    payload: bytes
+    completed: threading.Event
+    error: Exception | None = None
 
 
 class _TailBuffer:
@@ -155,9 +164,14 @@ class Dnp3MasterClient:
         self._stderr_tail = _TailBuffer(config.diagnostic_tail_bytes)
         self._stdout_thread: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
+        self._stdin_thread: threading.Thread | None = None
+        self._stdin_queue: queue.Queue[object] = queue.Queue(maxsize=1)
+        self._io_stopping = threading.Event()
+        self._request_write_started = False
         self._hello_info: dict[str, Any] | None = None
         self._safety_token: str | None = None
         self._active_dut_id: str | None = None
+        self._simulator_mode = False
         self._safety_incident_store = (
             SafetyIncidentStore(config.safety_incident_directory)
             if config.safety_incident_directory is not None
@@ -212,6 +226,12 @@ class Dnp3MasterClient:
         """Whether the active session owns a non-exported short-lived safety token."""
 
         return self._safety_token is not None
+
+    @property
+    def simulator_mode(self) -> bool:
+        """Whether the last successful connection explicitly selected simulation."""
+
+        return self._simulator_mode
 
     def start(self) -> Mapping[str, Any]:
         with self._request_lock:
@@ -352,17 +372,21 @@ class Dnp3MasterClient:
             and (not isinstance(token, str) or not _SAFETY_TOKEN_PATTERN.fullmatch(token))
         ) or (not authorized and token is not None) or (
             authorized
+            and not config.simulator
             and (
                 config.safety is None
                 or config.safety.allow_state_change is not True
             )
-        ):
+        ) or (config.simulator and (
+            not authorized or safety.get("environment") != "SIMULATOR"
+        )) or (not config.simulator and safety.get("environment") == "SIMULATOR"):
             self._abort_process("connect returned invalid safety metadata")
             raise HostProtocolError(
                 "connect result contains inconsistent safety authorization",
                 self.diagnostics,
             )
         self._safety_token = token if authorized else None
+        self._simulator_mode = config.simulator
         self._active_dut_id = (
             config.safety.dut_id
             if authorized and config.safety is not None
@@ -764,10 +788,28 @@ class Dnp3MasterClient:
         response_mode: str,
         request_timeout: float | None,
     ) -> CommandTaskResult:
+        # Keep validation, dispatch, and incident handling in one critical
+        # section, so another caller cannot race an uncertain result.
+        with self._request_lock:
+            return self._command_task_result_locked(
+                command, commands, timeout=timeout,
+                response_mode=response_mode, request_timeout=request_timeout,
+            )
+
+    def _command_task_result_locked(
+        self,
+        command: str,
+        commands: Sequence[CrobCommand | AnalogOutputCommand],
+        *,
+        timeout: float,
+        response_mode: str,
+        request_timeout: float | None,
+    ) -> CommandTaskResult:
         if self._safety_token is None:
             raise ClientStateError(
                 "state-changing command is locked; connect with a LabSafetyConfig "
-                "whose allow_state_change is explicitly true"
+                "whose allow_state_change is explicitly true, or simulator=True "
+                "for a simulated device"
             )
         if isinstance(commands, (str, bytes)):
             raise TypeError("commands must be a sequence of command model objects")
@@ -813,14 +855,44 @@ class Dnp3MasterClient:
             "response_mode": response_mode,
             "commands": [item.to_params() for item in normalized],
         }
-        store, dut_id = self._incident_context(self._active_dut_id)
-        store.assert_clear(dut_id)
+        if not self._simulator_mode:
+            store, dut_id = self._incident_context(self._active_dut_id)
+            store.assert_clear(dut_id)
         params = {
             "safety_token": self._safety_token,
             "timeout_ms": command_payload["timeout_ms"],
             "response_mode": command_payload["response_mode"],
             "commands": command_payload["commands"],
         }
+        self._request_write_started = False
+        try:
+            return self._execute_command_task(
+                command, normalized, command_payload, params, exchange_timeout,
+            )
+        except (KeyboardInterrupt, SystemExit) as error:
+            if self._request_write_started:
+                self._handle_uncertain_command(
+                    operation=command,
+                    command_payload=command_payload,
+                    commands=normalized,
+                    request_id="interrupted-command-exchange",
+                    error_code=type(error).__name__.upper(),
+                    execution_uncertain=True,
+                    may_still_execute=True,
+                    original_error=error,
+                )
+            raise
+        finally:
+            self._request_write_started = False
+
+    def _execute_command_task(
+        self,
+        command: str,
+        normalized: tuple[CrobCommand | AnalogOutputCommand, ...],
+        command_payload: Mapping[str, Any],
+        params: Mapping[str, Any],
+        exchange_timeout: float,
+    ) -> CommandTaskResult:
         try:
             raw_result = self._request(command, params, timeout=exchange_timeout)
             result = self._mapping_result(command, raw_result)
@@ -885,6 +957,8 @@ class Dnp3MasterClient:
                 request_id=f"command-task-{parsed.task_id}",
                 code="UNCERTAIN_COMMAND_RESULT",
                 message=(
+                    "simulator command outcome is uncertain; start a new client session"
+                    if self._simulator_mode else
                     "command result requires independent readback before the "
                     "session can be reused"
                 ),
@@ -979,8 +1053,26 @@ class Dnp3MasterClient:
         error_code: str,
         execution_uncertain: bool,
         may_still_execute: bool,
-        original_error: Exception,
+        original_error: BaseException,
     ) -> None:
+        if self._simulator_mode:
+            # The exchange is no longer trustworthy, but a simulator needs no
+            # persistent incident or operator readback before a fresh session.
+            self._abort_process(
+                f"simulator command '{operation}' has an uncertain outcome"
+            )
+            details = getattr(original_error, "details", None)
+            if not isinstance(details, dict):
+                details = {}
+                setattr(original_error, "details", details)
+            details.update({
+                "environment": "SIMULATOR",
+                "execution_uncertain": execution_uncertain,
+                "may_still_execute": may_still_execute,
+                "persistent_safety_lock": False,
+                "required_action": "START_NEW_SESSION",
+            })
+            return
         incident: Mapping[str, Any] | None = None
         persistence_error: Exception | None = None
         try:
@@ -1047,6 +1139,8 @@ class Dnp3MasterClient:
             details = getattr(original_error, "details", None)
             if isinstance(details, dict):
                 details.update(incident_details)
+            else:
+                setattr(original_error, "details", incident_details)
 
     @staticmethod
     def _event_classes(classes: Sequence[int]) -> tuple[int, ...]:
@@ -1269,6 +1363,13 @@ class Dnp3MasterClient:
 
         assert process.stdout is not None
         assert process.stderr is not None
+        assert process.stdin is not None
+        self._stdin_thread = threading.Thread(
+            target=self._write_stdin,
+            args=(process.stdin,),
+            name=f"dnp3-host-stdin-{process.pid}",
+            daemon=True,
+        )
         self._stdout_thread = threading.Thread(
             target=self._read_stdout,
             args=(process.stdout,),
@@ -1283,6 +1384,29 @@ class Dnp3MasterClient:
         )
         self._stdout_thread.start()
         self._stderr_thread.start()
+        self._stdin_thread.start()
+
+    def _write_stdin(self, stream: BinaryIO) -> None:
+        while not self._io_stopping.is_set():
+            pending = self._stdin_queue.get()
+            if not isinstance(pending, _PendingWrite) or self._io_stopping.is_set():
+                return
+            try:
+                remaining = memoryview(pending.payload)
+                while remaining:
+                    written = stream.write(remaining)
+                    if written is None or written <= 0:
+                        raise BrokenPipeError("stdin write made no progress")
+                    remaining = remaining[written:]
+                stream.flush()
+            except Exception as error:
+                pending.error = error
+            finally:
+                pending.completed.set()
+            # Do not retain a previous command payload while idle.
+            del pending
+            if 'remaining' in locals():
+                del remaining
 
     def _read_stdout(self, stream: BinaryIO) -> None:
         limit = self.config.max_response_bytes
@@ -1334,6 +1458,7 @@ class Dnp3MasterClient:
             self._stderr_tail.append(f"\n[stderr reader failed: {error}]".encode("utf-8"))
 
     def _exchange(self, command: str, params: Mapping[str, Any], timeout: float) -> Any:
+        self._request_write_started = False
         if not isinstance(command, str) or not command or len(command.encode("ascii", errors="ignore")) > 64:
             raise ValueError("command must be a non-empty ASCII token of at most 64 bytes")
         if not _TOKEN_PATTERN.fullmatch(command):
@@ -1358,28 +1483,46 @@ class Dnp3MasterClient:
             )
         except (TypeError, ValueError) as error:
             raise ValueError(f"request is not JSON serializable: {error}") from error
+        if len(encoded) - 1 > self.config.max_request_bytes:
+            raise ValueError("request exceeds max_request_bytes")
 
         process = self._process
         if process is None or process.stdin is None or process.poll() is not None:
             self._raise_exited(command)
+        deadline = time.monotonic() + timeout
+        pending = _PendingWrite(encoded, threading.Event())
         try:
-            process.stdin.write(encoded)
-            process.stdin.flush()
-        except (BrokenPipeError, OSError) as error:
-            self._abort_process(f"failed to write request: {error}")
-            raise HostExitedError(
-                f"host exited while writing request '{command}'",
-                self.diagnostics,
-            ) from error
-
-        try:
-            item = self._stdout_queue.get(timeout=timeout)
+            # Conservative dispatch boundary: a write may start immediately
+            # after enqueue. A cancellation beyond here cannot prove no send.
+            self._request_write_started = True
+            self._stdin_queue.put_nowait(pending)
+            if not pending.completed.wait(max(0.0, deadline - time.monotonic())):
+                raise queue.Empty
+            if pending.error is not None:
+                self._abort_process("failed to write request")
+                raise HostExitedError(
+                    f"host failed while writing request '{command}'",
+                    self.diagnostics,
+                ) from pending.error
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise queue.Empty
+            item = self._stdout_queue.get(timeout=remaining)
         except queue.Empty as error:
             self._abort_process(f"request '{command}' timed out after {timeout:.3f}s")
             raise HostTimeoutError(
                 f"request '{command}' timed out after {timeout:.3f}s",
                 self.diagnostics,
             ) from error
+        except queue.Full as error:
+            self._abort_process("stdin request queue overflow")
+            raise HostProtocolError("stdin request queue overflow", self.diagnostics) from error
+        except (KeyboardInterrupt, SystemExit):
+            # Typed commands must persist the incident before destroying the
+            # session; other interrupted exchanges still invalidate the pipe.
+            if command not in {"direct_operate", "select_and_operate"}:
+                self._abort_process("host exchange interrupted")
+            raise
 
         if self._stdout_overflow.is_set():
             self._abort_process("stdout response queue overflow")
@@ -1537,6 +1680,7 @@ class Dnp3MasterClient:
 
     def _abort_process(self, reason: str) -> None:
         self._cleanup_error = self._cleanup_error or reason
+        self._safety_token = None
         process = self._process
         if self._job is not None:
             self._job.close()
@@ -1556,6 +1700,11 @@ class Dnp3MasterClient:
         self._store_diagnostics_and_release_process()
 
     def _finish_process_io(self) -> None:
+        self._io_stopping.set()
+        try:
+            self._stdin_queue.put_nowait(_STDIN_STOP)
+        except queue.Full:
+            pass
         process = self._process
         if process is None:
             return
@@ -1565,9 +1714,16 @@ class Dnp3MasterClient:
             process.wait(timeout=0)
         except subprocess.TimeoutExpired:
             return
-        for thread in (self._stdout_thread, self._stderr_thread):
+        for thread in (self._stdin_thread, self._stdout_thread, self._stderr_thread):
             if thread is not None and thread is not threading.current_thread():
                 thread.join(timeout=2)
+        # A cancellation can stop the writer before it takes the queued item.
+        # Release any remaining payload along with the terminated process.
+        while True:
+            try:
+                self._stdin_queue.get_nowait()
+            except queue.Empty:
+                break
         for stream in (process.stdin, process.stdout, process.stderr):
             if stream is not None:
                 try:
@@ -1590,6 +1746,7 @@ class Dnp3MasterClient:
     def _store_diagnostics_and_release_process(self) -> None:
         self._last_diagnostics = self._snapshot_diagnostics()
         self._process = None
+        self._stdin_thread = None
         self._stdout_thread = None
         self._stderr_thread = None
 

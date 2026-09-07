@@ -132,7 +132,12 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         selected = getattr(
             metafunc.config, "_dnp3_selected_control_scenario", None
         )
-        if selected is None or table is None:
+        scenarios = (selected,) if selected is not None else (
+            plan.enabled_control_scenarios
+            if plan is not None and getattr(metafunc.config, "_dnp3_simulator", False)
+            else ()
+        )
+        if not scenarios or table is None:
             parameters = [
                 pytest.param(
                     None,
@@ -146,20 +151,20 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
                 )
             ]
         else:
-            feedback_point = table.by_id[selected.feedback_point_id]
             parameters = [
                 pytest.param(
-                    selected,
+                    scenario,
                     marks=[
                         pytest.mark.dnp3_state_changing,
                         *(
                             pytest.mark.dnp3_capability(capability_id)
-                            for capability_id in selected.capability_ids(
-                                feedback_point
+                            for capability_id in scenario.capability_ids(
+                                table.by_id[scenario.feedback_point_id]
                             )
                         ),
                     ],
-                    id=selected.scenario_id,
+                    id=scenario.scenario_id,
                 )
+                for scenario in scenarios
             ]
         metafunc.parametrize("ems_control_scenario", parameters)

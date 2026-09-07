@@ -47,6 +47,12 @@
   },
   "allOf": [
     {
+      "if": { "properties": { "cmd": { "const": "connect" } } },
+      "then": { "properties": { "params": {
+        "properties": { "safety": { "$ref": "#/$defs/connectionSafety" } }
+      } } }
+    },
+    {
       "if": { "properties": { "cmd": { "const": "capture.begin" } } },
       "then": { "properties": { "params": { "$ref": "#/$defs/captureBeginParams" } } }
     },
@@ -60,6 +66,27 @@
     }
   ],
   "$defs": {
+    "connectionSafety": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["environment"],
+          "properties": { "environment": { "const": "SIMULATOR" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["environment", "allow_state_change", "operator_id", "dut_id"],
+          "properties": {
+            "environment": { "const": "LAB" },
+            "allow_state_change": { "type": "boolean" },
+            "operator_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[!-~]+$" },
+            "dut_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[!-~]+$" }
+          }
+        }
+      ]
+    },
     "captureId": {
       "type": "string",
       "minLength": 1,

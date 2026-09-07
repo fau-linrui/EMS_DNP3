@@ -418,10 +418,17 @@ def main() -> int:
 
         if command == "hello":
             write_json(success(request_id, hello_result(args.mode)))
+            if args.mode == "stop_reading_after_hello":
+                time.sleep(60)
+            if args.mode == "slow_request_io":
+                time.sleep(0.15)
             if args.mode == "exit_after_hello":
                 sys.stderr.write("controlled-exit-after-hello\n")
                 sys.stderr.flush()
                 return 37
+        elif command == "transport_probe" and args.mode == "slow_request_io":
+            time.sleep(0.15)
+            write_json(success(request_id, {}))
         elif command == "get_status":
             if args.mode == "hang_on_status":
                 time.sleep(60)
@@ -465,8 +472,11 @@ def main() -> int:
                 safety = request["params"].get("safety")
                 authorized = bool(
                     isinstance(safety, dict)
-                    and safety.get("environment") == "LAB"
-                    and safety.get("allow_state_change") is True
+                    and (
+                        safety.get("environment") == "SIMULATOR"
+                        or (safety.get("environment") == "LAB"
+                            and safety.get("allow_state_change") is True)
+                    )
                 )
                 safety_token = "0123456789abcdef0123456789abcdef" if authorized else None
                 write_json(
@@ -478,7 +488,7 @@ def main() -> int:
                             "session_id": 1,
                             "received": request["params"],
                             "safety": {
-                                "environment": "LAB" if authorized else "UNSPECIFIED",
+                                "environment": safety["environment"] if authorized else "UNSPECIFIED",
                                 "state_change_authorized": authorized,
                                 "safety_token": safety_token,
                                 "expires_on": "disconnect_or_process_exit",

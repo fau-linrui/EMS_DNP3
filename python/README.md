@@ -8,6 +8,13 @@ continuous capture, bounded performance/soak runners, Windows process metrics,
 state-change safety gates, and opt-in fixtures without exposing OpenDNP3-specific
 C++ APIs to test cases.
 
+For simulated devices, set `dnp3_simulator = true` in pytest.ini (or pass
+`--dnp3-simulator`). Direct API callers use `TcpConnectionConfig(..., simulator=True)`.
+This mode needs no operator/DUT identity or incident directory, permits batch/repeat
+controls and optional scenario restoration, and labels pytest evidence SIMULATOR.
+Protocol checks and bounded failure handling remain; LAB is the unchanged default.
+See `docs/SIMULATOR_MODE.md` in the portable package/repository.
+
 The core package uses only the Python standard library. Enable the fixtures from
 the consuming framework's root `conftest.py`:
 

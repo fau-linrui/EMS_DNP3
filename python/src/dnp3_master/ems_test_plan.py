@@ -310,18 +310,19 @@ class ControlCommand:
 class ControlScenario:
     scenario_id: str
     enabled: bool
-    authorization_reference: str
+    authorization_reference: str | None
     control_mode: str
     command: ControlCommand
     feedback_point_id: str
-    precondition: ValueExpectation
+    precondition: ValueExpectation | None
     postcondition: ValueExpectation
-    restore_command: ControlCommand
-    restore_expectation: ValueExpectation
+    restore_command: ControlCommand | None
+    restore_expectation: ValueExpectation | None
     command_timeout_seconds: float
     feedback_timeout_seconds: float
     feedback_poll_interval_seconds: float
     notes: str | None = None
+    environment: str = "LAB"
 
     def capability_ids(self, feedback_point: PointDefinition) -> tuple[str, ...]:
         operation_capabilities = (
@@ -336,7 +337,8 @@ class ControlScenario:
                     *operation_capabilities,
                     self.command.capability_id,
                     self.command.qualifier_capability_id,
-                    self.restore_command.qualifier_capability_id,
+                    *((self.restore_command.qualifier_capability_id,)
+                      if self.restore_command is not None else ()),
                     "APP.FC.01.READ",
                     feedback_point.capability_id,
                     feedback_point.read_qualifier_capability_id,
@@ -348,18 +350,20 @@ class ControlScenario:
         result: dict[str, object] = {
             "scenario_id": self.scenario_id,
             "enabled": self.enabled,
-            "authorization_reference": self.authorization_reference,
             "control_mode": self.control_mode,
             "command": self.command.to_mapping(),
             "feedback_point_id": self.feedback_point_id,
-            "precondition": self.precondition.to_mapping(),
             "postcondition": self.postcondition.to_mapping(),
-            "restore_command": self.restore_command.to_mapping(),
-            "restore_expectation": self.restore_expectation.to_mapping(),
             "command_timeout_seconds": self.command_timeout_seconds,
             "feedback_timeout_seconds": self.feedback_timeout_seconds,
             "feedback_poll_interval_seconds": self.feedback_poll_interval_seconds,
         }
+        if self.authorization_reference is not None:
+            result["authorization_reference"] = self.authorization_reference
+        for name in ("precondition", "restore_command", "restore_expectation"):
+            value = getattr(self, name)
+            if value is not None:
+                result[name] = value.to_mapping()
         if self.notes is not None:
             result["notes"] = self.notes
         return result
@@ -373,6 +377,7 @@ class EmsTestPlan:
     control_scenarios: tuple[ControlScenario, ...]
     notes: str | None = None
     schema_version: int = EMS_TEST_PLAN_SCHEMA_VERSION
+    environment: str = "LAB"
 
     @property
     def enabled_poll_scenarios(self) -> tuple[PollScenario, ...]:
@@ -409,6 +414,8 @@ class EmsTestPlan:
                 scenario.to_mapping() for scenario in self.control_scenarios
             ],
         }
+        if self.environment != "LAB":
+            result["environment"] = self.environment
         if self.notes is not None:
             result["notes"] = self.notes
         return result
@@ -847,8 +854,14 @@ def _control_command(path: Path, location: str, value: object) -> ControlCommand
     return command
 
 
-def _control_scenario(path: Path, index: int, value: object) -> ControlScenario:
+def _control_scenario(
+    path: Path, index: int, value: object, *, environment: str = "LAB",
+) -> ControlScenario:
     location = f"control_scenarios[{index}]"
+    simulator = environment == "SIMULATOR"
+    lab_fields = frozenset({
+        "authorization_reference", "precondition", "restore_command", "restore_expectation",
+    })
     document = _object(
         path,
         location,
@@ -857,20 +870,16 @@ def _control_scenario(path: Path, index: int, value: object) -> ControlScenario:
             {
                 "scenario_id",
                 "enabled",
-                "authorization_reference",
                 "control_mode",
                 "command",
                 "feedback_point_id",
-                "precondition",
                 "postcondition",
-                "restore_command",
-                "restore_expectation",
                 "command_timeout_seconds",
                 "feedback_timeout_seconds",
                 "feedback_poll_interval_seconds",
             }
-        ),
-        optional=frozenset({"notes"}),
+        ) | (frozenset() if simulator else lab_fields),
+        optional=frozenset({"notes"}) | (lab_fields if simulator else frozenset()),
     )
     scenario_id = _scenario_id(
         path, f"{location}.scenario_id", document["scenario_id"]
@@ -881,8 +890,8 @@ def _control_scenario(path: Path, index: int, value: object) -> ControlScenario:
         f"{location}.authorization_reference",
         document["authorization_reference"],
         maximum_utf8_bytes=512,
-    )
-    if enabled and any(
+    ) if "authorization_reference" in document else None
+    if not simulator and enabled and any(
         token in authorization_reference.upper()
         for token in _PLACEHOLDER_AUTHORIZATION_TOKENS
     ):
@@ -906,8 +915,8 @@ def _control_scenario(path: Path, index: int, value: object) -> ControlScenario:
     command = _control_command(path, f"{location}.command", document["command"])
     restore_command = _control_command(
         path, f"{location}.restore_command", document["restore_command"]
-    )
-    if (
+    ) if "restore_command" in document else None
+    if restore_command is not None and (
         command.command_type != restore_command.command_type
         or command.index != restore_command.index
     ):
@@ -916,7 +925,7 @@ def _control_scenario(path: Path, index: int, value: object) -> ControlScenario:
             f"{location}.restore_command",
             "must use the same command type and index as command",
         )
-    if command.to_mapping() == restore_command.to_mapping():
+    if not simulator and command.to_mapping() == restore_command.to_mapping():
         raise _error(
             path,
             f"{location}.restore_command",
@@ -924,20 +933,22 @@ def _control_scenario(path: Path, index: int, value: object) -> ControlScenario:
         )
     precondition = _expectation(
         path, f"{location}.precondition", document["precondition"]
-    )
+    ) if "precondition" in document else None
     postcondition = _expectation(
         path, f"{location}.postcondition", document["postcondition"]
     )
     restore_expectation = _expectation(
         path, f"{location}.restore_expectation", document["restore_expectation"]
-    )
-    if precondition.to_mapping() != restore_expectation.to_mapping():
+    ) if "restore_expectation" in document else None
+    if (restore_command is None) != (restore_expectation is None):
+        raise _error(path, location, "restore_command and restore_expectation must be supplied together")
+    if not simulator and precondition.to_mapping() != restore_expectation.to_mapping():
         raise _error(
             path,
             f"{location}.restore_expectation",
             "must exactly equal precondition so the scenario restores its baseline",
         )
-    if precondition.overlaps(postcondition):
+    if not simulator and precondition.overlaps(postcondition):
         raise _error(
             path,
             f"{location}.postcondition",
@@ -964,6 +975,7 @@ def _control_scenario(path: Path, index: int, value: object) -> ControlScenario:
             "must not exceed feedback_timeout_seconds",
         )
     return ControlScenario(
+        environment=environment,
         scenario_id=scenario_id,
         enabled=enabled,
         authorization_reference=authorization_reference,
@@ -1094,6 +1106,8 @@ def _validate_point_references(
             ("postcondition", scenario.postcondition),
             ("restore_expectation", scenario.restore_expectation),
         ):
+            if expectation is None:
+                continue
             _validate_expectation_for_point(
                 path, f"{location}.{field_name}", expectation, point
             )
@@ -1137,7 +1151,7 @@ def load_ems_test_plan(path: str | Path, point_table: PointTable) -> EmsTestPlan
                 "control_scenarios",
             }
         ),
-        optional=frozenset({"notes"}),
+        optional=frozenset({"notes", "environment"}),
     )
     if root["schema_version"] != EMS_TEST_PLAN_SCHEMA_VERSION:
         raise _error(
@@ -1145,6 +1159,9 @@ def load_ems_test_plan(path: str | Path, point_table: PointTable) -> EmsTestPlan
             "$.schema_version",
             f"must equal {EMS_TEST_PLAN_SCHEMA_VERSION}",
         )
+    environment = root.get("environment", "LAB")
+    if environment not in ("LAB", "SIMULATOR"):
+        raise _error(source_path, "$.environment", "must be LAB or SIMULATOR")
     polls_raw = _array(
         source_path,
         "$.poll_scenarios",
@@ -1172,7 +1189,7 @@ def load_ems_test_plan(path: str | Path, point_table: PointTable) -> EmsTestPlan
         for index, value in enumerate(unsolicited_raw)
     )
     control_scenarios = tuple(
-        _control_scenario(source_path, index, value)
+        _control_scenario(source_path, index, value, environment=environment)
         for index, value in enumerate(controls_raw)
     )
     all_ids = [
@@ -1189,6 +1206,7 @@ def load_ems_test_plan(path: str | Path, point_table: PointTable) -> EmsTestPlan
         control_scenarios,
     )
     return EmsTestPlan(
+        environment=environment,
         source_path=source_path,
         poll_scenarios=poll_scenarios,
         unsolicited_scenarios=unsolicited_scenarios,

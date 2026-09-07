@@ -12,6 +12,10 @@
 - 最近 4,096 个请求 ID 不得复用。
 - host v1 只有一个会话和一个在途请求。
 
+Python client 的 `HostProcessConfig.max_request_bytes` 默认同为 1 MiB，发送前
+检查 UTF-8 字节数；需要提高上限时应同时调整 host 启动参数。Python 的请求超时
+涵盖写入管道及等待响应，两阶段不会各自重新获得完整超时预算。
+
 请求：
 
 ```json
@@ -76,7 +80,7 @@
 
 只有 `host` 必填。端口 1～65535；连接超时 50～300000 ms；退避 10～300000 ms 且 min <= max；keep-alive 1000～86400000 ms。两个链路地址必须不同，范围 0～65519，不接受特殊/保留地址。
 
-状态改变会话还需：
+LAB 状态改变会话还需：
 
 ```json
 {
@@ -90,6 +94,14 @@
 ```
 
 四项条件满足时，connect result 中一次性返回 32 个十六进制字符的 `safety_token`，有效期只到 disconnect 或进程退出。`get_status` 只返回锁状态，不回显令牌。令牌是防误操作联锁，不是安全认证。
+
+模拟设备使用 `"safety": {"environment": "SIMULATOR"}`，该对象只接受 environment。
+不需要 allow_state_change、operator_id 或 dut_id，也不接受混填 LAB 字段。
+host 自动授权控制，返回 `environment=SIMULATOR` 和同格式令牌；Python 内部使用令牌，
+不暴露给用例。该模式不改变 DNP3 线上编码，也不使尚未实现的 FC6 可用。
+Python 对不确定结果仍终止 host，但不访问持久事故目录，异常 details 中
+`persistent_safety_lock=false`、`required_action=START_NEW_SESSION`。下文事故锁流程
+只适用于 LAB；详见 [模拟器模式](SIMULATOR_MODE.md)。
 
 ## wait_event
 
