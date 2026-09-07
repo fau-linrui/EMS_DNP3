@@ -139,7 +139,8 @@ size 和 SHA-256。可直接复制 `examples/pytest_performance`，24 小时用�
 
 ## 控制 API
 
-控制只有在连接时显式声明获批 LAB 会话才会解锁：
+以下示例演示 LAB 授权控制；模拟设备使用 `TcpConnectionConfig(..., simulator=True)`，
+无需 LAB 身份和事故目录，见 [模拟器模式](SIMULATOR_MODE.md)：
 
 ```python
 from dnp3_master import (
@@ -177,9 +178,17 @@ assert all(point.status == "SUCCESS" for point in result.point_results)
 
 Python 客户端只在内存保存 host 返回的一次性令牌，不提供公开 token 属性；高层 `connect()` 返回值会移除令牌并标记 `token_exposed=False`，诊断尾部也会过滤令牌。disconnect/close 后清除。令牌不是认证或 SAv5。
 
-状态改变 API 还要求 `HostProcessConfig.safety_incident_directory`。控制 timeout、host 通信失败、非法/错配控制结果、`execution_uncertain=true`，或点级 `TIMEOUT`、2012 保留状态、raw 127 歧义出现后，客户端先按 DUT 哈希持久化事故锁，再清令牌并终止 host。新进程可继续只读，但控制会抛出 `UnresolvedSafetyIncidentError`；完成独立读回后用 `active_safety_incident()` 和 `acknowledge_safety_incident()` 显式归档。不能删除锁或自动重试，详见 `docs/SAFETY_INCIDENT_RUNBOOK.md`。Direct Operate 的 `response_mode="no_response"` 当前稳定返回 `UNSUPPORTED_BY_BACKEND`。
+LAB 状态改变 API 还要求 `HostProcessConfig.safety_incident_directory`。控制 timeout、host 通信失败、非法/错配控制结果、`execution_uncertain=true`，或点级 `TIMEOUT`、2012 保留状态、raw 127 歧义出现后，客户端先持久化事故锁，再清令牌并终止 host；独立读回后显式归档，见 `docs/SAFETY_INCIDENT_RUNBOOK.md`。SIMULATOR 同样终止不确定会话，但不访问事故存储，也不要求人工解锁；两种模式均不自动重试控制。Direct Operate 的 `response_mode="no_response"` 当前稳定返回 `UNSUPPORTED_BY_BACKEND`。
 
 ## 嵌入现有 pytest
+
+模拟 EMS 可直接使用 [单配置入门入口](SIMULATOR_QUICKSTART.md)。公共子模块
+`dnp3_master.simulator_suite` 提供严格配置模型、`load_simulator_settings`、
+`find_simulator_runtime`、`simulator_session`、静态/控制/外部事件辅助函数。
+入口以 `dnp3_simulator_settings` ini 项（相对 ini）或 `--dnp3-simulator-settings`
+（相对当前目录）选择私有 JSON，并要求显式 SIMULATOR 模式。此时 host/连接来自该
+配置及配套 runtime，不需要下面表格中的 host/IP 环境变量，不能混用连接/host CLI。
+启动/请求/关闭超时选项仍有效；LAB 默认和原 fixtures 路径不变。
 
 目标框架根 `conftest.py`：
 
@@ -196,10 +205,11 @@ pytest_plugins = ("dnp3_master.pytest_plugin",)
 | `dnp3_ems_test_plan` | session；与点表交叉校验的完整性/Class、主动上报和控制场景计划，未配置时为 `None` |
 | `dnp3_performance_profile` | session；严格且已绑定 SHA-256 的性能/soak Profile，未配置时为 `None` |
 | `dnp3_local_event_profile` | session；仅本机从站使用的确定性事件负载 Profile，未配置时为 `None` |
+| `dnp3_simulator_settings` | session；单配置模拟器模型，未配置时为 `None` |
 | `dnp3_host_config` | session；可覆盖的 `HostProcessConfig` |
 | `host_process` | session；已完成 hello 的客户端，teardown 幂等清理 |
 | `master_client` | session；`host_process` 的别名边界 |
-| `dnp3_connection_config` | function；从 CLI/env 生成严格 TCP 配置，仅为已标记且获批的当前用例附加安全配置 |
+| `dnp3_connection_config` | function；从单配置入口或 CLI/env 生成严格 TCP 配置；LAB 仅为已标记且获批的当前用例附加安全配置 |
 | `connected_master` | function；每个测试连接并在 teardown 断开 |
 
 pytest-xdist 每个 worker 会创建独立 host/session；若 EMS 只允许一个主站，DUT 用例必须串行，不能使用多个 worker。
@@ -213,8 +223,8 @@ pytest-xdist 每个 worker 会创建独立 host/session；若 EMS 只允许一�
 - PICS 的 `SUPPORTED` 不能覆盖框架缺口：每个 marker 还必须在能力矩阵中处于 `IMPLEMENTED_UNVERIFIED` 或 `VERIFIED_*`；否则收集阶段会在接触 DUT 前跳过。
 - 场景依赖包含实际请求限定符：逐点 range8/range16 为 Q00/Q01，Class/Integrity 和 unsolicited 控制为 Q06，控制索引前缀为 Q17/Q28。Q02/Q09/Q39 在固定后端中明确不可用。
 - timeout、测量/事件上限和期望值均有界，布尔点只能使用布尔期望，数值点只能使用有限数值期望。
-- 控制的操作和恢复必须使用相同命令类型/索引但载荷不同，恢复期望必须等于操作前基线。
-- 已启用控制不能保留 `FILL_ME/TODO/TBD/PLACEHOLDER/EXAMPLE` 授权引用。
+- LAB 控制的操作和恢复必须使用相同命令类型/索引但载荷不同，恢复期望必须等于操作前基线；SIMULATOR 的前置与恢复可省略，提供恢复时仍校验成对字段。
+- LAB 已启用控制不能保留 `FILL_ME/TODO/TBD/PLACEHOLDER/EXAMPLE` 授权引用；SIMULATOR 不要求审批引用。
 
 公开点表保持只读；控制值、反馈关系和授权只存在于未提交的私有场景计划中。证据清单只记录计划文件名、大小和 SHA-256，不复制内容。
 
@@ -237,7 +247,7 @@ def test_real_ems_analog_range_read(connected_master):
 
 - `SUPPORTED`：正向用例运行。
 - `NOT_SUPPORTED`：正向用例跳过；带 `dnp3_unsupported_behavior` 的负向用例才运行。
-- `UNKNOWN`/缺失：按 `--dnp3-unknown-policy=xfail|skip|error` 处理，默认 xfail 且不运行测试体。
+- `UNKNOWN`/缺失：LAB 按 `--dnp3-unknown-policy=xfail|skip|error` 处理，默认 xfail 且不运行测试体；SIMULATOR 不因此阻塞已实现能力，但明确 NOT_SUPPORTED 和框架未实现门禁仍生效。
 
 正式 EMS 执行推荐 `--dnp3-unknown-policy error`，避免漏填 PICS 被误认为通过。
 
@@ -258,6 +268,9 @@ python -m dnp3_master.preflight `
 本机回归需要制造事件或检查命令是否重发时，可使用 `dnp3_master.local_outstation.LocalTestOutstation` 控制包内回环从站。该帮助类不是面向真实 DUT 的接口，详见 `docs/LOCAL_TEST_OUTSTATION.md`。
 
 ## 状态改变收集门
+
+本节授权参数和单场景限制仅针对 LAB。SIMULATOR 仍需给控制测试正确打标，但无需
+操作人/DUT ID、审批和单场景选择；未启用 SIMULATOR 时保持下面的安全默认值。
 
 可能修改 DUT 的 pytest 用例还必须带：
 
@@ -281,18 +294,20 @@ python -m dnp3_master.preflight `
 
 | CLI | 环境变量 | 默认 |
 |---|---|---|
-| `--dnp3-host-exe` | `DNP3_MASTER_HOST_EXE` | 必填（使用 fixture 时） |
+| `--dnp3-simulator` | `DNP3_SIMULATOR` | false；也可设置 ini `dnp3_simulator=true` |
+| `--dnp3-simulator-settings` | 无 | 无；也可设置 ini `dnp3_simulator_settings`，使用时要求 SIMULATOR |
+| `--dnp3-host-exe` | `DNP3_MASTER_HOST_EXE` | 通用 fixture 路径必填；单配置入口自动定位，不与本参数混用 |
 | `--dnp3-pics-file` | `DNP3_PICS_FILE` | 无 |
 | `--dnp3-capability-matrix` | `DNP3_CAPABILITY_MATRIX` | 自动查找 `config/capability_matrix.csv` |
 | `--dnp3-points-file` | `DNP3_POINTS_FILE` | 无；提供时在收集前严格校验 |
 | `--dnp3-ems-plan` | `DNP3_EMS_PLAN` | 无；使用时必须同时提供点表 |
 | `--dnp3-performance-profile` | `DNP3_PERFORMANCE_PROFILE` | 无；严格加载并把 SHA-256 写入证据清单 |
 | `--dnp3-local-event-profile` | `DNP3_LOCAL_EVENT_PROFILE` | 无；仅本机确定性事件发生器 |
-| `--dnp3-control-scenario` | 无 | 无；每次精确选择一个已启用控制场景 |
+| `--dnp3-control-scenario` | 无 | LAB 每次精确选择一个；SIMULATOR 旧场景模板不传时选全部已启用场景 |
 | `--dnp3-evidence-dir` | `DNP3_EVIDENCE_DIR` | 无；提供时生成脱敏运行清单 |
 | `--dnp3-safety-incident-dir` | `DNP3_SAFETY_INCIDENT_DIR` | `evidence/local/safety-incidents` |
 | `--dnp3-unknown-policy` | `DNP3_UNKNOWN_POLICY` | `xfail` |
-| `--dnp3-outstation-host` | `DNP3_OUTSTATION_HOST` | 使用 connected fixture 时必填 |
+| `--dnp3-outstation-host` | `DNP3_OUTSTATION_HOST` | 通用 connected fixture 路径必填；单配置入口在 JSON 中填写 |
 | `--dnp3-outstation-port` | `DNP3_OUTSTATION_PORT` | 20000 |
 | `--dnp3-local-adapter` | `DNP3_LOCAL_ADAPTER` | 0.0.0.0 |
 | `--dnp3-master-address` | `DNP3_MASTER_ADDRESS` | 1 |
@@ -304,6 +319,10 @@ python -m dnp3_master.preflight `
 host 启动/请求/关闭 timeout 也可通过 `--dnp3-startup-timeout`、`--dnp3-request-timeout`、`--dnp3-shutdown-timeout` 设置。
 
 ## 错误与诊断
+
+模拟器入门辅助层还提供 `SimulatorCheckError.stage`，用来定位安装、TCP、DNP3、
+点映射、控制反馈和事件等阶段；阶段不是根因判断，也不替换所有下列原始异常。
+分层解释与排查顺序见 [入门指南](SIMULATOR_QUICKSTART.md)。下表事故锁异常仅针对 LAB。
 
 | 异常 | 含义 |
 |---|---|

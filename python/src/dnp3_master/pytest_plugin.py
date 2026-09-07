@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import replace
 import hashlib
 import os
 from pathlib import Path
@@ -17,6 +18,7 @@ from .ems_test_plan import EmsTestPlan, EmsTestPlanError, load_ems_test_plan
 from .evidence import EvidenceRecorder
 from .errors import HostCommandError
 from .models import HostProcessConfig, LabSafetyConfig, TcpConnectionConfig
+from .simulator_suite import SimulatorSettings, find_simulator_runtime, load_simulator_settings
 from .local_benchmark import (
     LocalEventProfile,
     LocalEventProfileError,
@@ -52,6 +54,11 @@ _FRAMEWORK_STATUSES = _FRAMEWORK_READY_STATUSES | frozenset(
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addini("dnp3_simulator_settings", "Private simulator settings path relative to pytest.ini", default="")
+    parser.getgroup("dnp3-master").addoption(
+        "--dnp3-simulator-settings", default=None,
+        help="Single simulator settings JSON (CLI path relative to current directory)",
+    )
     parser.addini(
         "dnp3_simulator", "Enable unrestricted simulated-device control tests",
         type="bool", default=False,
@@ -373,6 +380,28 @@ def _load_pics_capabilities(
 def pytest_configure(config: pytest.Config) -> None:
     simulator = _simulator_enabled(config)
     setattr(config, "_dnp3_simulator", simulator)
+    settings = None
+    runtime = None
+    settings_arg = config.getoption("--dnp3-simulator-settings")
+    settings_ini = config.getini("dnp3_simulator_settings")
+    if settings_arg or settings_ini:
+        if not simulator:
+            raise pytest.UsageError("simulator settings require --dnp3-simulator or dnp3_simulator=true")
+        base = Path.cwd() if settings_arg else (Path(config.inipath).parent if config.inipath else Path(config.rootpath))
+        conflicting = [name for name in (
+            "--dnp3-host-exe", "--dnp3-host-arg", "--dnp3-outstation-host", "--dnp3-outstation-port",
+            "--dnp3-local-adapter", "--dnp3-master-address", "--dnp3-outstation-address",
+            "--dnp3-connect-timeout", "--dnp3-retry-min", "--dnp3-retry-max", "--dnp3-keep-alive-timeout",
+        ) if config.getoption(name) is not None and config.getoption(name) != []]
+        if conflicting:
+            raise pytest.UsageError("simulator settings cannot be mixed with connection/host CLI options: " + ", ".join(conflicting))
+        try:
+            settings = load_simulator_settings(base / (settings_arg or settings_ini))
+            runtime = find_simulator_runtime(settings)
+        except (ValueError, AssertionError) as error:
+            raise pytest.UsageError(str(error)) from error
+    setattr(config, "_dnp3_simulator_settings", settings)
+    setattr(config, "_dnp3_simulator_runtime", runtime)
     for marker in (
         "dnp3_capability(name): trace a test to one capability-matrix identifier",
         "dnp3_dut: apply PICS capability gating before touching a real DUT",
@@ -401,6 +430,10 @@ def pytest_configure(config: pytest.Config) -> None:
         if configured_matrix
         else _auto_capability_matrix_path()
     )
+    if runtime is not None:
+        if configured_matrix and matrix_path != runtime.matrix:
+            raise pytest.UsageError("simulator settings require the capability matrix from the selected runtime")
+        matrix_path = runtime.matrix
     framework_statuses: dict[str, str] | None = None
     if matrix_path is not None:
         capability_ids = _load_capability_ids(matrix_path)
@@ -530,6 +563,8 @@ def pytest_configure(config: pytest.Config) -> None:
         configured_host = config.getoption("--dnp3-host-exe") or os.environ.get(
             "DNP3_MASTER_HOST_EXE"
         )
+        if runtime is not None:
+            configured_host = runtime.executable
         try:
             evidence_recorder = EvidenceRecorder(
                 Path(configured_evidence),
@@ -545,6 +580,7 @@ def pytest_configure(config: pytest.Config) -> None:
                     "ems_test_plan": ems_plan_path,
                     "performance_profile": performance_path,
                     "local_event_profile": local_event_path,
+                    "simulator_settings": settings.source if settings is not None else None,
                 },
                 runner={
                     "pytest_version": pytest.__version__,
@@ -884,7 +920,19 @@ def dnp3_local_event_profile(
 
 
 @pytest.fixture(scope="session")
+def dnp3_simulator_settings(pytestconfig: pytest.Config) -> SimulatorSettings | None:
+    """Validated single-file simulator settings, resolved once before collection."""
+    return getattr(pytestconfig, "_dnp3_simulator_settings", None)
+
+
+@pytest.fixture(scope="session")
 def dnp3_host_config(pytestconfig: pytest.Config) -> HostProcessConfig:
+    runtime = getattr(pytestconfig, "_dnp3_simulator_runtime", None)
+    if runtime is not None:
+        return replace(runtime.host_config(),
+            startup_timeout=pytestconfig.getoption("--dnp3-startup-timeout"),
+            request_timeout=pytestconfig.getoption("--dnp3-request-timeout"),
+            shutdown_timeout=pytestconfig.getoption("--dnp3-shutdown-timeout"))
     configured = pytestconfig.getoption("--dnp3-host-exe") or os.environ.get(
         "DNP3_MASTER_HOST_EXE"
     )
@@ -965,6 +1013,9 @@ def dnp3_connection_config(
     pytestconfig: pytest.Config,
     request: pytest.FixtureRequest,
 ) -> TcpConnectionConfig:
+    settings = getattr(pytestconfig, "_dnp3_simulator_settings", None)
+    if settings is not None:
+        return settings.connection
     host = _configured_value(
         pytestconfig,
         "--dnp3-outstation-host",

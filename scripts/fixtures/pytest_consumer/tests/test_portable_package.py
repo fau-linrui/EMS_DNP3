@@ -72,3 +72,33 @@ def test_packaged_simulator_mode_without_lab_identity_or_incident_store() -> Non
             for _ in range(2):
                 for scenario in plan.enabled_control_scenarios:
                     assert client.direct_operate([scenario.command.to_command()]).all_success
+
+
+def test_copied_simulator_starter_with_isolated_wheel(tmp_path) -> None:
+    """No repository import paths; exercise the actual packaged consumer suite."""
+    import shutil
+    import subprocess
+    import sys
+    from dnp3_master.local_outstation import LocalTestOutstation
+
+    package = Path(os.environ["DNP3_EXPECTED_PACKAGE_ROOT"]).resolve()
+    copied = tmp_path / "tests/dnp3"
+    copied.mkdir(parents=True)
+    for name in ("conftest.py", "pytest.ini", "test_basic.py", "settings.example.json"):
+        shutil.copyfile(package / "examples/pytest_simulator" / name, copied / name)
+    with LocalTestOutstation(package / "tools/dnp3-local-test-outstation.exe") as simulator:
+        settings = json.loads((copied / "settings.example.json").read_text(encoding="utf-8"))
+        settings["runtime_root"] = str(package)
+        settings["connection"].update(host="127.0.0.1", port=simulator.port)
+        (copied / "settings.local.json").write_text(json.dumps(settings), encoding="utf-8")
+        environment = {k: v for k, v in os.environ.items() if not k.startswith("DNP3_")}
+        # Preserve only the isolated wheel import path, never the source repository.
+        environment["PYTHONPATH"] = os.environ["DNP3_EXPECTED_INSTALLED_ROOT"]
+        environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+        # Output is a small fixed suite, with a bounded subprocess lifetime.
+        run = subprocess.run([sys.executable, "-m", "pytest", "-c", str(copied / "pytest.ini"),
+                              str(copied), "-q", "-k", "not external_signal_event"],
+                             cwd=tmp_path, env=environment, capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", timeout=60)
+        assert run.returncode == 0, (run.stdout + run.stderr)[-16384:]
+        assert "14 passed" in run.stdout

@@ -15,6 +15,12 @@ controls and optional scenario restoration, and labels pytest evidence SIMULATOR
 Protocol checks and bounded failure handling remain; LAB is the unchanged default.
 See `docs/SIMULATOR_MODE.md` in the portable package/repository.
 
+For one-file onboarding, copy `examples/pytest_simulator` and edit its private
+`settings.local.json`. The public `dnp3_master.simulator_suite` helpers and pytest
+`dnp3_simulator_settings` option/fixture discover the matching runtime, diagnose
+connection/read layers, and run static/Class/control feedback/external event tests.
+See `docs/SIMULATOR_QUICKSTART.md`; no time sync, Restart or external trigger adapter.
+
 The core package uses only the Python standard library. Enable the fixtures from
 the consuming framework's root `conftest.py`:
 

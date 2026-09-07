@@ -11,6 +11,11 @@ pytest -> dnp3_master Python package -> NDJSON -> dnp3-master-host.exe
 
 ## 当前能力
 
+当前模拟 EMS 场景推荐 [单配置 pytest 入门套件](docs/SIMULATOR_QUICKSTART.md)：
+复制 `examples/pytest_simulator`，集中填写 EMS 监听地址/端口、链路地址、点号和反馈值，
+即可执行 BI/AI、BO/AO、Class 和外部事件测试。自动定位配套 host 并分层诊断；
+无需时间同步、Restart 或模拟器触发接口开发。只改 IP/端口的前提是其他映射也正确。
+
 如果 EMS 连接的全部是模拟设备，使用 [模拟器模式](docs/SIMULATOR_MODE.md)：
 在 pytest.ini 配置一次 `dnp3_simulator = true`，即可免审批、免事故解锁，批量/重复
 运行遥控遥调；无需 operator ID、DUT ID 或每次精确选一个场景。协议校验和失败断言保留。
@@ -34,7 +39,7 @@ pytest -> dnp3_master Python package -> NDJSON -> dnp3-master-host.exe
 - Python/host 版本、固定 OpenDNP3 版本及 pytest 能力矩阵 SHA-256 启动握手，防止混用旧产物。
 - 环境体检、clean-commit 发布门禁、可复现 wheel/ZIP/SHA-256/逐文件清单、包含 8 点精确静态 capture 的解包回环自检、空白 pytest 消费者迁移验收、Debug/Release/ASan 和 1,000 次生命周期验收入口。
 
-控制默认锁住。只有获批实验室运行显式提供允许开关、operator ID、DUT ID，并连接时取得一次性会话令牌后才能调用。控制超时不会自动重试；任何不确定结果，包括请求可能发出后被 Ctrl+C 中断，都会销毁会话并留下持久事故锁，必须独立读回和显式确认。当前 `DIRECT_OPERATE_NR` 明确返回 `UNSUPPORTED_BY_BACKEND`。
+未启用 SIMULATOR 时，LAB 控制默认锁住，需要允许开关、operator ID、DUT ID 和会话令牌。LAB 不确定结果会销毁会话并留下持久事故锁，需独立读回和显式确认；SIMULATOR 同样报错并关闭不确定会话，但不访问事故锁，新 client/下一用例可继续。两种模式都不自动重试控制。当前 `DIRECT_OPERATE_NR` 明确返回 `UNSUPPORTED_BY_BACKEND`。
 
 > 重要：当前 DNP3 端到端回归的主站和测试从站都使用同一 OpenDNP3 版本，只是本机工程验证，不是与真实 EMS 的互操作结论，也不是 IEEE 一致性认证。能力矩阵中的对应状态因此保持 `IMPLEMENTED_UNVERIFIED`。
 
@@ -125,7 +130,7 @@ def test_integrity(connected_master):
 
 手写 DUT 用例必须为实际功能码、对象和 Qualifier 分别声明全部能力 ID；插件不会从任意测试函数体中猜测依赖。上例的完整性扫描实际请求 G60V1～V4/Q06，因此不能只标记 FC1。优先复制 `examples/pytest_ems`，其参数化场景会从严格点表/计划自动附加准确依赖。
 
-可直接复制 `examples/pytest_ems`，再从 `config/ems_test_plan.example.json` 建立私有计划。计划内的完整性/Class 场景可只读执行；主动上报和控制示例默认关闭。控制即使在计划中启用，也必须逐次用 `--dnp3-control-scenario` 精确点名，并同时通过 PICS、pytest 状态改变授权和 host 会话令牌门。
+LAB 可复制 `examples/pytest_ems`，再从 `config/ems_test_plan.example.json` 建立私有计划。该模板的主动上报和控制示例默认关闭；LAB 控制还须逐次用 `--dnp3-control-scenario` 精确点名并通过相应门禁。当前模拟 EMS 推荐 `examples/pytest_simulator` 的单配置入口，不需要 LAB 审批和单场景选择。
 
 填写三个私有配置后，应先离线预检；只有退出码为 0 才进入 DUT 测试准备：
 

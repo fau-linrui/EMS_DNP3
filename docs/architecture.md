@@ -89,9 +89,15 @@ checkpoint、轮转 anchor 和 final report 原子写入并形成 SHA-256 链。
 
 ## EMS pytest 场景编排
 
+模拟 EMS 的便捷入口为 `simulator_suite.py` 和 `examples/pytest_simulator`。
+严格私有 JSON 一次解析连接/点/控制/事件配置，pytest 仍保留 SIMULATOR/PICS/能力门禁；
+配套 runtime 按有限祖先路径发现，校验版本及矩阵 SHA-256，再经真实 hello 验证。
+辅助层只组合公开 API，按用例拥有会话并先执行只读探针，不改变 native/NDJSON；
+不生成外部信号、不发送时间同步/Restart。详见 [入门指南](SIMULATOR_QUICKSTART.md)。
+
 `ems_test_plan.py` 是 Python/pytest 层的业务编排边界，不修改 NDJSON 或 OpenDNP3 协议层。它在 DUT 连接前加载最多 1 MiB 的严格 JSON，拒绝重复键、未知字段、非有限/越界值、重复场景、无效点引用和不完整恢复闭环，并把每个场景映射为能力矩阵 marker。
 
-公开点表只描述可读对象；场景计划单独描述完整性/Class 读取、外部触发的主动上报期望以及预批准控制闭环。二者在收集阶段交叉校验。`examples/pytest_ems` 的控制测试每次只接受一个命令行精确选择的场景，依次执行基线读回、一次操作、确认后读回、一次恢复和恢复读回；它不会批量选择控制，也不会重试任何控制。如果操作后状态未确认，测试停止且不盲目恢复。
+公开点表只描述可读对象；场景计划单独描述完整性/Class 读取、外部触发的主动上报期望以及控制闭环，二者在收集阶段交叉校验。LAB 下 `examples/pytest_ems` 每次只接受一个精确选择的控制场景，按基线读回、操作、确认后读回、恢复和恢复读回执行；操作后状态未确认则停止且不盲目恢复。SIMULATOR 可批量执行已启用场景，审批、前置和恢复可选；新入门套件不自动恢复。两种模式均不重试控制。
 
 `ems_profile.py` 是 PICS 的唯一严格解析入口，pytest 插件和 `preflight.py` 共用它。离线预检进一步把 PICS、点表、场景计划与能力矩阵交叉计算，在没有 IP/端口且不启动 host 的情况下列出所需能力、blocker、warning 和输入哈希。预检 `READY` 只表示配置门通过，不提升互操作证据等级。
 
@@ -105,7 +111,7 @@ checkpoint、轮转 anchor 和 final report 原子写入并形成 SHA-256 链。
 
 Python 仅公开 `CrobCommand` 和四种严格类型的 `AnalogOutputCommand`。命令数组最多 256 点，同类型/同索引重复在进入后端前被拒绝；已实现命令不能通过公共原始 `request()` 绕过类型 API。结果按原请求 ordinal/type/index 关联每个点，summary 和唯一性也做交叉校验。Command Status 经过显式 IEEE 1815-2012 适配，OpenDNP3 的后续版本别名仅作为后端诊断字段保留。固定栈对已识别值保留数值，但会把未知线上值 19～125 折叠为 127；`TIMEOUT`、2012 保留区和 raw 127 歧义均触发事故锁、令牌清除和 host 销毁。
 
-核心状态改变 API 需通过两层门；可复制的 EMS 控制模板再增加两道场景门：
+以下四道门针对 LAB 模式；SIMULATOR 的会话令牌由 host 自动授权，不需要身份、审批或事故存储：
 
 1. pytest 收集阶段要求用例同时带 `dnp3_dut`、能力 ID 和 `dnp3_state_changing`，并得到显式命令行/环境授权及 operator/DUT ID；未标记用例即使整次运行带了解锁参数也只能得到只读连接。
 2. `connect` 只有在 `environment=LAB`、`allow_state_change=true` 和两个 ID 均有效时才生成 128-bit 会话令牌；后续每条命令必须携带正确令牌。
@@ -114,7 +120,7 @@ Python 仅公开 `CrobCommand` 和四种严格类型的 `AnalogOutputCommand`。
 
 Python 客户端不公开令牌属性，只在内存中自动附加；高层连接结果和诊断会移除/过滤令牌，断开或进程退出后销毁。该机制只防误操作，不是认证/授权/SAv5。
 
-状态改变还要求持久 `SafetyIncidentStore`。控制响应超时、host 交换失败、提交异常、结果错配/损坏、结果自报不确定，或点状态无法证明确定拒绝时，客户端把不含控制值/DUT 明文的事故锁写入 `active/<dut-sha256>.json`，清除令牌并销毁 host。后续进程先查锁，锁存在或损坏均 fail-closed；只读路径不受影响。独立读回和明确确认后，记录转入 `archive/`。该层解决同一持久目录上的跨进程误重试，不提供多机分布式锁或身份认证。
+LAB 状态改变还要求持久 `SafetyIncidentStore`。控制响应超时、host 交换失败、提交异常、结果错配/损坏、结果自报不确定，或点状态无法证明确定拒绝时，客户端写入不含控制值/DUT 明文的事故锁，清除令牌并销毁 host；后续进程查锁，独立读回和明确确认后归档。该层不提供多机分布式锁或身份认证。SIMULATOR 对不确定结果同样清令牌并销毁 host，但不访问持久事故锁。
 
 ## 能力与证据模型
 
@@ -132,5 +138,8 @@ Python 客户端不公开令牌属性，只在内存中自动附加；高层连�
 ## 后续扩展顺序
 
 T15a～T15d 的 capture 与 T16a～T16d 的本机性能/soak 工具链已完成；后续优先在内网完成 H01/H02、H08b/H09b 的真实 EMS Profile、独立参考端和正式环境证据，再按 PICS 单项增加原始故障时序、时间同步、Restart/Freeze/Assign Class、其他承载、经典对象缺口、高级事务和安全功能。不得扩大单会话/单在途 RPC 边界，除非有独立设计与迁移任务。
+
+上述扩展是通用候选，不是当前模拟 EMS 基本验证的前置。当前需求已明确排除时间同步、
+Restart 和外部模拟器触发接口开发；TCP 角色已固定为 pytest 主动连接 EMS 监听端。
 
 具体阻塞、输入和验收见 `docs/INTRANET_HANDOFF_REMAINING_TASKS.md`。

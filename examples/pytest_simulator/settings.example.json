@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "environment": "SIMULATOR",
+  "runtime_root": null,
+  "connection": {
+    "host": "192.0.2.10",
+    "port": 20000,
+    "local_adapter": "0.0.0.0",
+    "master_address": 1,
+    "outstation_address": 1024,
+    "connect_timeout": 5
+  },
+  "task_timeout": 5,
+  "feedback_timeout": 10,
+  "event_timeout": 30,
+  "max_measurements": 16384,
+  "points": [
+    {"id": "BI_0", "kind": "BI", "index": 0},
+    {"id": "AI_0", "kind": "AI", "index": 0},
+    {"id": "BO_0", "kind": "BO", "index": 0},
+    {"id": "AO_0", "kind": "AO", "index": 0}
+  ],
+  "class_counts": [{"class": 1, "count": 0}, {"class": 2, "count": 0}, {"class": 3, "count": 0}],
+  "controls": [
+    {"id": "BO_on", "kind": "BO", "index": 0, "feedback_point": "BO_0", "value": true},
+    {"id": "BO_off", "kind": "BO", "index": 0, "feedback_point": "BO_0", "value": false},
+    {"id": "AO_positive", "kind": "AO", "index": 0, "feedback_point": "AO_0", "value": 1.0},
+    {"id": "AO_zero", "kind": "AO", "index": 0, "feedback_point": "AO_0", "value": 0.0},
+    {"id": "AO_negative", "kind": "AO", "index": 0, "feedback_point": "AO_0", "value": -1.0}
+  ],
+  "events": [
+    {"id": "BI_change", "point": "BI_0", "expected": true, "require_change": true, "require_timestamp": true},
+    {"id": "AI_change", "point": "AI_0", "expected": 42.0, "tolerance": 0.01, "require_change": true, "require_timestamp": true}
+  ]
+}

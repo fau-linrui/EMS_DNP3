@@ -12,6 +12,18 @@ def load_schema(name: str) -> dict[str, object]:
         return json.load(stream)
 
 
+def test_simulator_settings_schema_is_bounded_and_simulator_only() -> None:
+    schema = load_schema("simulator-settings.schema.json")
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["environment"] == {"const": "SIMULATOR"}
+    for key in ("points", "controls", "events"):
+        assert schema["properties"][key]["maxItems"] == 128
+    for key in ("connection", "point", "control", "event"):
+        assert schema["$defs"][key]["additionalProperties"] is False
+    assert "safety" not in schema["$defs"]["connection"]["properties"]
+    assert schema["properties"]["class_counts"]["items"]["properties"]["count"]["minimum"] == 0
+
+
 def test_request_schema_is_strict_and_versioned() -> None:
     schema = load_schema("request.schema.json")
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"

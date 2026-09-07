@@ -31,6 +31,7 @@ config/ems_test_plan.local.json
 config/points.local.csv
 config/*.local.json
 config/*.local.csv
+**/settings.local.json
 secrets/
 evidence/local/
 *.pcap

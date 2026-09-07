@@ -116,6 +116,8 @@ python-dist\dnp3_master_test_framework-0.6.1-py3-none-any.whl
   启用 `dnp3_master.pytest_plugin`；
 - 断言导入路径确实位于隔离安装目录、Python/host/manifest 版本一致、插件参数和
   安全默认值可用；
+- 把包内单配置模拟器入门目录复制到临时消费者，使用隔离 wheel 执行 14 个
+  连接/静态/Class/控制读回测试；外部事件在源码本机回归中另有真实触发与接收覆盖；
 - 清理临时目录并恢复原进程环境。
 
 只有报告中的 `overall_passed=true` 且每个解释器的 `status=PASS` 才算迁移验收

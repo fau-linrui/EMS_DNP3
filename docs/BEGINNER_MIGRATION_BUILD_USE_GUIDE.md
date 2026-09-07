@@ -1,5 +1,9 @@
 # EMS_DNP3 拉取、构建、移植与使用指南（Windows/pytest 小白版）
 
+当前“EMS 监听、pytest 主动连接模拟 EMS”的最短路径见
+[单配置入门指南](SIMULATOR_QUICKSTART.md)。完成本文构建/运行包准备后，只复制
+`examples/pytest_simulator` 并填 `settings.local.json`，无需 LAB 工单或信号生成接口开发。
+
 如果 EMS 连接的全部是模拟设备，请先看 [模拟器入口](SIMULATOR_MODE.md)。构建和
 复制方法不变；pytest 配置一次 `dnp3_simulator = true`，本文中 LAB 的 operator/DUT ID、
 工单、事故解锁和逐次场景选择均不需要。使用精简的模拟器场景模板，不必照搬 LAB 的
@@ -513,7 +517,7 @@ def test_ems_integrity_read(connected_master):
 
 将示例 IP 和地址换成实验 EMS 的真实参数。`--dnp3-unknown-policy error` 适合正式执行，可防止因 PICS 漏填而悄悄跳过。
 
-如不想从零写用例，可把包内 `examples\pytest_ems` 整体复制进既有框架。未提供配置时示例会安全跳过；提供严格点表和场景计划后，可直接收集逐点 Static Read、完整性/Class、主动上报和控制闭环用例。主动上报与控制默认关闭，控制还必须逐次精确选择。每个参数化用例会自动附加所需功能码、Group/Variation 和 Q00/Q01/Q06/Q17/Q28 等实际限定符能力 ID，以便 PICS 与框架状态在连接 DUT 前共同门控。固定后端不能表达 Q02/Q09/Q39，不能用 16-bit 请求冒充。
+如不想从零写 LAB 用例，可把包内 `examples\pytest_ems` 整体复制进既有框架。未提供配置时示例会安全跳过；提供严格点表和场景计划后，可收集逐点 Static Read、完整性/Class、主动上报和控制闭环用例。LAB 示例的主动上报与控制默认关闭，控制还须逐次精确选择；当前模拟 EMS 改用单配置入门入口，不要求这种选择。通用计划模板会附加实际功能码、Group/Variation 和限定符能力 ID。固定后端不能表达 Q02/Q09/Q39，不能用 16-bit 请求冒充。
 
 `--dnp3-evidence-dir` 会为每次运行创建独立目录，生成脱敏 `manifest.json` 和 `pytest-results.json`，只记录 PICS、点表、场景计划和矩阵的文件名、大小和 SHA-256，不复制私有原文。记录器会替换已知的项目、测试、host、输入和证据绝对路径，并遮盖常见密钥字段；但任意第三方库输出可能包含记录器不了解的业务数据，因此证据对外传递前仍必须人工复核。
 
@@ -616,9 +620,12 @@ drop 都会失败。Profile 中的 watchdog 还必须严格覆盖 begin、Read�
 unsolicited 队列；长流必须拆成逐块对账的请求。完整字段、capture 真值和检查点说明见
 `docs\PERFORMANCE_AND_SOAK_GUIDE.md`。
 
-## 7. 控制用例：默认永久锁住，只有实验室可解锁
+## 7. LAB 控制用例：默认锁定，授权后运行
 
-遥控和模拟量输出会改变设备状态。必须同时满足以下条件：
+本节只适用于 LAB。当前模拟器用户请用 [单配置入门套件](SIMULATOR_QUICKSTART.md)，
+无需本节审批、身份、事故锁、单场景选择和强制恢复要求。
+
+LAB 遥控和模拟量输出会改变设备状态，必须同时满足以下条件：
 
 1. 用例带 `dnp3_state_changing` 标记。
 2. PICS 中相关能力为 `SUPPORTED`。
@@ -649,6 +656,9 @@ unsolicited 队列；长流必须拆成逐块对账的请求。完整字段、ca
 pytest 默认把锁放在 `evidence/local/safety-incidents`。直接使用 `Dnp3MasterClient` 时，必须给 `HostProcessConfig` 配置 `safety_incident_directory`，否则控制会 fail-closed。当前 OpenDNP3 后端不支持 `DIRECT_OPERATE_NR`，请求会明确返回 `UNSUPPORTED_BY_BACKEND`，不会伪造成功。
 
 ## 8. 常用环境变量
+
+以下为通用 CLI/env 接入方式。单配置模拟器入口以 `settings.local.json` 和配套运行包
+为连接/host 来源，忽略旧的连接/host 环境变量；不要把两种配置方式混用。
 
 除安全设计上要求逐次输入的 `--dnp3-control-scenario` 外，常用命令行参数可用环境变量替代：
 
