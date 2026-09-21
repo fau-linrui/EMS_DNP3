@@ -14,6 +14,15 @@ def write_json(value: dict[str, Any]) -> None:
     sys.stdout.flush()
 
 
+def write_nested_response(request_id: str, depth: int) -> None:
+    """Emit deep JSON without making the fake producer recurse itself."""
+    sys.stdout.write(
+        '{"schema_version":1,"id":' + json.dumps(request_id)
+        + ',"ok":true,"result":' + '[' * depth + '0' + ']' * depth + '}\n'
+    )
+    sys.stdout.flush()
+
+
 def success(request_id: str, result: Any) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -426,6 +435,8 @@ def main() -> int:
                 sys.stderr.write("controlled-exit-after-hello\n")
                 sys.stderr.flush()
                 return 37
+        elif command == "nested_response":
+            write_nested_response(request_id, request["params"]["depth"])
         elif command == "transport_probe" and args.mode == "slow_request_io":
             time.sleep(0.15)
             write_json(success(request_id, {}))
@@ -608,6 +619,8 @@ def main() -> int:
                 write_json(error(request_id, "SAFETY_INTERLOCK"))
             elif request["params"].get("response_mode") == "no_response":
                 write_json(error(request_id, "UNSUPPORTED_BY_BACKEND"))
+            elif request["params"]["commands"][0].get("index") == 65527:
+                write_nested_response(request_id, 20000)
             elif request["params"]["commands"][0].get("index") == 65534:
                 time.sleep(60)
             elif request["params"]["commands"][0].get("index") == 65533:

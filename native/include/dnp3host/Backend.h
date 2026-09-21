@@ -82,6 +82,16 @@ struct CaptureReferenceConfig {
     std::uint32_t drain_timeout_ms{5000};
 };
 
+struct TraceStartConfig {
+    std::size_t queue_capacity{16384};
+};
+
+struct TraceReferenceConfig {
+    std::string trace_id;
+    std::size_t max_records{256};
+    std::uint32_t timeout_ms{0};
+};
+
 enum class ReturnMode {
     Detail,
     Summary,
@@ -205,6 +215,15 @@ struct BackendStatus {
                       {"current_queue_depth", 0},
                       {"max_queue_depth", 0},
                       {"queue_overflow", 0}}};
+    Json trace{Json{{"trace_id", nullptr},
+                    {"state", "IDLE"},
+                    {"scope", "opendnp3_stack"},
+                    {"queue_capacity", 16384},
+                    {"queued_records", 0},
+                    {"dropped_records", 0},
+                    {"truncated_records", 0},
+                    {"last_sequence", 0},
+                    {"complete", true}}};
 };
 
 class IMasterBackend {
@@ -233,6 +252,9 @@ public:
         const CaptureReferenceConfig& config) = 0;
     virtual BackendOperationResult capture_end(
         const CaptureReferenceConfig& config) = 0;
+    virtual BackendOperationResult trace_start(const TraceStartConfig& config) = 0;
+    virtual BackendOperationResult trace_read(const TraceReferenceConfig& config) = 0;
+    virtual BackendOperationResult trace_stop(const TraceReferenceConfig& config) = 0;
     virtual BackendOperationResult select_and_operate(const CommandConfig& config) = 0;
     virtual BackendOperationResult direct_operate(const CommandConfig& config) = 0;
     virtual BackendOperationResult wait_event(const WaitEventConfig& config) = 0;

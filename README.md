@@ -28,6 +28,7 @@ pytest -> dnp3_master Python package -> NDJSON -> dnp3-master-host.exe
 - 索引、原始 flags、时间、接收顺序、IIN 原始值/解析位、任务状态/耗时和 detail/summary 有界结果；测量、分片或当前任务 IIN 丢失都会明确失败。
 - 显式 Enable/Disable Unsolicited、跨请求持续接收、会话/分片/顺序标识和 4096 条 drop-oldest 有界队列。
 - `capture.begin/progress/end` 持续有界采集；静态点集检查 missing/duplicate/unmatched，确定性事件流使用外部 manifest 和有序 SHA-256 真值。
+- 显式启用的 [DNP3 报文 trace](docs/PROTOCOL_TRACE.md)：通过 NDJSON 向 pytest 交付双向栈日志、原始 HEX 与有界增量协议解析；默认关闭，丢失明确报错，不冒充网卡抓包。
 - 可扩展至每类 65,535 点的回环从站、确定性突发/定速事件发生器，以及 16,384 点大总召的 capture A/B 性能回归；本机事件基准以最多 4,096 条的有界块同时核验 capture 与 master unsolicited 队列，任一层丢失都失败。
 - 严格性能 Profile/报告、Windows host CPU/内存/句柄/线程采样和可中断 24 小时 read-only soak；原子检查点、哈希链、轮转、有界 watchdog、无丢失通道事件重连审计、磁盘与证据上限均 fail closed。
 - CROB Select-Before-Operate、有响应 Direct Operate、四种 Analog Output 和逐点 IEEE 1815-2012 Command Status 视图；固定栈对未知线上状态 19～125 的折叠会以歧义标志显式暴露。
@@ -38,6 +39,10 @@ pytest -> dnp3_master Python package -> NDJSON -> dnp3-master-host.exe
 - 不确定控制结果的跨进程 DUT 事故锁、只读核对和显式读回确认归档；点级 TIMEOUT、2012 保留状态、raw 127 歧义或结果错配均会销毁会话。
 - Python/host 版本、固定 OpenDNP3 版本及 pytest 能力矩阵 SHA-256 启动握手，防止混用旧产物。
 - 环境体检、clean-commit 发布门禁、可复现 wheel/ZIP/SHA-256/逐文件清单、包含 8 点精确静态 capture 的解包回环自检、空白 pytest 消费者迁移验收、Debug/Release/ASan 和 1,000 次生命周期验收入口。
+
+证据结果中的 `case_id` 是运行内唯一标识，脱敏后的 `nodeid` 仅供显示，不能用作
+唯一键。构建/体检同时校验 OpenDNP3 本体及 nlohmann/json，不只校验传递依赖；
+迁移脚本分别处理 stdout/stderr，不把退出码为 0 的普通警告当作命令失败。
 
 未启用 SIMULATOR 时，LAB 控制默认锁住，需要允许开关、operator ID、DUT ID 和会话令牌。LAB 不确定结果会销毁会话并留下持久事故锁，需独立读回和显式确认；SIMULATOR 同样报错并关闭不确定会话，但不访问事故锁，新 client/下一用例可继续。两种模式都不自动重试控制。当前 `DIRECT_OPERATE_NR` 明确返回 `UNSUPPORTED_BY_BACKEND`。
 
@@ -156,6 +161,7 @@ LAB 可复制 `examples/pytest_ems`，再从 `config/ems_test_plan.example.json`
 - [本机可编程 DNP3 测试从站](docs/LOCAL_TEST_OUTSTATION.md)
 - [不确定控制结果事故锁处理手册](docs/SAFETY_INCIDENT_RUNBOOK.md)
 - [Host NDJSON 协议](docs/protocol.md)
+- [pytest 获取 DNP3 收发报文与协议详情](docs/PROTOCOL_TRACE.md)
 - [架构说明](docs/architecture.md)
 - [EMS 操作约定、PICS 状态与待确认偏差](docs/standards/ems_device_profile.md)
 - [IEEE/OpenDNP3 状态与输入缺口](docs/standards/inputs_checklist.md)

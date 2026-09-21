@@ -38,7 +38,10 @@
         "stats",
         "capture.begin",
         "capture.progress",
-        "capture.end"
+        "capture.end",
+        "trace.start",
+        "trace.read",
+        "trace.stop"
       ]
     },
     "params": {
@@ -63,9 +66,52 @@
     {
       "if": { "properties": { "cmd": { "const": "capture.end" } } },
       "then": { "properties": { "params": { "$ref": "#/$defs/captureEndParams" } } }
+    },
+    {
+      "if": { "properties": { "cmd": { "const": "trace.start" } } },
+      "then": { "properties": { "params": { "$ref": "#/$defs/traceStartParams" } } }
+    },
+    {
+      "if": { "properties": { "cmd": { "const": "trace.read" } } },
+      "then": { "properties": { "params": { "$ref": "#/$defs/traceReadParams" } } }
+    },
+    {
+      "if": { "properties": { "cmd": { "const": "trace.stop" } } },
+      "then": { "properties": { "params": { "$ref": "#/$defs/traceStopParams" } } }
     }
   ],
   "$defs": {
+    "traceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^trace-[1-9][0-9]*$"
+    },
+    "traceStartParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "queue_capacity": { "type": "integer", "minimum": 1, "maximum": 65536, "default": 16384 }
+      }
+    },
+    "traceReadParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trace_id"],
+      "properties": {
+        "trace_id": { "$ref": "#/$defs/traceId" },
+        "max_records": { "type": "integer", "minimum": 1, "maximum": 1024, "default": 256 },
+        "timeout_ms": { "type": "integer", "minimum": 0, "maximum": 60000, "default": 0 }
+      }
+    },
+    "traceStopParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trace_id"],
+      "properties": {
+        "trace_id": { "$ref": "#/$defs/traceId" }
+      }
+    },
     "connectionSafety": {
       "oneOf": [
         {

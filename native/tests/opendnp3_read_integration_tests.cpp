@@ -826,12 +826,130 @@ void run_unsolicited_overflow_integration()
     backend->shutdown();
 }
 
+void run_protocol_trace_integration()
+{
+    LocalOutstation outstation;
+    auto backend = dnp3host::make_opendnp3_backend();
+    check(backend->status().trace.at("state") == "IDLE", "trace is opt-in");
+    const auto start = backend->trace_start({16384});
+    check(!start.error, "trace starts before connection");
+    if (start.error) {
+        return;
+    }
+    const auto trace_id = start.result.at("trace_id").get<std::string>();
+    std::uint64_t last_sequence = 0;
+    std::set<std::string> levels;
+    std::set<std::uint64_t> sessions;
+    bool saw_confirm = false;
+    bool saw_tx_frame = false;
+    bool saw_rx_frame = false;
+    const auto drain = [&] {
+        for (int batch = 0; batch < 128; ++batch) {
+            const auto read = backend->trace_read({trace_id, 1024, 0});
+            check(!read.error, "trace is readable before and after disconnect");
+            if (read.error) {
+                return;
+            }
+            check(read.result.at("complete") == true, "local trace has no collector loss");
+            for (const auto& record : read.result.at("records")) {
+                const auto sequence = record.at("sequence").get<std::uint64_t>();
+                check(sequence == last_sequence + 1U, "logs have contiguous ordered sequences");
+                last_sequence = sequence;
+                const auto level = record.at("level").get<std::string>();
+                const auto message = record.at("message").get<std::string>();
+                levels.insert(level);
+                sessions.insert(record.at("session_id").get<std::uint64_t>());
+                check(record.at("message_truncated") == false, "normal protocol logs fit bounds");
+                saw_confirm = saw_confirm || (level == "APP_HEADER_TX"
+                    && message.find("FUNC: CONFIRM") != std::string::npos);
+                saw_tx_frame = saw_tx_frame || (level == "LINK_TX_HEX"
+                    && message.compare(0, 6, "05 64 ") == 0);
+                saw_rx_frame = saw_rx_frame || (level == "LINK_RX_HEX"
+                    && message.compare(0, 6, "05 64 ") == 0);
+            }
+            if (read.result.at("queued_records") == 0) {
+                return;
+            }
+        }
+        check(false, "local trace drain must be bounded");
+    };
+
+    for (int session = 0; session < 2; ++session) {
+        const auto connection = backend->connect(connection_config(outstation.port()));
+        check(!connection.error, "traced master connects unchanged");
+        if (connection.error) {
+            return;
+        }
+        check(backend->trace_start({2}).error.has_value(), "cannot start trace within session");
+        check(backend->trace_stop({trace_id}).error.has_value(), "cannot stop trace within session");
+        dnp3host::ReadOptions options;
+        options.timeout_ms = kLocalTaskTimeoutMs;
+        check_successful_task(backend->integrity_poll(options));
+        dnp3host::UnsolicitedControlConfig enable;
+        enable.timeout_ms = kLocalTaskTimeoutMs;
+        const auto enabled = backend->enable_unsolicited(enable);
+        check(!enabled.error, "traced unsolicited enable unchanged");
+        outstation.generate_profile_events();
+        const auto events = backend->wait_unsolicited({kLocalTaskTimeoutMs, 256});
+        check(!events.error && !events.result.at("measurements").empty(),
+              "traced unsolicited measurements still delivered");
+        // The disable exchange also gives the queued unsolicited confirm an
+        // opportunity to finish, without timing sleeps or extra control writes.
+        check(!backend->disable_unsolicited(enable).error, "traced unsolicited disable unchanged");
+        drain();
+        check(!backend->disconnect().error, "traced disconnect unchanged");
+        drain();
+    }
+    const auto stop = backend->trace_stop({trace_id});
+    check(!stop.error && stop.result.at("state") == "STOPPED", "trace closes after disconnect");
+    drain();
+    check(sessions.size() == 2, "one trace can distinguish successive sessions");
+    check(saw_tx_frame && saw_rx_frame, "both raw link directions are recorded");
+    check(saw_confirm, "automatic application confirms are recorded");
+    for (const auto* level : {"TRANSPORT_RX", "TRANSPORT_TX", "APP_HEADER_RX",
+                              "APP_HEADER_TX", "APP_OBJECT_RX", "APP_OBJECT_TX", "APP_HEX_TX"}) {
+        check(levels.count(level) != 0, "transport and application diagnostic layers exposed");
+    }
+
+    const auto overflow_start = backend->trace_start({1});
+    check(!overflow_start.error, "drained stopped trace can restart");
+    const auto overflow_id = overflow_start.result.at("trace_id").get<std::string>();
+    check(!backend->connect(connection_config(outstation.port())).error,
+          "tiny trace queue does not block connect");
+    dnp3host::ReadOptions options;
+    options.timeout_ms = kLocalTaskTimeoutMs;
+    check_successful_task(backend->integrity_poll(options));
+    check(!backend->disconnect().error, "overflow does not block disconnect");
+    const auto overflow = backend->trace_stop({overflow_id});
+    check(overflow.result.at("dropped_records").get<std::uint64_t>() > 0
+              && overflow.result.at("complete") == false,
+          "trace overflow invalidates observation, not the successful DNP3 operation");
+    check(backend->trace_start({2}).error.has_value(), "unread overflow tail cannot be overwritten");
+    backend->trace_read({overflow_id, 1, 0});
+
+    // Connection failure must leave captured diagnostics accessible, and its
+    // session logger must not leak into the next trace.
+    outstation.stop();
+    const auto failed_start = backend->trace_start({1024});
+    const auto failed_id = failed_start.result.at("trace_id").get<std::string>();
+    auto failed_config = connection_config(outstation.port());
+    failed_config.connect_timeout_ms = 100;
+    const auto failed_connection = backend->connect(failed_config);
+    check(failed_connection.error.has_value(), "closed loopback endpoint fails to connect");
+    check(!backend->trace_stop({failed_id}).error, "trace can stop after failed connect cleanup");
+    const auto failed_logs = backend->trace_read({failed_id, 1024, 0});
+    check(!failed_logs.error && !failed_logs.result.at("records").empty(),
+          "failed connection retains native log diagnostics");
+    backend->shutdown();
+}
+
 }  // namespace
 
 int main()
 {
     try {
         run_read_integration();
+        run_protocol_trace_integration();
         run_unsolicited_overflow_integration();
         run_command_integration();
     }

@@ -57,6 +57,27 @@ def test_capture_result_schema_is_bounded_and_truth_aware() -> None:
     }.issubset(capture["required"])
 
 
+def test_protocol_trace_schema_has_strict_bounded_requests_and_records() -> None:
+    request = load_schema("request.schema.json")
+    assert {"trace.start", "trace.read", "trace.stop"}.issubset(
+        request["properties"]["cmd"]["enum"]
+    )
+    for name in ("traceStartParams", "traceReadParams", "traceStopParams"):
+        assert request["$defs"][name]["additionalProperties"] is False
+    read = request["$defs"]["traceReadParams"]
+    assert read["required"] == ["trace_id"]
+    assert read["properties"]["max_records"]["maximum"] == 1024
+    assert read["properties"]["timeout_ms"]["maximum"] == 60000
+    result = load_schema("trace-result.schema.json")
+    assert result["additionalProperties"] is False
+    assert result["properties"]["scope"] == {"const": "opendnp3_stack"}
+    assert result["properties"]["records"]["maxItems"] == 1024
+    record = result["$defs"]["record"]
+    assert record["additionalProperties"] is False
+    assert record["properties"]["message"]["maxLength"] == 1024
+    assert {"dropped_records", "truncated_records", "complete"}.issubset(result["required"])
+
+
 def test_performance_profile_schema_is_strict_and_threshold_driven() -> None:
     schema = load_schema("performance-profile.schema.json")
     assert schema["additionalProperties"] is False

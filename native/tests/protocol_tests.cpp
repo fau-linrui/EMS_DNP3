@@ -6,6 +6,7 @@
 #include "dnp3host/JsonLineProtocol.h"
 #include "dnp3host/Models.h"
 #include "dnp3host/ReadConfig.h"
+#include "dnp3host/ProtocolTrace.h"
 
 #include <iostream>
 #include <memory>
@@ -185,6 +186,24 @@ public:
         return command_result("select_and_operate", config.commands.size());
     }
 
+    dnp3host::BackendOperationResult trace_start(
+        const dnp3host::TraceStartConfig& config) override
+    {
+        return trace.start(config);
+    }
+
+    dnp3host::BackendOperationResult trace_read(
+        const dnp3host::TraceReferenceConfig& config) override
+    {
+        return trace.read(config);
+    }
+
+    dnp3host::BackendOperationResult trace_stop(
+        const dnp3host::TraceReferenceConfig& config) override
+    {
+        return trace.stop(config);
+    }
+
     dnp3host::BackendOperationResult direct_operate(
         const dnp3host::CommandConfig& config) override
     {
@@ -211,6 +230,7 @@ public:
     }
 
     bool connected{false};
+    dnp3host::ProtocolTrace trace;
     bool shutdown_called{false};
     int connect_calls{0};
     int disconnect_calls{0};

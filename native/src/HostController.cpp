@@ -7,6 +7,7 @@
 #include "dnp3host/OpenDnp3Backend.h"
 #include "dnp3host/ProjectInfo.h"
 #include "dnp3host/ReadConfig.h"
+#include "dnp3host/TraceConfig.h"
 
 #include <algorithm>
 #include <array>
@@ -97,6 +98,7 @@ DispatchResult HostController::dispatch(const Request& request)
                      {"channel", status.at("channel")},
                      {"safety", status.at("safety")},
                      {"capture", status.at("capture")},
+                     {"trace", status.at("trace")},
                      {"limitations",
                       Json::array({
                           "network byte counters are not exposed by OpenDNP3 3.1.2"})}}),
@@ -221,6 +223,29 @@ DispatchResult HostController::dispatch(const Request& request)
         }
         return backend_result(request.id, backend_->capture_begin(config));
     }
+    if (request.command == "trace.start") {
+        TraceStartConfig config;
+        if (const auto error = parse_trace_start_config(request.params, config)) {
+            ++requests_failed_;
+            return DispatchResult{
+                JsonLineProtocol::error_response(ProtocolError{
+                    request.id, error->code, error->message, error->details}), false};
+        }
+        return backend_result(request.id, backend_->trace_start(config));
+    }
+    if (request.command == "trace.read" || request.command == "trace.stop") {
+        TraceReferenceConfig config;
+        if (const auto error = parse_trace_reference_config(
+                request.params, request.command == "trace.read", config)) {
+            ++requests_failed_;
+            return DispatchResult{
+                JsonLineProtocol::error_response(ProtocolError{
+                    request.id, error->code, error->message, error->details}), false};
+        }
+        return request.command == "trace.read"
+            ? backend_result(request.id, backend_->trace_read(config))
+            : backend_result(request.id, backend_->trace_stop(config));
+    }
     if (request.command == "capture.progress" || request.command == "capture.end") {
         CaptureReferenceConfig config;
         if (const auto error = parse_capture_reference_config(
@@ -337,6 +362,7 @@ Json HostController::status_result() const
                backend_status.dropped_unsolicited_events},
               {"fragments", backend_status.unsolicited_fragments}}},
         {"capture", backend_status.capture},
+        {"trace", backend_status.trace},
         {"metrics",
          Json{
              {"requests_received", requests_received_},
@@ -358,7 +384,10 @@ const char* HostController::state_name(const BackendStatus& backend_status) cons
 
 bool HostController::is_known_backend_command(const std::string& command)
 {
-    static constexpr std::array<const char*, 15> commands{
+    static constexpr std::array<const char*, 18> commands{
+        "trace.start",
+        "trace.read",
+        "trace.stop",
         "capture.begin",
         "capture.progress",
         "capture.end",

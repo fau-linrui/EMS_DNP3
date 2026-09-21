@@ -45,6 +45,7 @@ from .models import (
     UnsolicitedControlResult,
 )
 from .safety_incidents import SafetyIncidentStore
+from .trace import TraceBatch, TraceConfig, TraceDecoder, TraceSummary
 
 
 _TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9._:-]+$")
@@ -54,6 +55,8 @@ _DIAGNOSTIC_SAFETY_TOKEN_PATTERN = re.compile(
 )
 _STDOUT_EOF = object()
 _STDIN_STOP = object()
+_MAX_JSON_DEPTH = 64
+_JSON_STRUCTURE = re.compile(r'["\\{}\[\]]')
 _TYPED_API_COMMANDS = frozenset(
     {
         "hello",
@@ -74,6 +77,9 @@ _TYPED_API_COMMANDS = frozenset(
         "capture.begin",
         "capture.progress",
         "capture.end",
+        "trace.start",
+        "trace.read",
+        "trace.stop",
     }
 )
 
@@ -148,6 +154,38 @@ def _reject_non_finite(value: str) -> None:
     raise _ProtocolViolation(f"response contains non-finite number: {value}")
 
 
+def _validate_json_depth(text: str) -> None:
+    """Bound parser/copy recursion before decoding, ignoring quoted contents.
+
+    Only structural candidates are visited; the regular expression does not
+    buffer strings or use recursive matching. json.loads still validates the
+    grammar, escape syntax, and matching braces afterwards.
+    """
+    depth = 0
+    quoted = False
+    escaped_index = -1
+    for match in _JSON_STRUCTURE.finditer(text):
+        index = match.start()
+        if index == escaped_index:
+            continue
+        character = match.group()
+        if quoted:
+            if character == "\\":
+                escaped_index = index + 1
+            elif character == '"':
+                quoted = False
+        elif character == '"':
+            quoted = True
+        elif character in "{[":
+            depth += 1
+            if depth > _MAX_JSON_DEPTH:
+                raise _ProtocolViolation(
+                    f"response JSON nesting exceeds {_MAX_JSON_DEPTH} levels"
+                )
+        elif character in "}]":
+            depth -= 1
+
+
 class Dnp3MasterClient:
     """Own a native host process and expose its v1 single-request protocol."""
 
@@ -172,6 +210,8 @@ class Dnp3MasterClient:
         self._safety_token: str | None = None
         self._active_dut_id: str | None = None
         self._simulator_mode = False
+        self._trace_summary: TraceSummary | None = None
+        self._trace_decoder = TraceDecoder()
         self._safety_incident_store = (
             SafetyIncidentStore(config.safety_incident_directory)
             if config.safety_incident_directory is not None
@@ -213,7 +253,16 @@ class Dnp3MasterClient:
     def hello_info(self) -> Mapping[str, Any]:
         if self._hello_info is None:
             raise ClientStateError("hello handshake has not completed")
-        return deepcopy(self._hello_info)
+        return self._copy_protocol_result(self._hello_info)
+
+    def _copy_protocol_result(self, result: Any) -> Any:
+        try:
+            return deepcopy(result)
+        except RecursionError as error:
+            self._abort_process("response copy exceeded the recursion limit")
+            raise HostProtocolError(
+                "response copy exceeded the recursion limit", self.diagnostics
+            ) from error
 
     @property
     def diagnostics(self) -> HostProcessDiagnostics:
@@ -259,6 +308,9 @@ class Dnp3MasterClient:
                 self._spawn_process()
                 result = self._exchange("hello", {}, self.config.startup_timeout)
                 self._validate_hello(result)
+                self._hello_info = dict(result)
+                self._state = _State.RUNNING
+                return self.hello_info
             except (HostStartError, HostTimeoutError, HostExitedError, HostProtocolError) as error:
                 if self._process is not None and self._process.poll() is None:
                     self._abort_process("startup failed")
@@ -273,10 +325,12 @@ class Dnp3MasterClient:
                     f"failed to start native host: {error}",
                     self.diagnostics,
                 ) from error
-
-            self._hello_info = dict(result)
-            self._state = _State.RUNNING
-            return deepcopy(self._hello_info)
+            except BaseException:
+                # __enter__ has not completed, so there is no __exit__ fallback.
+                # This includes interruption during Job assignment or starting
+                # only some of the I/O threads, or copying the successful hello.
+                self._abort_process("startup interrupted")
+                raise
 
     def request(
         self,
@@ -340,6 +394,157 @@ class Dnp3MasterClient:
 
         return self._mapping_result("stats", self._request("stats", timeout=timeout))
 
+    def start_trace(
+        self,
+        config: TraceConfig | None = None,
+        *,
+        request_timeout: float | None = None,
+    ) -> TraceSummary:
+        """Opt in to bounded protocol logging before connecting to an outstation.
+
+        This observes stack-accepted RX / encoded TX, not a network packet capture.
+        Trace messages contain unredacted DNP3 addresses and business payloads.
+        """
+
+        if config is None:
+            config = TraceConfig()
+        if not isinstance(config, TraceConfig):
+            raise TypeError("config must be a TraceConfig")
+        with self._request_lock:
+            if not {"trace.start", "trace.read", "trace.stop"}.issubset(
+                self.hello_info["supported_commands"]
+            ):
+                raise ClientStateError(
+                    "host does not advertise protocol trace; rebuild or install "
+                    "the matching native host before calling start_trace"
+                )
+            result = self._request(
+                "trace.start", config.to_params(), timeout=request_timeout
+            )
+            try:
+                summary = TraceSummary.from_dict(result)
+                if (
+                    summary.state != "ACTIVE"
+                    or summary.queue_capacity != config.queue_capacity
+                    or summary.queued_records != 0
+                    or summary.last_sequence != 0
+                    or not summary.complete
+                ):
+                    raise ValueError("new trace must be ACTIVE and empty")
+            except (TypeError, ValueError, KeyError, RecursionError) as error:
+                self._abort_process("trace.start returned an invalid result")
+                raise HostProtocolError(
+                    f"trace.start result is invalid: {error}", self.diagnostics
+                ) from error
+            self._trace_decoder.reset()
+            self._trace_summary = summary
+            return summary
+
+    def read_trace(
+        self,
+        *,
+        max_records: int = 256,
+        timeout: float = 0.0,
+        require_complete: bool = True,
+        request_timeout: float | None = None,
+    ) -> TraceBatch:
+        """Consume a bounded log batch and incrementally decode DNP3 frames.
+
+        Fragmented frames may complete in a later batch. Loss or decode issues
+        raise TraceIncompleteError (with .batch) unless require_complete=False;
+        this diagnostic error neither retries commands nor closes the session.
+        Drain periodically, then disconnect/stop/drain before closing the host.
+        """
+
+        if type(max_records) is not int or not 1 <= max_records <= 1024:
+            raise ValueError("max_records must be an integer between 1 and 1024")
+        try:
+            normalized_timeout = float(timeout)
+        except (TypeError, ValueError, OverflowError):
+            normalized_timeout = math.nan
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(normalized_timeout)
+            or not 0 <= normalized_timeout <= 60
+        ):
+            raise ValueError("timeout must be between 0 and 60 seconds")
+        if type(require_complete) is not bool:
+            raise TypeError("require_complete must be a bool")
+        exchange_timeout = (
+            max(self.config.request_timeout, normalized_timeout + 1.0)
+            if request_timeout is None
+            else request_timeout
+        )
+        with self._request_lock:
+            previous = self._trace_summary
+            if previous is None:
+                raise ClientStateError("call start_trace before read_trace")
+            result = self._request(
+                "trace.read",
+                {
+                    "trace_id": previous.trace_id,
+                    "max_records": max_records,
+                    "timeout_ms": round(normalized_timeout * 1000),
+                },
+                timeout=exchange_timeout,
+            )
+            try:
+                if not isinstance(result, dict):
+                    raise ValueError("trace batch must be an object")
+                if result.get("trace_id") != previous.trace_id:
+                    raise ValueError("trace_id does not match the active trace")
+                if result.get("queue_capacity") != previous.queue_capacity:
+                    raise ValueError("trace queue_capacity changed")
+                if previous.state == "STOPPED" and result.get("state") != "STOPPED":
+                    raise ValueError("stopped trace became active")
+                if not isinstance(result.get("records"), list) or len(result["records"]) > max_records:
+                    raise ValueError("trace exceeded the requested batch limit")
+                batch = self._trace_decoder.decode_batch(result)
+                self._validate_trace_counters(previous, batch.summary)
+            except (TypeError, ValueError, KeyError, RecursionError) as error:
+                self._abort_process("trace.read returned an invalid result")
+                raise HostProtocolError(
+                    f"trace.read result is invalid: {error}", self.diagnostics
+                ) from error
+            self._trace_summary = batch.summary
+            if require_complete:
+                batch.assert_complete()
+            return batch
+
+    def stop_trace(self, *, request_timeout: float | None = None) -> TraceSummary:
+        """Stop collection after disconnect; retained records remain readable."""
+
+        with self._request_lock:
+            previous = self._trace_summary
+            if previous is None:
+                raise ClientStateError("call start_trace before stop_trace")
+            result = self._request(
+                "trace.stop", {"trace_id": previous.trace_id}, timeout=request_timeout
+            )
+            try:
+                summary = TraceSummary.from_dict(result)
+                if summary.trace_id != previous.trace_id or summary.state != "STOPPED":
+                    raise ValueError("trace.stop returned an unexpected trace/state")
+                self._validate_trace_counters(previous, summary)
+            except (TypeError, ValueError, KeyError, RecursionError) as error:
+                self._abort_process("trace.stop returned an invalid result")
+                raise HostProtocolError(
+                    f"trace.stop result is invalid: {error}", self.diagnostics
+                ) from error
+            self._trace_summary = summary
+            return summary
+
+    @staticmethod
+    def _validate_trace_counters(previous: TraceSummary, current: TraceSummary) -> None:
+        if (
+            current.queue_capacity != previous.queue_capacity
+            or current.last_sequence < previous.last_sequence
+            or current.dropped_records < previous.dropped_records
+            or current.truncated_records < previous.truncated_records
+        ):
+            raise ValueError("trace capacity changed or monotonic counters regressed")
+
     def connect(
         self,
         config: TcpConnectionConfig,
@@ -392,7 +597,7 @@ class Dnp3MasterClient:
             if authorized and config.safety is not None
             else None
         )
-        public_result = deepcopy(result)
+        public_result = self._copy_protocol_result(result)
         public_safety = dict(public_result["safety"])
         public_safety.pop("safety_token", None)
         public_safety["token_exposed"] = False
@@ -558,7 +763,7 @@ class Dnp3MasterClient:
         )
         try:
             return UnsolicitedBatchResult.from_mapping(result)
-        except (TypeError, ValueError, KeyError) as error:
+        except (TypeError, ValueError, KeyError, RecursionError) as error:
             self._abort_process("wait_unsolicited returned an invalid result")
             raise HostProtocolError(
                 f"wait_unsolicited result is invalid: {error}", self.diagnostics
@@ -656,7 +861,7 @@ class Dnp3MasterClient:
         )
         try:
             return CaptureResult.from_mapping(result)
-        except (TypeError, ValueError, KeyError) as error:
+        except (TypeError, ValueError, KeyError, RecursionError) as error:
             self._abort_process(f"{command} returned an invalid capture result")
             raise HostProtocolError(
                 f"{command} result is invalid: {error}", self.diagnostics
@@ -932,7 +1137,7 @@ class Dnp3MasterClient:
         try:
             parsed = CommandTaskResult.from_mapping(result)
             self._validate_command_correlation(command, normalized, parsed)
-        except (TypeError, ValueError, KeyError) as error:
+        except (TypeError, ValueError, KeyError, RecursionError) as error:
             protocol_error = HostProtocolError(
                 f"{command} result is invalid: {error}", self.diagnostics
             )
@@ -1196,7 +1401,7 @@ class Dnp3MasterClient:
         )
         try:
             return UnsolicitedControlResult.from_mapping(result)
-        except (TypeError, ValueError, KeyError) as error:
+        except (TypeError, ValueError, KeyError, RecursionError) as error:
             self._abort_process(f"{command} returned an invalid result")
             raise HostProtocolError(
                 f"{command} result is invalid: {error}", self.diagnostics
@@ -1257,7 +1462,7 @@ class Dnp3MasterClient:
         )
         try:
             return ReadTaskResult.from_mapping(result)
-        except (TypeError, ValueError, KeyError) as error:
+        except (TypeError, ValueError, KeyError, RecursionError) as error:
             self._abort_process(f"{command} returned an invalid read result")
             raise HostProtocolError(
                 f"{command} result is invalid: {error}", self.diagnostics
@@ -1321,8 +1526,8 @@ class Dnp3MasterClient:
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
         try:
-            job = ProcessJob()
-            process = subprocess.Popen(
+            self._job = job = ProcessJob()
+            self._process = process = subprocess.Popen(
                 command,
                 cwd=(
                     str(self.config.working_directory)
@@ -1340,11 +1545,10 @@ class Dnp3MasterClient:
         except (OSError, ValueError) as error:
             if "job" in locals():
                 job.close()
+                self._job = None
             self._state = _State.BROKEN
             raise HostStartError(f"failed to create host process: {error}", self.diagnostics) from error
 
-        self._job = job
-        self._process = process
         try:
             job.assign(process.pid)
             self._job_was_assigned = job.assigned
@@ -1561,6 +1765,7 @@ class Dnp3MasterClient:
         except UnicodeDecodeError as error:
             raise _ProtocolViolation("response is not valid UTF-8") from error
         try:
+            _validate_json_depth(text)
             response = json.loads(
                 text,
                 object_pairs_hook=_reject_duplicate_keys,
@@ -1568,7 +1773,7 @@ class Dnp3MasterClient:
             )
         except _ProtocolViolation:
             raise
-        except (json.JSONDecodeError, TypeError, ValueError) as error:
+        except (json.JSONDecodeError, TypeError, ValueError, RecursionError) as error:
             raise _ProtocolViolation("response is not valid JSON") from error
 
         if not isinstance(response, dict):
@@ -1715,7 +1920,11 @@ class Dnp3MasterClient:
         except subprocess.TimeoutExpired:
             return
         for thread in (self._stdin_thread, self._stdout_thread, self._stderr_thread):
-            if thread is not None and thread is not threading.current_thread():
+            if (
+                thread is not None
+                and thread is not threading.current_thread()
+                and thread.ident is not None
+            ):
                 thread.join(timeout=2)
         # A cancellation can stop the writer before it takes the queued item.
         # Release any remaining payload along with the terminated process.

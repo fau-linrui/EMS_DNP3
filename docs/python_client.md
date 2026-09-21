@@ -101,6 +101,20 @@ finally:
 
 每条 `MeasurementRecord` 包含 `source="unsolicited"`、`session_id`、分片和接收顺序。持久队列默认上限 4096，满时 drop-oldest 并增加 `dropped_total`；调用方不能忽略丢弃计数。断开会结束收集并清队列。本机已覆盖启停、G2V2/G32V7、禁用后无新事件和队列溢出；Confirm 丢失、重发/重复、序号回绕等原始时序仍保持未验证。
 
+## DNP3 报文 trace API
+
+在 `connect()` 前调用 `start_trace(TraceConfig(queue_capacity=16384))`，然后用
+`read_trace(max_records=256, timeout=0.0)` 取得有界原始日志、HEX 重组帧和应用层解析。
+最后按 `disconnect()` → `stop_trace()` → 排空 `read_trace()` → `close()` 收尾。
+trace 默认关闭，不替代下面的 measurement capture，也不修改业务请求的返回类型。
+
+`TraceBatch.assert_complete()` 检查采集/重组完整性；`read_trace()` 默认发现丢失、
+采集截断、重组错误或未支持的语义解码即抛 `TraceIncompleteError`（`.batch` 保留诊断），仅排错时可显式
+`require_complete=False`。TX 是栈已编码/待发、RX 是栈已通过链路校验的报文，不能据此
+证明实际 socket 发送/EMS 接收，也不能声称包含损坏输入、TCP/IP 或 PCAP。
+原始载荷可能敏感，默认不落盘。
+完整 pytest 示例、解码字段、队列上限和迁移步骤见 [报文 trace 指南](PROTOCOL_TRACE.md)。
+
 ## 持续 Capture API
 
 `begin_capture(CaptureConfig)`、`capture_progress(capture_id)` 和
@@ -342,6 +356,11 @@ host 启动/请求/关闭 timeout 也可通过 `--dnp3-startup-timeout`、`--dnp
 ## 关闭与生命周期
 
 上下文退出时先发送 `shutdown`；若 host 无响应，关闭 Job Object 并强制回收进程树。`close()` 可重复调用，返回最终 `HostProcessDiagnostics`。超时/协议破坏后 client 进入不可复用状态，应新建实例。
+
+启动期间的 `KeyboardInterrupt` / `SystemExit` 也会清理已创建的子进程和部分启动的
+IO 线程，再传播原中断；即使 `__enter__` 尚未成功也不会跳过此清理。响应 JSON
+最多嵌套 64 层，超深或递归解析/复制失败按 `HostProtocolError` 处理。若控制可能
+已发送，同样清令牌并销毁会话；LAB 记录事故，SIMULATOR 不访问事故存储。
 
 控制请求一旦进入写入队列，`KeyboardInterrupt` / `SystemExit` 也按可能已执行处理，
 包括等待响应和校验结果时发生的中断。持久事故锁写入后，清除令牌并回收 host 与

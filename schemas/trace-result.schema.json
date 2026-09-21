@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dnp3-master/trace-result.schema.json",
+  "title": "DNP3 OpenDNP3 stack trace v1 native summary or read result",
+  "description": "Native NDJSON result only; Python-derived frames/applications are not part of this wire schema. Completeness is limited to stack log collection, not all network traffic.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "trace_id", "state", "scope", "queue_capacity", "queued_records",
+    "dropped_records", "truncated_records", "last_sequence", "complete"
+  ],
+  "properties": {
+    "trace_id": {
+      "oneOf": [
+        { "$ref": "#/$defs/traceId" },
+        { "type": "null" }
+      ]
+    },
+    "state": { "enum": ["IDLE", "ACTIVE", "STOPPED"] },
+    "scope": { "const": "opendnp3_stack" },
+    "queue_capacity": { "type": "integer", "minimum": 1, "maximum": 65536 },
+    "queued_records": { "type": "integer", "minimum": 0, "maximum": 65536 },
+    "dropped_records": { "type": "integer", "minimum": 0 },
+    "truncated_records": { "type": "integer", "minimum": 0 },
+    "last_sequence": { "type": "integer", "minimum": 0 },
+    "complete": { "type": "boolean" },
+    "records": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": { "$ref": "#/$defs/record" }
+    },
+    "timed_out": {
+      "type": "boolean",
+      "description": "True exactly when this read returns no records, including a nonblocking read or a drained stopped trace. Not a DNP3 response timeout."
+    }
+  },
+  "dependentRequired": {
+    "records": ["timed_out"],
+    "timed_out": ["records"]
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "const": "IDLE" } } },
+      "then": {
+        "properties": {
+          "trace_id": { "type": "null" },
+          "queue_capacity": { "const": 16384 },
+          "queued_records": { "const": 0 },
+          "dropped_records": { "const": 0 },
+          "truncated_records": { "const": 0 },
+          "last_sequence": { "const": 0 },
+          "complete": { "const": true }
+        },
+        "not": { "anyOf": [{ "required": ["records"] }, { "required": ["timed_out"] }] }
+      },
+      "else": { "properties": { "trace_id": { "$ref": "#/$defs/traceId" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "dropped_records": { "const": 0 },
+          "truncated_records": { "const": 0 }
+        }
+      },
+      "then": { "properties": { "complete": { "const": true } } },
+      "else": { "properties": { "complete": { "const": false } } }
+    },
+    {
+      "if": { "required": ["timed_out"], "properties": { "timed_out": { "const": true } } },
+      "then": { "properties": { "records": { "maxItems": 0 } } }
+    },
+    {
+      "if": { "required": ["timed_out"], "properties": { "timed_out": { "const": false } } },
+      "then": { "properties": { "records": { "minItems": 1 } } }
+    }
+  ],
+  "$defs": {
+    "traceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^trace-[1-9][0-9]*$"
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence", "session_id", "monotonic_ns", "logger", "level",
+        "message", "message_truncated"
+      ],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 1 },
+        "session_id": { "type": "integer", "minimum": 1 },
+        "monotonic_ns": { "type": "integer", "minimum": 0 },
+        "logger": { "type": "string", "maxLength": 128 },
+        "level": {
+          "enum": [
+            "EVENT", "ERR", "WARN", "INFO", "DBG", "LINK_RX", "LINK_RX_HEX",
+            "LINK_TX", "LINK_TX_HEX", "TRANSPORT_RX", "TRANSPORT_TX",
+            "APP_HEADER_RX", "APP_HEADER_TX", "APP_OBJECT_RX", "APP_OBJECT_TX",
+            "APP_HEX_RX", "APP_HEX_TX", "OTHER"
+          ]
+        },
+        "message": { "type": "string", "maxLength": 1024 },
+        "message_truncated": { "type": "boolean" }
+      }
+    }
+  }
+}

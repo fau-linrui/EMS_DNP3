@@ -86,6 +86,9 @@ def test_hello_status_and_shutdown(host_executable: Path) -> None:
         "select_and_operate",
         "shutdown",
         "stats",
+        "trace.start",
+        "trace.read",
+        "trace.stop",
         "wait_event",
         "wait_unsolicited",
     ]

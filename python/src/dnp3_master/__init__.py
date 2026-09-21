@@ -93,6 +93,16 @@ from .safety_incidents import (
     dut_identity_sha256,
 )
 from .soak import SoakRunnerError, run_soak
+from .trace import (
+    TraceApplication,
+    TraceBatch,
+    TraceConfig,
+    TraceDecoder,
+    TraceFrame,
+    TraceIncompleteError,
+    TraceRecord,
+    TraceSummary,
+)
 
 __version__ = "0.6.1"
 TARGET_STANDARD = "IEEE1815-2012"
@@ -157,6 +167,14 @@ __all__ = [
     "SoakSettings",
     "TARGET_STANDARD",
     "TcpConnectionConfig",
+    "TraceApplication",
+    "TraceBatch",
+    "TraceConfig",
+    "TraceDecoder",
+    "TraceFrame",
+    "TraceIncompleteError",
+    "TraceRecord",
+    "TraceSummary",
     "UnsolicitedBatchResult",
     "UnsolicitedControlResult",
     "UnsolicitedScenario",

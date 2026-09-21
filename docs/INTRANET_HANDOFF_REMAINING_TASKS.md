@@ -22,6 +22,17 @@
 精确 Class 1～3 数量、FC5 遥控开关/Float32 遥调读回、外部 BI/AI 变化接收。
 可直接复制，无需内网 agent 重写这些基础用例。主站本地源端口由 Windows 分配。
 
+另已提供 [pytest 报文 trace](PROTOCOL_TRACE.md)：显式开启后，经 NDJSON 读取
+双向原始 HEX/栈日志及 Python 协议解析，有限队列丢失会明确报错。内网无需重新实现
+EXE 日志接入；只需在现有用例中按连接前开启、周期读取、断开后停止排空的顺序接入。
+它不是 PCAP，也不覆盖所有损坏帧或证明实际发送；需正式 wire 证据时仍使用独立采集工具。
+
+本轮代码审查修复不需要留给内网重新开发：capture 线程安全启动、Read 截止时间与
+IIN 一致性、LAB 事故文件访问失败保持锁定、超深 NDJSON 响应销毁不确定会话、
+启动中断资源回收、脱敏用例独立 `case_id`、完整固定依赖核验，以及 PowerShell
+5.1 的 stderr 警告兼容处理。迁移后仍应在目标解释器运行验收；这些修复不增加
+SIMULATOR 审批或事故解锁步骤，也不代表真实 EMS/24 小时验证已完成。
+
 内网的最短任务顺序：填连接及点号 → 只读探针和静态/Class → 控制反馈 →
 配合模拟器验证事件 → 用现有工具运行目标负载/24 小时。网络可达、实际映射、
 EMS 特殊响应、独立互操作和正式性能证据无法在外网凭空确认。
@@ -125,11 +136,11 @@ examples/pytest_performance/
 - 一个 `Dnp3MasterClient`/host 进程只拥有一个 DNP3 Master 会话和一个在途 RPC；不支持并发任务。
 - 没有周期扫描调度器。Class Poll 和 Read 都是调用方显式发起的一次性任务。
 - 已有显式、持久、有界 unsolicited 收集器，但启动时不自动扫描/启用；尚无 Confirm 丢失、应用序号回绕、重发/重复和 solicited 交错的原始帧故障注入证据。
-- 已有 `capture.begin/progress/end` 和 host 进程资源时间线，但没有 PCAP、链路/网络字节、wire first byte、DUT 资源、黄金字节播放器、Raw frame 注入或独立一致性工具适配。不可观测值在报告中为 `null` 并说明原因；pytest/性能报告不能替代 PCAP 或签名归档。
+- 已有 `capture.begin/progress/end`、显式有界 DNP3 stack trace 和 host 进程资源时间线，但没有 PCAP、实际链路/网络字节、wire first byte、DUT 资源、黄金字节播放器、Raw frame 注入或独立一致性工具适配。trace 的已编码 TX/已接受 RX 字节不填充这些真实线上指标；不可观测值在报告中仍为 `null` 并说明原因，pytest/性能报告不能替代 PCAP 或签名归档。
 - `summary` 仍只是单次 Read 的有界汇总；跨任务统计必须显式启动 Capture v1。Capture 是内存有界的聚合/真值检查器，不是无限期逐对象历史数据库。
 - 控制只支持 OpenDNP3 公共 API 可表达的有响应 SBO/Direct Operate；`DIRECT_OPERATE_NR` 不支持。
 - Read/命令公共 API 只支持 Q00/Q01/Q06/Q07/Q08/Q17/Q28 所覆盖的 8/16-bit 路径；Q02/Q09/Q39 的 32-bit qualifier 需要后端扩展或更换协议栈。
-- OpenDNP3 3.1.2 会把未识别的 Command Status 线上值 19～125 折叠成 127；框架会报告 `status_wire_raw_unambiguous=false`，但没有 raw decoder 前无法恢复真实字节。
+- OpenDNP3 3.1.2 会把未识别的 Command Status 线上值 19～125 折叠成 127；业务结果仍报告 `status_wire_raw_unambiguous=false` 并保持不确定控制保护。trace 解码器可从已经取得的原始响应字节识别真实值，但普通控制 API 遇到不确定结果会立即销毁 host，尚未取回的 trace 也随之丢失，不能承诺靠此接口恢复该次状态字节。它不修改业务结果、不替代命令关联和读回确认；可靠故障证据仍需独立采集。
 - 控制会话令牌只用于防误操作，不是用户认证、权限系统或 Secure Authentication v5。
 - 事故锁只对使用同一持久目录和完全相同 `dut_id` 的进程有效，不是多机分布式锁；真实控制必须保持单控制器、串行执行。
 - 未完成时间同步、Restart、Freeze、Assign Class、File/Data Set/VT、SAv5、Raw fault/fuzz 等能力。

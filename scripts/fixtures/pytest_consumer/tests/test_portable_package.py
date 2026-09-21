@@ -74,6 +74,37 @@ def test_packaged_simulator_mode_without_lab_identity_or_incident_store() -> Non
                     assert client.direct_operate([scenario.command.to_command()]).all_success
 
 
+def test_packaged_protocol_trace_roundtrip() -> None:
+    """The migrated wheel and paired EXE both implement the optional trace API."""
+    from dnp3_master.local_outstation import LocalTestOutstation
+
+    package = Path(os.environ["DNP3_EXPECTED_PACKAGE_ROOT"]).resolve()
+    assert (package / "docs/PROTOCOL_TRACE.md").is_file()
+    assert (package / "schemas/trace-result.schema.json").is_file()
+    with LocalTestOutstation(package / "tools/dnp3-local-test-outstation.exe") as simulator:
+        with dnp3_master.Dnp3MasterClient(dnp3_master.HostProcessConfig(
+            package / "bin/dnp3-master-host.exe",
+        )) as client:
+            client.start_trace(dnp3_master.TraceConfig(queue_capacity=2048))
+            client.connect(dnp3_master.TcpConnectionConfig(
+                host="127.0.0.1", port=simulator.port,
+            ))
+            result = client.read([dnp3_master.ReadHeader.all_objects(30, 5)])
+            assert result.summary["received_total"] == 2
+            client.disconnect()
+            client.stop_trace()
+            directions = set()
+            for _ in range(3):
+                batch = client.read_trace(max_records=1024)
+                directions.update(frame.direction for frame in batch.frames)
+                json.dumps(batch.to_dict(), allow_nan=False)
+                if batch.summary.queued_records == 0:
+                    break
+            else:
+                raise AssertionError("bounded package trace did not drain")
+            assert directions == {"RX", "TX"}
+
+
 def test_copied_simulator_starter_with_isolated_wheel(tmp_path) -> None:
     """No repository import paths; exercise the actual packaged consumer suite."""
     import shutil

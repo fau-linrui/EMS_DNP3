@@ -252,24 +252,38 @@ class SafetyIncidentStore:
         return self.archive_directory / f"{incident_id}.json"
 
     @staticmethod
-    def _read_document(path: Path, *, unresolved_on_error: bool) -> dict[str, Any]:
+    def _read_document(
+        path: Path, *, unresolved_on_error: bool, missing_ok: bool = False
+    ) -> dict[str, Any] | None:
         error_type = (
             UnresolvedSafetyIncidentError
             if unresolved_on_error
             else SafetyIncidentPersistenceError
         )
         try:
-            size = path.stat().st_size
-            if size <= 0 or size > _MAX_INCIDENT_BYTES:
+            try:
+                stream = path.open("rb")
+            except FileNotFoundError:
+                if missing_ok:
+                    # A dangling symlink is an unreadable record, not an absent
+                    # lock. lstat must prove the directory entry itself absent.
+                    try:
+                        path.lstat()
+                    except FileNotFoundError:
+                        return None
+                raise
+            with stream:
+                encoded = stream.read(_MAX_INCIDENT_BYTES + 1)
+            if not 0 < len(encoded) <= _MAX_INCIDENT_BYTES:
                 raise ValueError("file size is outside the allowed range")
-            raw = path.read_text(encoding="utf-8")
+            raw = encoded.decode("utf-8")
             document = json.loads(
                 raw,
                 object_pairs_hook=_reject_duplicate_keys,
                 parse_constant=_reject_non_finite,
             )
             return _validate_incident(document)
-        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+        except (OSError, UnicodeError, ValueError, RecursionError) as error:
             raise error_type(
                 "safety-incident record is unreadable or invalid; control remains locked",
                 details={"record_name": path.name},
@@ -326,9 +340,13 @@ class SafetyIncidentStore:
         self._ensure_directories()
         dut_hash = dut_identity_sha256(dut_id)
         path = self._active_path_from_hash(dut_hash)
-        if not path.exists():
+        # Path.exists() suppresses access/stat errors on supported Python
+        # versions. An unreadable active record must never mean "unlocked".
+        document = self._read_document(
+            path, unresolved_on_error=True, missing_ok=True
+        )
+        if document is None:
             return None
-        document = self._read_document(path, unresolved_on_error=True)
         if document["dut_identity_sha256"] != dut_hash:
             raise UnresolvedSafetyIncidentError(
                 "safety-incident record does not match the DUT; control remains locked",
@@ -423,16 +441,19 @@ class SafetyIncidentStore:
         dut_hash = dut_identity_sha256(dut_id)
         archive_path = self._archive_path(incident_id)
         active_path = self._active_path_from_hash(dut_hash)
-        if not active_path.exists():
-            if archive_path.exists():
-                archived = self._read_document(archive_path, unresolved_on_error=False)
-                if archived["dut_identity_sha256"] == dut_hash:
-                    return archived
+        incident = self._read_document(
+            active_path, unresolved_on_error=True, missing_ok=True
+        )
+        if incident is None:
+            archived = self._read_document(
+                archive_path, unresolved_on_error=False, missing_ok=True
+            )
+            if archived is not None and archived["dut_identity_sha256"] == dut_hash:
+                return archived
             raise SafetyIncidentAcknowledgmentError(
                 "no active safety incident exists for this DUT",
                 incident_id=incident_id,
             )
-        incident = self._read_document(active_path, unresolved_on_error=True)
         if incident["dut_identity_sha256"] != dut_hash:
             raise SafetyIncidentAcknowledgmentError(
                 "active incident does not match this DUT",

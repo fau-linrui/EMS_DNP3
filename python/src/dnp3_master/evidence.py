@@ -305,10 +305,16 @@ class EvidenceRecorder:
     ) -> None:
         if self._finalized:
             raise RuntimeError("evidence recorder has already been finalized")
+        # Display names are deliberately lossy (redaction and truncation).
+        # Key all phases by the original identity without retaining/persisting
+        # the private nodeid. Export only an opaque, run-local case identifier;
+        # even the identity digest must not appear in the evidence files.
+        identity = hashlib.sha256(nodeid.encode("utf-8")).hexdigest()
         safe_nodeid = self._redact(nodeid, maximum_chars=4096)
         test = self._results.setdefault(
-            safe_nodeid,
+            identity,
             {
+                "case_id": f"case-{len(self._results) + 1:06d}",
                 "nodeid": safe_nodeid,
                 "markers": sorted(
                     {self._redact(value, maximum_chars=256) for value in markers}

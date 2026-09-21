@@ -3,6 +3,7 @@
 #include "dnp3host/OpenDnp3CommandSupport.h"
 #include "dnp3host/OpenDnp3ReadSupport.h"
 #include "dnp3host/OpenDnp3UnsolicitedSupport.h"
+#include "dnp3host/ProtocolTrace.h"
 
 #include <opendnp3/DNP3Manager.h>
 #include <opendnp3/app/ClassField.h>
@@ -35,6 +36,24 @@ namespace dnp3host {
 namespace {
 
 constexpr std::size_t kEventQueueCapacity = 1024;
+
+class TraceLogHandler final : public opendnp3::ILogHandler {
+public:
+    TraceLogHandler(std::shared_ptr<ProtocolTrace> trace, const std::uint64_t session_id)
+        : trace_(std::move(trace)), session_id_(session_id)
+    {
+    }
+
+    void log(opendnp3::ModuleId, const char* id, const opendnp3::LogLevel level,
+             const char*, const char* message) noexcept override
+    {
+        trace_->record(session_id_, id, level.value, message);
+    }
+
+private:
+    const std::shared_ptr<ProtocolTrace> trace_;
+    const std::uint64_t session_id_;
+};
 
 std::string generate_safety_token()
 {
@@ -311,6 +330,7 @@ public:
     explicit OpenDnp3Backend(const std::size_t unsolicited_queue_capacity)
         : events_(std::make_shared<ChannelEventStore>()),
           capture_(std::make_shared<MeasurementCapture>()),
+          trace_(std::make_shared<ProtocolTrace>()),
           command_support_(std::make_unique<OpenDnp3CommandSupport>()),
           read_support_(std::make_unique<OpenDnp3ReadSupport>(capture_)),
           unsolicited_support_(std::make_unique<OpenDnp3UnsolicitedSupport>(
@@ -352,6 +372,9 @@ public:
             "select_and_operate",
             "shutdown",
             "stats",
+            "trace.start",
+            "trace.read",
+            "trace.stop",
             "wait_event",
             "wait_unsolicited"};
     }
@@ -379,7 +402,17 @@ public:
             {"status", "IMPLEMENTED_UNVERIFIED"},
             {"implementation_revision", "t15-capture-v1"},
             {"verification_scope", "local_opendnp3_outstation"},
-            {"modes", Json::array({"static_set", "event_sequence", "observation"})}};
+            {"modes", Json::array({"static_set", "event_sequence", "observation"})},
+            {"protocol_trace", Json{
+                {"implementation_revision", "stack-log-trace-v1"},
+                {"scope", "opendnp3_stack"},
+                {"default_enabled", false},
+                {"max_queue_capacity", 65536},
+                {"max_record_message_bytes", 1024},
+                {"rx_scope", "link_validated_frames"},
+                {"tx_scope", "encoded_frames_before_socket_write"},
+                {"captures_invalid_link_bytes", false},
+                {"captures_tcp_ip_packets", false}}}};
         return Json{
             {"CHANNEL.TCP.CLIENT", channel_entry},
             {"CHANNEL.RECONNECT", channel_entry},
@@ -447,7 +480,8 @@ public:
             unsolicited.queued_events,
             unsolicited.dropped_events,
             unsolicited.fragments,
-            capture_->status()};
+            capture_->status(),
+            trace_->status()};
     }
 
     BackendOperationResult connect(const ConnectionConfig& config) override
@@ -479,14 +513,19 @@ public:
                     && !config.operator_id.empty() && !config.dut_id.empty())) {
                 safety_token = generate_safety_token();
             }
-            created.manager = std::make_unique<opendnp3::DNP3Manager>(1);
+            const auto tracing = trace_->active();
+            const std::shared_ptr<opendnp3::ILogHandler> logger = tracing
+                ? std::make_shared<TraceLogHandler>(trace_, session_id) : nullptr;
+            created.manager = std::make_unique<opendnp3::DNP3Manager>(1, logger);
             const auto listener = std::make_shared<QueueingChannelListener>(events_, session_id);
             const auto retry = opendnp3::ChannelRetry{
                 opendnp3::TimeDuration::Milliseconds(config.retry_min_ms),
                 opendnp3::TimeDuration::Milliseconds(config.retry_max_ms)};
             created.channel = created.manager->AddTCPClient(
                 "pytest-tcp-client",
-                opendnp3::levels::NOTHING,
+                tracing ? opendnp3::levels::NORMAL | opendnp3::levels::ALL_COMMS
+                              | opendnp3::flags::LINK_RX_HEX | opendnp3::flags::LINK_TX_HEX
+                        : opendnp3::levels::NOTHING,
                 retry,
                 {opendnp3::IPEndpoint{config.host, config.port}},
                 config.local_adapter,
@@ -709,6 +748,37 @@ public:
         return capture_->end(config);
     }
 
+    BackendOperationResult trace_start(const TraceStartConfig& config) override
+    {
+        std::lock_guard<std::mutex> lock(resources_mutex_);
+        if (session_active_) {
+            return BackendOperationResult::failure(
+                ErrorCode::InvalidState, "start trace before connecting",
+                Json{{"reason", "trace_requires_disconnected_session"}});
+        }
+        if (shutting_down_) {
+            return BackendOperationResult::failure(
+                ErrorCode::ProcessShuttingDown, "backend is shutting down");
+        }
+        return trace_->start(config);
+    }
+
+    BackendOperationResult trace_read(const TraceReferenceConfig& config) override
+    {
+        return trace_->read(config);
+    }
+
+    BackendOperationResult trace_stop(const TraceReferenceConfig& config) override
+    {
+        std::lock_guard<std::mutex> lock(resources_mutex_);
+        if (session_active_) {
+            return BackendOperationResult::failure(
+                ErrorCode::InvalidState, "disconnect before stopping trace",
+                Json{{"reason", "trace_requires_disconnected_session"}});
+        }
+        return trace_->stop(config);
+    }
+
     BackendOperationResult select_and_operate(const CommandConfig& config) override
     {
         std::shared_ptr<opendnp3::IMaster> master;
@@ -748,6 +818,7 @@ public:
         unsolicited_support_->cancel_active();
         capture_->abort("CAPTURE_HOST_SHUTDOWN");
         shutdown_resources(detach_resources());
+        trace_->shutdown();
     }
 
 private:
@@ -837,6 +908,7 @@ private:
 
     std::shared_ptr<ChannelEventStore> events_;
     std::shared_ptr<MeasurementCapture> capture_;
+    std::shared_ptr<ProtocolTrace> trace_;
     std::unique_ptr<OpenDnp3CommandSupport> command_support_;
     std::unique_ptr<OpenDnp3ReadSupport> read_support_;
     std::unique_ptr<OpenDnp3UnsolicitedSupport> unsolicited_support_;

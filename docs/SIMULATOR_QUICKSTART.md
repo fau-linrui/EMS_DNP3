@@ -177,6 +177,14 @@ CLI `--dnp3-simulator-settings` 路径相对当前目录；ini `dnp3_simulator_s
 传 `--dnp3-evidence-dir <本地目录>` 可记录私有配置哈希而非内容，并标明 SIMULATOR。
 pytest 失败回溯仍可能包含现场参数，外发前人工检查。
 
+### 需要在用例中查看 DNP3 报文时
+
+按 [报文 trace 指南](PROTOCOL_TRACE.md) 使用 `dnp3_host_config` 和
+`dnp3_connection_config` 创建自己的 client，在 connect 前开启 trace，操作间读取，
+断开后停止并排空。单配置入门套件本身不会默认收集或保存原始报文，也没有新增 JSON
+开关；现有 settings 文件无需改变。trace 含业务载荷，且不是网卡级抓包，不能直接上传
+共享日志。原来的静态/控制/事件断言与 SIMULATOR 模式保持不变。
+
 ## 5. 内网仍需要提供什么
 
 现场配置和实际验收：IP/端口/链路地址、点号/反馈关系、合适的写入值、外部信号变化、

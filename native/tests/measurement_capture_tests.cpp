@@ -293,6 +293,46 @@ void test_event_sequence_digest_truth()
         "event mismatch reason must be stable");
 }
 
+void test_repeated_construction_and_destruction()
+{
+    // Exercise worker startup and teardown without relying on a scheduler
+    // sleep: unused, active, and normally drained instances all own a worker.
+    // The CTest timeout bounds a regression that leaves a worker unresponsive.
+    for (std::uint64_t iteration = 0; iteration < 256; ++iteration) {
+        dnp3host::MeasurementCapture capture;
+        check(capture.status().at("state") == "IDLE", "new capture must start idle");
+        std::this_thread::yield();
+        if (iteration % 3 == 0) {
+            continue;
+        }
+
+        const auto began = capture.begin(iteration + 1, static_config());
+        check(!began.error, "repeated capture construction must support begin");
+        if (began.error) {
+            continue;
+        }
+        capture.record_object(
+            "solicited", "analog_input", 30, 5, std::uint16_t{0}, 1.0, 1);
+        capture.record_object(
+            "solicited", "analog_input", 30, 5, std::uint16_t{1}, 2.0, 2);
+        if (iteration % 3 == 1) {
+            // Destruction must also cancel and join an active collector.
+            continue;
+        }
+
+        dnp3host::CaptureReferenceConfig reference;
+        reference.capture_id = began.result.at("capture_id").get<std::string>();
+        reference.drain_timeout_ms = 1000;
+        const auto ended = capture.end(reference);
+        check(!ended.error, "fresh capture worker must drain before the deadline");
+        if (!ended.error) {
+            check(ended.result.at("state") == "FINALIZED", "fresh capture must finalize");
+            check(ended.result.at("valid") == true, "fresh capture must process both points");
+            check(ended.result.at("received_total") == 2, "fresh worker must not exit early");
+        }
+    }
+}
+
 }  // namespace
 
 int main()
@@ -301,6 +341,7 @@ int main()
     test_static_set_state_machine();
     test_deadline_abort_and_overflow();
     test_event_sequence_digest_truth();
+    test_repeated_construction_and_destruction();
     if (failures != 0) {
         std::cerr << failures << " capture test(s) failed\n";
         return 1;

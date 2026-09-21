@@ -15,6 +15,7 @@ pytest/业务断言
        -> OpenDnp3ReadSupport
        -> OpenDnp3UnsolicitedSupport
        -> OpenDnp3CommandSupport
+       -> ProtocolTrace (explicit opt-in stack logs)
   -> EMS Outstation
 ```
 
@@ -46,8 +47,12 @@ pytest/业务断言
   响应等待使用同一截止时间；关闭时回收该线程及待写载荷。控制锁还覆盖结果校验和
   事故处理，防止在不确定结果尚未处置时开始下一条操作。
 - 断开顺序为：停止/取消命令和 Read -> 取走共享资源 -> Master Disable/Shutdown -> Channel Shutdown -> Manager Shutdown -> 清除安全令牌。
-- OpenDNP3 回调只写入有界的任务状态/测量结构或 capture 队列；不会等待 Python 或 stdout。capture worker 在 native 层聚合，不构造跨任务逐点 JSON 数组。
+- OpenDNP3 回调只写入有界的任务状态/测量结构、capture 或 trace 队列；不会等待 Python 或 stdout。capture worker 在 native 层聚合，不构造跨任务逐点 JSON 数组。
 - stdout 由主协议线程独占，只输出 JSON；诊断写 stderr。
+
+capture worker 在全部成员初始化完成后才启动。Python 启动阶段遇到
+`KeyboardInterrupt` / `SystemExit` 会先回收已创建的进程、Job 和已启动的 IO 线程，
+再传播原中断；不能依赖尚未成功进入的上下文管理器来执行清理。
 
 ## Read 数据路径
 
@@ -55,7 +60,23 @@ pytest/业务断言
 
 detail 模式保留并返回逐点结果；summary 模式只累计计数，不保留或返回逐点记录。超过 `max_measurements`、分片上限或当前任务 IIN 窗口发生丢失时返回 `QUEUE_OVERFLOW`，不会静默丢数据。任务结果同时包含原始/解析 IIN、OpenDNP3 task completion、开始/完成时间和分片摘要；EMS 场景还会拒绝 IIN2.0/2.1/2.2，避免 task success 掩盖请求错误。
 
+读任务等待超时的判定在任务锁内固定；迟到的完成回调不能再把本次调用升级为成功，
+避免成功状态与较早的 IIN 快照拼接。该行为不发送重试，也不改变单在途请求边界。
+
 当前 master 的自动启动完整性、event scan 和 unsolicited class mask 均关闭，避免建立连接时产生不可控后台任务；调用方必须显式发起 Read 或 `enable_unsolicited`。`OpenDnp3UnsolicitedSupport` 是跨请求存活的 ISOE handler，只收集 unsolicited 回调，使用默认 4096 条的 drop-oldest 队列，并记录会话、分片和接收顺序；disable/断开后的事件不得继续进入队列。原始 Confirm 丢失、序号回绕和重发故障注入仍属于后续互操作任务。
+
+## 原始报文观测路径
+
+`ProtocolTrace` 经 OpenDNP3 公共日志回调接收带 session/sequence/monotonic
+time 的有界文本/HEX 记录。默认关闭，connect 前显式开启，不改 TCP 路径或 vendored
+源码。回调只向有界队列复制数据，NDJSON 主线程通过 `trace.read` 批量消费；丢弃、
+截断和 UTF-8 替换均可见。disconnect 后停止并排空，队列不在正常 disconnect 时清除。
+
+Python `trace.py` 有界跨批重组 LPDU/传输层/APDU，保留原始字节并提供解析结果；
+它与 SOE 测量、Read 结果和 measurement capture 相互独立，不改变控制判定。
+观测边界是已编码 TX / 链路校验通过 RX，不是网卡抓包；缺失损坏输入原始字节、
+真实发送完成和 wire 时间证据，不把可读栈日志视作规范权威。详见
+[报文 trace 指南](PROTOCOL_TRACE.md)。
 
 ## Capture、性能与 soak 路径
 
@@ -127,6 +148,11 @@ LAB 状态改变还要求持久 `SafetyIncidentStore`。控制响应超时、hos
 `config/capability_matrix.csv` 是“标准要求/框架实现状态”的唯一台账，其中 `dut_pics_status` 必须保持 `UNKNOWN`；它不能冒充某一台 EMS 的 PICS。每台 DUT 的 `SUPPORTED/NOT_SUPPORTED/UNKNOWN` 单独保存在未提交的 `ems.local.json`，运行时再叠加到框架台账。对象目录只能证明目录覆盖，完整标准声明还需要逐条 requirement catalog（shall/shall not/conditional）及可追踪测试。`hello.capabilities` 只暴露当前实现的子集，并带实现 revision 和本机验证范围。当前本机端到端从站也使用 OpenDNP3 3.1.2，因此相关能力保持 `IMPLEMENTED_UNVERIFIED`；独立端/真实 EMS 证据齐全后才能升级。
 
 构建时 `build-info.json` 固定 host 版本、Git commit、工作区 clean/dirty/unavailable 状态、OpenDNP3 commit、构建配置、目标架构、依赖锁哈希和能力矩阵哈希。pytest `EvidenceRecorder` 为每次运行原子生成脱敏 manifest/结果，私有 PICS、点表和场景计划只记文件名、大小和 SHA-256，已知项目/测试/host/输入/证据路径会替换为占位符。能力行升级到任一 `VERIFIED_*` 时，`evidence` 引用必须追加实际文件的 `#sha256=<64 hex>`，验证器会读取文件复算；仅有可变路径不能作为可审计证据。正式证据应使用 `git_worktree_state=clean` 的构建并保存这些文件，不应只记录 EXE 文件名；任意测试输出仍需人工审查后才能外发。
+
+`pytest-results.json` 的每条测试具有运行内唯一的 `case_id`（如 `case-000001`）。
+`nodeid` 只是脱敏/截短后的显示名称，可能重复，不得用作唯一键。内部按原始 nodeid
+摘要关联 setup/call/teardown；原始 nodeid 及该摘要均不输出。跨运行关联不能使用
+这个运行内编号，应结合测试定义及受控配置另行处理。
 
 发布脚本把安装树写入 `package-manifest.json`，再用固定时间戳、排序条目和固定压缩参数生成 ZIP/SHA-256；验证阶段在新目录解包、逐文件校验并执行真实本机回环，其中还包含 BI/AI/BOS/AOS 共 8 点的精确静态 capture。它保证相同安装树的 ZIP 字节稳定，但不声称 MSVC 输出本身已达到跨机器可复现。
 

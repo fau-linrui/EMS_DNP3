@@ -131,3 +131,77 @@ def test_pytest_plugin_creates_opt_in_evidence(pytester: pytest.Pytester) -> Non
     assert manifest["results"]["test_count"] == 1
     assert manifest["results"]["phase_count"] == 3
     assert "private-user" not in results
+
+
+@pytest.mark.parametrize("collision", ["secret", "path", "truncation"])
+def test_redacted_nodeid_collisions_keep_distinct_cases_and_phases(
+    tmp_path: Path, collision: str,
+) -> None:
+    first_input = tmp_path / "private-a.json"
+    second_input = tmp_path / "private-b.json"
+    recorder = EvidenceRecorder(
+        tmp_path / "evidence",
+        inputs={"first": first_input, "second": second_input},
+    )
+    if collision == "secret":
+        nodeids = ("test_write[dut_id=SIM-A]", "test_write[dut_id=SIM-B]")
+    elif collision == "path":
+        nodeids = (f"test_read[{first_input}]", f"test_read[{second_input}]")
+    else:
+        nodeids = tuple("x" * 3000 + middle + "y" * 3000 for middle in ("A", "B"))
+    assert recorder._redact(nodeids[0], maximum_chars=4096) == recorder._redact(
+        nodeids[1], maximum_chars=4096,
+    )
+    # Interleave phases so neither the redacted display name nor recording
+    # adjacency can be used to recover a test's identity.
+    for phase in ("setup", "call", "teardown"):
+        for index, nodeid in enumerate(nodeids):
+            recorder.record_phase(
+                nodeid=nodeid, phase=phase,
+                outcome="failed" if phase == "call" and index == 1 else "passed",
+                duration_seconds=0.01,
+                capabilities=(f"FAKE.CAP.{index}",),
+            )
+    manifest_path = recorder.finalize(1)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    results_text = manifest_path.with_name("pytest-results.json").read_text(
+        encoding="utf-8",
+    )
+    cases = json.loads(results_text)["tests"]
+    assert manifest["results"]["test_count"] == 2
+    assert manifest["results"]["phase_count"] == 6
+    assert [case["case_id"] for case in cases] == ["case-000001", "case-000002"]
+    assert cases[0]["nodeid"] == cases[1]["nodeid"]
+    for index, case in enumerate(cases):
+        assert [phase["phase"] for phase in case["phases"]] == [
+            "setup", "call", "teardown",
+        ]
+        assert case["capabilities"] == [f"FAKE.CAP.{index}"]
+        assert case["phases"][1]["outcome"] == ("passed" if index == 0 else "failed")
+    for nodeid in nodeids:
+        assert nodeid not in results_text
+        assert hashlib.sha256(nodeid.encode("utf-8")).hexdigest() not in results_text
+    assert recorder.finalize(1) == manifest_path
+
+
+def test_pytest_evidence_keeps_redacted_parameterized_cases(
+    pytester: pytest.Pytester,
+) -> None:
+    pytester.makeconftest('pytest_plugins = ("dnp3_master.pytest_plugin",)')
+    pytester.makepyfile(test_sample='''
+        import pytest
+
+        @pytest.mark.parametrize("value", [1, 2], ids=["dut_id=SIM-A", "dut_id=SIM-B"])
+        def test_parameter(value):
+            assert value == 1
+    ''')
+    output = pytester.path / "evidence"
+    result = pytester.runpytest("--dnp3-evidence-dir", str(output), "-q")
+    result.assert_outcomes(passed=1, failed=1)
+    run_directory, = output.iterdir()
+    manifest = json.loads((run_directory / "manifest.json").read_text(encoding="utf-8"))
+    document = json.loads((run_directory / "pytest-results.json").read_text(encoding="utf-8"))
+    assert manifest["results"]["test_count"] == 2
+    assert manifest["results"]["phase_count"] == 6
+    assert len({case["case_id"] for case in document["tests"]}) == 2
+    assert len({case["nodeid"] for case in document["tests"]}) == 1

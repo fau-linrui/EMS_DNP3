@@ -6,7 +6,8 @@
 
 - 一行一个请求；每个被处理请求恰好产生一个响应。
 - 接受 LF/CRLF；拒绝 BOM、非法 UTF-8、空行、重复 JSON 键和非对象 `params`。
-- stdout 只包含协议 JSON；日志和致命启动错误写 stderr。
+- stdout 只包含协议 JSON；普通诊断和致命启动错误写 stderr。显式 trace 的栈日志
+  只作为 `trace.read` 响应中的 JSON 字符串交付，不向 stdout 插入裸文本或异步消息。
 - 默认单行上限 1 MiB；`--max-request-bytes` 可设 64 B～16 MiB。
 - JSON 最大嵌套 64 层；ID 为 1～128 字节 ASCII token，命令为 1～64 字节 ASCII token。
 - 最近 4,096 个请求 ID 不得复用。
@@ -15,6 +16,11 @@
 Python client 的 `HostProcessConfig.max_request_bytes` 默认同为 1 MiB，发送前
 检查 UTF-8 字节数；需要提高上限时应同时调整 host 启动参数。Python 的请求超时
 涵盖写入管道及等待响应，两阶段不会各自重新获得完整超时预算。
+
+Python 接收响应同样限制 JSON 容器嵌套最多 64 层（包含外层响应对象，字符串中的
+括号不计层数）。超深响应或解析/结果复制中的递归失败按 `HostProtocolError`
+销毁会话；如果控制请求可能已发出，则执行既有不确定结果处理，不允许保留令牌
+继续控制。SIMULATOR 仍不写事故锁，新 client 可继续。
 
 请求：
 
@@ -41,8 +47,8 @@ Python client 的 `HostProcessConfig.max_request_bytes` 默认同为 1 MiB，发
 | 命令 | 行为 |
 |---|---|
 | `hello` | 返回 host/backend/build 身份、限制、能力和实现命令列表 |
-| `get_status` | 返回 READY/CONNECTING/CONNECTED、通道、会话、安全锁和请求计数 |
-| `stats` | 返回 host、channel、local queue、capture 快照及缺失网络字节的明确限制 |
+| `get_status` | 返回 READY/CONNECTING/CONNECTED、通道、会话、安全锁、请求计数和 trace 摘要 |
+| `stats` | 返回 host、channel、local queue、capture/trace 快照及缺失网络字节的明确限制 |
 | `connect` | 创建 Manager -> TCP Client Channel -> Master，等待通道 OPEN |
 | `disconnect` | 取消任务并按顺序关闭 Master/Channel/Manager，令牌失效 |
 | `wait_event` | 等待并消费有界的通道状态事件；不返回测点变化 |
@@ -52,6 +58,9 @@ Python client 的 `HostProcessConfig.max_request_bytes` 默认同为 1 MiB，发
 | `capture.begin` | 启动本会话唯一的持续有界 measurement capture |
 | `capture.progress` | 返回准确 capture ID 的非消费只读快照 |
 | `capture.end` | 停止接收、在有界时间排空并幂等返回终态 |
+| `trace.start` | 无活动 DNP3 会话时，显式开启有界双向协议栈日志采集 |
+| `trace.read` | 按准确 trace ID 消费有界原始日志批次 |
+| `trace.stop` | 无活动 DNP3 会话时停止采集，保留未读记录，同 ID 幂等 |
 | `integrity_poll` | 一次读取 Class 0 和 Class 1/2/3 |
 | `class_poll` | 一次读取选择的事件 Class 1/2/3 |
 | `read` | 执行 1～64 个严格 Header 的一次性 Read |
@@ -121,6 +130,83 @@ Python 对不确定结果仍终止 host，但不访问持久事故目录，异�
 
 主动上送队列默认容量 4,096，溢出采用 drop-oldest 并在 `summary.dropped_total` 中累计。任何非零丢弃数都表示事件流不完整，测试不得继续宣称 SOE 完整或顺序正确。断开会话会停止收集并清空该队列。Confirm 丢失、重发、重复检测及应用层序号回绕仍属于待独立验证项。
 
+## Protocol trace v1
+
+默认不采集协议日志，不修改 DNP3 TCP 路径。`trace.start` 只接受：
+
+```json
+{"queue_capacity":16384}
+```
+
+容量可省略，范围 1～65,536 条。只能在 connect 之前或 disconnect 之后启动；有
+ACTIVE trace 或上一 STOPPED trace 仍有未读记录时返回 `INVALID_STATE`。成功后得到
+新的 `trace-N` ID。`trace.stop` 只接受 `{"trace_id":"trace-1"}`，也要求无活动
+DNP3 会话；停止后队列保留，重复 stop 同一 ID 幂等。未知/过期 ID 返回 `INVALID_STATE`。
+正常 disconnect 不清空 trace；shutdown/host 退出后内存数据不再可取。
+
+`trace.read` 参数：
+
+```json
+{"trace_id":"trace-1","max_records":256,"timeout_ms":0}
+```
+
+`trace_id` 必填；`max_records` 默认 256、范围 1～1,024，`timeout_ms` 默认 0、
+范围 0～60,000 ms。结果在下面平铺摘要字段之外，增加 `records` 数组和 `timed_out`
+布尔值；不是异步推送，不占用第二个 RPC 通道。summary 中的 `queued_records` 是
+本批消费后的队列快照，不能将其与仍在 ACTIVE 时后续生成的记录混淆。
+`timed_out=true` 当且仅当本批 `records` 为空，包括非阻塞读取和已排空的 STOPPED
+trace；它不是 DNP3 响应超时。
+
+```json
+{
+  "trace_id":"trace-1",
+  "state":"ACTIVE",
+  "scope":"opendnp3_stack",
+  "queue_capacity":16384,
+  "queued_records":0,
+  "dropped_records":0,
+  "truncated_records":0,
+  "last_sequence":0,
+  "complete":true
+}
+```
+
+`state` 为 ACTIVE/STOPPED。`get_status.trace` 和 `stats.trace` 返回相同摘要；
+尚未启动时为 IDLE、`trace_id=null`、默认容量、零计数且 `complete=true`。`complete`
+仅当 dropped/truncated 均为零时为 true；不是“所有线上流量已采集”的声明。
+
+每条原始 record 严格包含：
+
+| 字段 | 约束/含义 |
+|---|---|
+| `sequence` | trace 内从 1 开始递增；用于发现缺口 |
+| `session_id` | 大于等于 1；区分 DNP3 连接会话 |
+| `monotonic_ns` | host 单调时钟纳秒，不是 UTC/设备/网卡时间 |
+| `logger` | 最多 128 UTF-8 字节 |
+| `level` | EVENT/ERR/WARN/INFO/DBG、LINK_RX/TX[_HEX]、TRANSPORT_RX/TX、APP_HEADER/OBJECT/HEX_RX/TX 或 OTHER |
+| `message` | 最多 1,024 UTF-8 字节的原始栈日志或 HEX 行 |
+| `message_truncated` | 本采集层 message/logger 超限或非法 UTF-8 替换标记 |
+
+队列采用 drop-oldest，累计 `dropped_records`，采集层截断/替换累计
+`truncated_records`；读取不会清零计数。回调不写 stdout、不等待消费者。
+固定栈自己的格式化日志可能在进入本采集层前已截短，无法由该计数检测。
+`trace.read` 即使观察记录不完整也返回 `ok=true` 以交付可用的局部诊断，摘要必须为
+`complete=false`；这不表示报文完整性测试通过。直接使用 NDJSON 的调用方必须检查
+这些字段，Python 高层 API 默认会将其转换为携带 batch 的完整性异常。
+
+scope 仅覆盖栈已编码 TX 和链路校验通过的 RX（链路 HEX 含 CRC），不包含全部无效
+CRC/非法链路/截断输入的原始字节。TX 可能编码后因断线未实际发出，时间/顺序是编码
+观测点，不是 socket 完成/网卡时间，不能按其数量证明线上发送次数；也不含 TCP/IP
+或 PCAP。自动 Confirm 可被观测，但 trace 不能
+替代独立重发/时序故障验证，也不提供 Raw frame 注入。
+
+Python 在原始记录之上增量重组 LPDU/传输/APDU，并做支持范围内的协议解码。它的
+派生 `frames`/`applications` 不属于本 NDJSON schema；解析问题和丢失默认通过
+`TraceIncompleteError` 携带 batch 显式报告，不能由可读日志猜出缺失字节。
+参数和 native 结果分别见 `schemas/request.schema.json`、
+`schemas/trace-result.schema.json`；公开 API、完整性和敏感数据边界见
+[报文 trace 指南](PROTOCOL_TRACE.md)。
+
 ## Capture v1
 
 `capture.begin` 的公共形态：
@@ -179,6 +265,9 @@ counter/dimension/processing 错误或队列溢出都会 `valid=false`。队列�
 - `timeout_ms`：50～300000。
 - `max_measurements`：1～1,000,000；即使 summary 不保存详情，也作为最大接收保护。
 - `return_mode`：`detail` 或 `summary`。
+
+等待被判定超时后固定返回 `RESPONSE_TIMEOUT`；随后到达的完成回调不会把这次调用
+变为成功，也不会把较早的 IIN 快照作为最终成功响应。这不是硬实时调度保证。
 
 `class_poll` 可加 `"classes":[1,2,3]`，1～3 项且不能重复。
 

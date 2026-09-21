@@ -19,6 +19,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(DNP3_PROTOCOL_SCHEMA_VERSION 1)
 set(DNP3_OPENDNP3_LOCK_PATH "${PROJECT_SOURCE_DIR}/third_party/opendnp3.lock.json")
+set(DNP3_JSON_LOCK_PATH "${PROJECT_SOURCE_DIR}/third_party/nlohmann_json.lock.json")
 set(
     DNP3_DEPENDENCY_LOCK_PATH
     "${PROJECT_SOURCE_DIR}/third_party/opendnp3-dependencies.lock.json"
@@ -26,6 +27,7 @@ set(
 
 foreach(dnp3_required_file IN ITEMS
         "${DNP3_OPENDNP3_LOCK_PATH}"
+        "${DNP3_JSON_LOCK_PATH}"
         "${DNP3_DEPENDENCY_LOCK_PATH}"
         "${PROJECT_SOURCE_DIR}/config/capability_matrix.csv")
     if(NOT EXISTS "${dnp3_required_file}")
@@ -38,6 +40,7 @@ set_property(
     APPEND
     PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${DNP3_OPENDNP3_LOCK_PATH}"
+        "${DNP3_JSON_LOCK_PATH}"
         "${DNP3_DEPENDENCY_LOCK_PATH}"
         "${PROJECT_SOURCE_DIR}/config/capability_matrix.csv"
 )
@@ -268,6 +271,8 @@ add_library(
         native/src/OpenDnp3ReadSupport.cpp
         native/src/OpenDnp3UnsolicitedSupport.cpp
         native/src/ReadConfig.cpp
+        native/src/TraceConfig.cpp
+        native/src/ProtocolTrace.cpp
 )
 target_link_libraries(
     dnp3host_core
@@ -316,6 +321,26 @@ if(BUILD_TESTING)
     )
     target_link_libraries(dnp3host-capture-tests PRIVATE dnp3host_core)
 
+    # This dedicated test compiles the private read implementation in its own
+    # translation unit to control callback ordering without production hooks.
+    # Only its measurement dependency is compiled alongside it: do not link
+    # dnp3host_core, which contains another copy of OpenDnp3ReadSupport.cpp.
+    add_executable(
+        dnp3host-read-completion-tests
+        native/tests/opendnp3_read_completion_tests.cpp
+        native/src/MeasurementCapture.cpp
+    )
+    target_link_libraries(
+        dnp3host-read-completion-tests
+        PRIVATE dnp3host_build_options nlohmann_json::nlohmann_json opendnp3
+    )
+    if(WIN32)
+        target_link_libraries(dnp3host-read-completion-tests PRIVATE bcrypt)
+    endif()
+
+    add_executable(dnp3host-trace-tests native/tests/protocol_trace_tests.cpp)
+    target_link_libraries(dnp3host-trace-tests PRIVATE dnp3host_core)
+
     add_executable(
         opendnp3-runtime-tests
         native/tests/opendnp3_runtime_tests.cpp
@@ -352,6 +377,11 @@ if(BUILD_TESTING)
     add_test(NAME native.project_info COMMAND dnp3host-unit-tests)
     add_test(NAME native.protocol COMMAND dnp3host-protocol-tests)
     add_test(NAME native.capture COMMAND dnp3host-capture-tests)
+    set_tests_properties(native.capture PROPERTIES TIMEOUT 30)
+    add_test(NAME native.read_completion COMMAND dnp3host-read-completion-tests)
+    set_tests_properties(native.read_completion PROPERTIES TIMEOUT 15)
+    add_test(NAME native.trace COMMAND dnp3host-trace-tests)
+    set_tests_properties(native.trace PROPERTIES TIMEOUT 15)
     add_test(
         NAME native.host_smoke
         COMMAND

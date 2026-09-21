@@ -49,6 +49,12 @@ out\release\release-closure-report.json
 脚本不会创建 Git tag、提交或推送。负责人应在审阅报告、提交和远端状态后另行决定
 是否打 tag/发布，避免自动改写仓库历史。
 
+构建和 `doctor.ps1` 的固定依赖检查覆盖 OpenDNP3、nlohmann/json、Asio、exe4cpp、
+ser4cpp。OpenDNP3 先验证锁定归档 SHA-256，再逐文件核对源码的缺失、多余和内容
+变化；仅对无 NUL 的 UTF-8 文本允许 CRLF/LF 等价，不忽略其他内容或二进制差异。
+许可证及 NOTICE 也须符合锁定来源。校验失败应调查并从已验证归档恢复，不得修改
+锁哈希来接受未知差异；整个过程没有网络下载回退。
+
 ## 2. 打包脚本的 fail-closed 行为
 
 `package.ps1` 默认只接受：
@@ -122,6 +128,10 @@ python-dist\dnp3_master_test_framework-0.6.1-py3-none-any.whl
 
 只有报告中的 `overall_passed=true` 且每个解释器的 `status=PASS` 才算迁移验收
 通过。报告中的绝对路径属于本机诊断信息，外发前仍需人工检查。
+
+外部进程的 stdout/stderr 分别捕获并排空：普通 stderr 警告不会仅因 PowerShell
+5.1 的错误偏好而误判失败，非零退出码仍会阻止验收。解释器探针只从 stdout 解析
+JSON，不能把警告混入 JSON。stdout 自身损坏或缺少必需结果仍判失败。
 
 ## 5. 兼容性声明边界
 

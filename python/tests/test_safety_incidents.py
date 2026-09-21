@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -202,3 +203,100 @@ def test_incident_cli_status_has_clean_machine_readable_output(tmp_path: Path) -
     assert completed.returncode == 0
     assert completed.stderr == ""
     assert json.loads(completed.stdout) == {"active": None}
+
+
+def test_active_lock_does_not_use_suppressed_stat_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = SafetyIncidentStore(tmp_path / "incidents")
+    incident = record_incident(store).incident
+    active_path = store.active_directory / f"{dut_identity_sha256('PRIVATE-DUT-007')}.json"
+    original_stat = os.stat
+
+    def denied_metadata(path, *args, **kwargs):
+        if Path(path) == active_path:
+            raise PermissionError("simulated metadata access denied")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", denied_metadata)
+    # On Python 3.14 Path.exists would swallow this PermissionError. Direct
+    # bounded reading still sees the active lock and blocks dispatch.
+    assert store.get_active("PRIVATE-DUT-007") == incident
+    with pytest.raises(UnresolvedSafetyIncidentError):
+        store.assert_clear("PRIVATE-DUT-007")
+
+
+@pytest.mark.parametrize("failure", [PermissionError, OSError, IsADirectoryError])
+def test_unreadable_active_lock_remains_locked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: type[OSError]
+) -> None:
+    store = SafetyIncidentStore(tmp_path / "incidents")
+    incident = record_incident(store).incident
+    active_path = store.active_directory / f"{dut_identity_sha256('PRIVATE-DUT-007')}.json"
+    original_open = Path.open
+
+    def denied_read(path, *args, **kwargs):
+        if path == active_path:
+            raise failure("simulated unreadable incident")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", denied_read)
+    with pytest.raises(UnresolvedSafetyIncidentError, match="remains locked"):
+        store.assert_clear("PRIVATE-DUT-007")
+    with pytest.raises(UnresolvedSafetyIncidentError, match="remains locked"):
+        store.acknowledge(
+            dut_id="PRIVATE-DUT-007", incident_id=incident["incident_id"],
+            acknowledged_by="test-reviewer", readback_summary="test readback",
+            readback={"value": 1}, evidence_reference="test-only/evidence",
+        )
+    # The failed operation never deletes or modifies an existing record.
+    monkeypatch.setattr(Path, "open", original_open)
+    assert store.get_active("PRIVATE-DUT-007") == incident
+
+
+def test_missing_open_with_existing_directory_entry_is_not_no_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = SafetyIncidentStore(tmp_path / "incidents")
+    record_incident(store)
+    active_path = store.active_directory / f"{dut_identity_sha256('PRIVATE-DUT-007')}.json"
+    original_open = Path.open
+
+    def missing_target(path, *args, **kwargs):
+        if path == active_path:
+            # Models a dangling symlink; no filesystem symlink permission is
+            # required to exercise the ownership check on Windows.
+            raise FileNotFoundError("simulated missing link target")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", missing_target)
+    with pytest.raises(UnresolvedSafetyIncidentError, match="remains locked"):
+        store.assert_clear("PRIVATE-DUT-007")
+
+
+def test_incident_read_is_bounded_even_if_file_grows_before_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from io import BytesIO
+    from dnp3_master.safety_incidents import _MAX_INCIDENT_BYTES
+
+    store = SafetyIncidentStore(tmp_path / "incidents")
+    store._ensure_directories()
+    active_path = store.active_directory / f"{dut_identity_sha256('PRIVATE-DUT-007')}.json"
+    original_open = Path.open
+    sizes = []
+
+    class GrowingFile(BytesIO):
+        def read(self, size=-1):
+            sizes.append(size)
+            return super().read(size)
+
+    def grown_record(path, *args, **kwargs):
+        if path == active_path:
+            return GrowingFile(b"x" * (_MAX_INCIDENT_BYTES * 2))
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", grown_record)
+    with pytest.raises(UnresolvedSafetyIncidentError, match="remains locked"):
+        store.assert_clear("PRIVATE-DUT-007")
+    assert sizes == [_MAX_INCIDENT_BYTES + 1]

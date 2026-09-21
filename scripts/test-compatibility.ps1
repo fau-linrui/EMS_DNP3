@@ -22,22 +22,120 @@ function Resolve-Dnp3PythonExecutable {
     return $dnp3Command.Source
 }
 
+function ConvertTo-Dnp3NativeArgument {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
+
+    # Windows CRT parsing: double backslashes preceding a quote and at the end
+    # of a quoted argument. Always quote, including the empty string. ArgumentList
+    # is unavailable on the .NET Framework used by Windows PowerShell 5.1.
+    $dnp3Escaped = [regex]::Replace($Value, '(\\*)"', '$1$1\"')
+    $dnp3Escaped = [regex]::Replace($dnp3Escaped, '(\\+)$', '$1$1')
+    return '"' + $dnp3Escaped + '"'
+}
+
 function Invoke-Dnp3CommandCapture {
     param(
         [Parameter(Mandatory = $true)][string]$Executable,
-        [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [Parameter(Mandatory = $true)][string]$Description
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$Description,
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 600,
+        [ValidateRange(1024, 67108864)][int]$MaxOutputChars = 4194304,
+        [switch]$Quiet
     )
 
-    $dnp3Output = @(& $Executable @Arguments 2>&1)
-    $dnp3ExitCode = $LASTEXITCODE
-    foreach ($dnp3Line in $dnp3Output) {
-        Write-Host ([string]$dnp3Line)
+    $dnp3Start = [System.Diagnostics.ProcessStartInfo]::new()
+    $dnp3Start.FileName = $Executable
+    $dnp3Start.Arguments = (@(
+        $Arguments | ForEach-Object { ConvertTo-Dnp3NativeArgument -Value $_ }
+    ) -join ' ')
+    $dnp3Start.WorkingDirectory = (Get-Location).ProviderPath
+    $dnp3Start.UseShellExecute = $false
+    $dnp3Start.CreateNoWindow = $true
+    $dnp3Start.RedirectStandardOutput = $true
+    $dnp3Start.RedirectStandardError = $true
+    $dnp3Start.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $dnp3Start.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
+    $dnp3Process = [System.Diagnostics.Process]::new()
+    $dnp3Process.StartInfo = $dnp3Start
+    $dnp3Started = $false
+    try {
+        $dnp3Started = $dnp3Process.Start()
+        if (-not $dnp3Started) { throw "$Description could not start." }
+        $dnp3Clock = [System.Diagnostics.Stopwatch]::StartNew()
+        $dnp3Stdout = [System.Text.StringBuilder]::new()
+        $dnp3Stderr = [System.Text.StringBuilder]::new()
+        $dnp3OutBuffer = [char[]]::new(4096)
+        $dnp3ErrBuffer = [char[]]::new(4096)
+        $dnp3OutRead = $dnp3Process.StandardOutput.ReadAsync($dnp3OutBuffer, 0, 4096)
+        $dnp3ErrRead = $dnp3Process.StandardError.ReadAsync($dnp3ErrBuffer, 0, 4096)
+        $dnp3OutEnded = $false
+        $dnp3ErrEnded = $false
+        # Drain both streams concurrently. ReadToEnd(stdout) followed by stderr
+        # deadlocks if the other pipe fills; ReadToEndAsync also lacks a size cap.
+        while (-not $dnp3OutEnded -or -not $dnp3ErrEnded -or -not $dnp3Process.HasExited) {
+            if ($dnp3Clock.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+                throw "$Description exceeded its $TimeoutSeconds-second timeout."
+            }
+            if (-not $dnp3OutEnded -and $dnp3OutRead.IsCompleted) {
+                $dnp3Count = $dnp3OutRead.GetAwaiter().GetResult()
+                if ($dnp3Count -eq 0) { $dnp3OutEnded = $true }
+                else {
+                    if ($dnp3Stdout.Length + $dnp3Stderr.Length + $dnp3Count -gt $MaxOutputChars) {
+                        throw "$Description exceeded its $MaxOutputChars-character output limit."
+                    }
+                    [void]$dnp3Stdout.Append($dnp3OutBuffer, 0, $dnp3Count)
+                    $dnp3OutRead = $dnp3Process.StandardOutput.ReadAsync($dnp3OutBuffer, 0, 4096)
+                }
+            }
+            if (-not $dnp3ErrEnded -and $dnp3ErrRead.IsCompleted) {
+                $dnp3Count = $dnp3ErrRead.GetAwaiter().GetResult()
+                if ($dnp3Count -eq 0) { $dnp3ErrEnded = $true }
+                else {
+                    if ($dnp3Stdout.Length + $dnp3Stderr.Length + $dnp3Count -gt $MaxOutputChars) {
+                        throw "$Description exceeded its $MaxOutputChars-character output limit."
+                    }
+                    [void]$dnp3Stderr.Append($dnp3ErrBuffer, 0, $dnp3Count)
+                    $dnp3ErrRead = $dnp3Process.StandardError.ReadAsync($dnp3ErrBuffer, 0, 4096)
+                }
+            }
+            if (-not $dnp3OutEnded -or -not $dnp3ErrEnded -or -not $dnp3Process.HasExited) {
+                [System.Threading.Thread]::Sleep(5)
+            }
+        }
+        $dnp3Result = [pscustomobject]@{
+            stdout = $dnp3Stdout.ToString()
+            stderr = $dnp3Stderr.ToString()
+            exit_code = $dnp3Process.ExitCode
+        }
+        if (-not $Quiet) {
+            if ($dnp3Result.stdout) { Write-Host $dnp3Result.stdout.TrimEnd() }
+            if ($dnp3Result.stderr) { Write-Host $dnp3Result.stderr.TrimEnd() }
+        }
+        if ($dnp3Result.exit_code -ne 0) {
+            $dnp3Diagnostic = ($dnp3Result.stderr + "`n" + $dnp3Result.stdout).Trim()
+            if ($dnp3Diagnostic.Length -gt 8192) {
+                $dnp3Diagnostic = $dnp3Diagnostic.Substring(0, 8192)
+            }
+            throw "$Description failed with exit code $($dnp3Result.exit_code): $dnp3Diagnostic"
+        }
+        return $dnp3Result
     }
-    if ($dnp3ExitCode -ne 0) {
-        throw "$Description failed with exit code $dnp3ExitCode."
+    finally {
+        try {
+            if ($dnp3Started -and -not $dnp3Process.HasExited) {
+                try {
+                    $dnp3Process.Kill()
+                    [void]$dnp3Process.WaitForExit(2000)
+                }
+                catch [System.InvalidOperationException] {
+                    if (-not $dnp3Process.HasExited) { throw }
+                }
+            }
+        }
+        finally {
+            $dnp3Process.Dispose()
+        }
     }
-    return ,$dnp3Output
 }
 
 function Set-Dnp3ProcessEnvironment {
@@ -187,6 +285,7 @@ foreach ($dnp3EnvironmentEntry in @(Get-ChildItem Env:)) {
 }
 foreach ($dnp3EnvironmentName in @(
     'PYTHONPATH',
+    'PYTHONIOENCODING',
     'PYTHONNOUSERSITE',
     'PYTHONDONTWRITEBYTECODE',
     'PYTEST_ADDOPTS',
@@ -218,6 +317,7 @@ $dnp3TemporaryBase = [System.IO.Path]::GetFullPath(
 
 try {
     Set-Dnp3ProcessEnvironment -Name 'PYTHONNOUSERSITE' -Value '1'
+    Set-Dnp3ProcessEnvironment -Name 'PYTHONIOENCODING' -Value 'utf-8'
     Set-Dnp3ProcessEnvironment -Name 'PYTHONDONTWRITEBYTECODE' -Value '1'
     Set-Dnp3ProcessEnvironment -Name 'PYTEST_ADDOPTS' -Value ''
     Set-Dnp3ProcessEnvironment -Name 'PYTEST_DISABLE_PLUGIN_AUTOLOAD' -Value '1'
@@ -245,16 +345,14 @@ try {
         }
         Write-Host "Compatibility candidate: $dnp3Python"
         try {
-            $dnp3ProbeOutput = @(& $dnp3Python $dnp3ProbeScript environment 2>&1)
-            if ($LASTEXITCODE -ne 0) {
-                throw (
-                    'Python must provide pytest and pip before offline compatibility ' +
-                    'testing; setuptools 68+ is additionally required only for the ' +
-                    'legacy source-copy fallback: ' +
-                    ($dnp3ProbeOutput -join [Environment]::NewLine)
-                )
+            $dnp3ProbeOutput = Invoke-Dnp3CommandCapture `
+                -Executable $dnp3Python `
+                -Arguments @($dnp3ProbeScript, 'environment') `
+                -Description 'Python/pytest/pip environment probe' -Quiet
+            if ([string]::IsNullOrWhiteSpace($dnp3ProbeOutput.stdout)) {
+                throw 'The environment probe returned no JSON on stdout.'
             }
-            $dnp3Probe = ($dnp3ProbeOutput -join "`n") | ConvertFrom-Json
+            $dnp3Probe = $dnp3ProbeOutput.stdout | ConvertFrom-Json
             $dnp3Result.python_version = [string]$dnp3Probe.python
             $dnp3Result.pytest_version = [string]$dnp3Probe.pytest
             $dnp3Result.pip_version = [string]$dnp3Probe.pip
@@ -372,16 +470,14 @@ try {
                 $dnp3ConsumerProbe = Join-Path $dnp3ConsumerRoot (
                     'compatibility_probe.py'
                 )
-                $dnp3ImportOutput = @(
-                    & $dnp3Python $dnp3ConsumerProbe installed-package 2>&1
-                )
-                if ($LASTEXITCODE -ne 0) {
-                    throw (
-                        'The isolated dnp3_master import failed: ' +
-                        ($dnp3ImportOutput -join [Environment]::NewLine)
-                    )
+                $dnp3ImportOutput = Invoke-Dnp3CommandCapture `
+                    -Executable $dnp3Python `
+                    -Arguments @($dnp3ConsumerProbe, 'installed-package') `
+                    -Description 'Isolated dnp3_master import' -Quiet
+                if ([string]::IsNullOrWhiteSpace($dnp3ImportOutput.stdout)) {
+                    throw 'The isolated import probe returned no JSON on stdout.'
                 }
-                $dnp3Import = ($dnp3ImportOutput -join "`n") | ConvertFrom-Json
+                $dnp3Import = $dnp3ImportOutput.stdout | ConvertFrom-Json
                 $dnp3Result.installed_import_path = [string]$dnp3Import.path
                 if ($dnp3Import.version -ne $dnp3PackageVersion) {
                     throw (
@@ -390,11 +486,11 @@ try {
                     )
                 }
 
-                $dnp3HelpOutput = @(& $dnp3Python -m pytest --help 2>&1)
-                if ($LASTEXITCODE -ne 0) {
-                    throw 'pytest --help failed in the blank consumer project.'
-                }
-                if (($dnp3HelpOutput -join "`n") -notmatch '--dnp3-host-exe') {
+                $dnp3HelpOutput = Invoke-Dnp3CommandCapture `
+                    -Executable $dnp3Python `
+                    -Arguments @('-m', 'pytest', '--help') `
+                    -Description 'pytest --help in the blank consumer' -Quiet
+                if ($dnp3HelpOutput.stdout -notmatch '--dnp3-host-exe') {
                     throw 'The DNP3 pytest plugin options were not registered.'
                 }
                 [void](Invoke-Dnp3CommandCapture `

@@ -442,13 +442,18 @@ public:
         measurements_.push_back(std::move(record));
     }
 
-    bool wait_for_completion()
+    void wait_for_completion()
     {
         std::unique_lock<std::mutex> lock(mutex_);
-        return condition_.wait_for(
+        const auto completed = condition_.wait_for(
             lock,
             std::chrono::milliseconds{options_.timeout_ms},
             [this] { return done_; });
+        // Freeze this API call's deadline decision while holding the same
+        // mutex as completion. A late response may finish the underlying task,
+        // but must not upgrade this call to SUCCESS using an earlier IIN
+        // snapshot taken between the expired wait and that response's IIN.
+        wait_timed_out_ = wait_timed_out_ || !completed;
     }
 
     BackendOperationResult outcome(
@@ -457,7 +462,7 @@ public:
         const std::uint64_t iin_window_dropped) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!done_ || !completion_) {
+        if (wait_timed_out_ || !done_ || !completion_) {
             return BackendOperationResult::failure(
                 ErrorCode::ResponseTimeout,
                 "DNP3 read task did not complete before the configured deadline",
@@ -568,6 +573,7 @@ private:
     std::condition_variable condition_;
     bool started_{false};
     bool done_{false};
+    bool wait_timed_out_{false};
     bool destroyed_{false};
     std::optional<opendnp3::TaskCompletion> pending_completion_;
     std::optional<opendnp3::TaskCompletion> completion_;

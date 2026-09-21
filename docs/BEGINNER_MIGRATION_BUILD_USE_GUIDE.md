@@ -139,6 +139,10 @@ python -m venv .venv
 
 只有最后显示 `READY` 才继续构建。需要机器可读结果时使用 `.\scripts\doctor.ps1 -Json`。
 
+固定依赖检查包含 OpenDNP3 本体、nlohmann/json 和三项构建依赖，不只是检查文件
+是否存在。正常 Windows CRLF/LF 换行差异可接受；源码缺失、多余或实际内容变化
+会失败。请从已验证的离线归档恢复准确文件，不要为了通过检查修改锁文件里的哈希。
+
 ## 4. 一键构建、测试和本机自检
 
 在仓库根目录执行：
@@ -521,6 +525,10 @@ def test_ems_integrity_read(connected_master):
 
 `--dnp3-evidence-dir` 会为每次运行创建独立目录，生成脱敏 `manifest.json` 和 `pytest-results.json`，只记录 PICS、点表、场景计划和矩阵的文件名、大小和 SHA-256，不复制私有原文。记录器会替换已知的项目、测试、host、输入和证据绝对路径，并遮盖常见密钥字段；但任意第三方库输出可能包含记录器不了解的业务数据，因此证据对外传递前仍必须人工复核。
 
+每条结果的 `case_id` 在本次运行内唯一；`nodeid` 是供人阅读的脱敏名称，两个
+参数化用例可能显示相同名称，但不会合并结果。自己编写报告汇总时使用
+`run_id + case_id` 关联阶段，不要把脱敏名称当作唯一键。
+
 范围读取示例：
 
 ```python
@@ -619,6 +627,15 @@ drop 都会失败。Profile 中的 watchdog 还必须严格覆盖 begin、Read�
 高层 benchmark 单块严格限制为 4,096 条，并同时核验 capture 与 master
 unsolicited 队列；长流必须拆成逐块对账的请求。完整字段、capture 真值和检查点说明见
 `docs\PERFORMANCE_AND_SOAK_GUIDE.md`。
+
+### 6.5 查看主从站的 DNP3 报文详情
+
+不需要在 pytest 中读取 EXE 的 stderr，也不需要修改 C++。使用配套的新 host 和
+Python 包，在连接前 `start_trace()`，业务操作后 `read_trace()`，结束时先断开、
+停止 trace 再排空即可。可复制的 pytest 示例见 [报文 trace 指南](PROTOCOL_TRACE.md)。
+默认关闭，原有用例无需改动；开启后可取得原始 HEX、协议字段和栈诊断，任何采集丢失
+默认报错。其范围是 OpenDNP3 栈已接收/已编码的 DNP3 数据，不含网卡级 TCP/IP 或所有
+损坏报文，不能替代 PCAP。原始报文含业务内容，不能直接上传 GitHub 或共享报告。
 
 ## 7. LAB 控制用例：默认锁定，授权后运行
 

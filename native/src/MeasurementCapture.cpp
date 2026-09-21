@@ -229,8 +229,10 @@ Json event_manifest_json(const CaptureEventManifest& manifest)
 
 struct MeasurementCapture::Impl final {
     Impl()
-        : worker([this] { run(); })
     {
+        // Every member (including queue/state declared after worker) must be
+        // initialized before run() can observe this object on another thread.
+        worker = std::thread([this] { run(); });
     }
 
     ~Impl()
