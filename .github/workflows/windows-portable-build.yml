@@ -1,0 +1,89 @@
+name: Windows portable pytest package
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/windows-portable-build
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-portable-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-verify:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: powershell
+
+    steps:
+      - name: Check out the build commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12 x64
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          architecture: x64
+
+      - name: Prepare the Python build and test environment
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+
+          python -m venv .venv
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create the build environment.' }
+
+          # Install tooling before the offline build/package phase. pip's
+          # isolated editable build does not leave setuptools in this venv.
+          & .\.venv\Scripts\python.exe -m pip install --disable-pip-version-check 'setuptools>=68' wheel 'pytest>=8,<10'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install build/test tooling.' }
+
+          & .\.venv\Scripts\python.exe -m pip install --disable-pip-version-check --no-index --no-deps --no-build-isolation -e .\python
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install the project.' }
+
+      - name: Build and verify the portable Release package
+        env:
+          PIP_NO_INDEX: '1'
+          PIP_DISABLE_PIP_VERSION_CHECK: '1'
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $dnp3BuildPython = (Resolve-Path .\.venv\Scripts\python.exe).Path
+
+          # Existing entry point: doctor, MSVC x64 Release build, full tests,
+          # 1,000 lifecycles, two identical ZIPs, unpacked loopback self-tests,
+          # and migration acceptance. All clean-commit gates remain enabled.
+          & .\scripts\release.ps1 -LifecycleIterations 1000 -PythonExecutable @($dnp3BuildPython)
+          if ($LASTEXITCODE -ne 0) { throw 'Portable release verification failed.' }
+
+      - name: Upload the verified package and acceptance reports
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ems-dnp3-windows-x64-${{ github.sha }}
+          path: |
+            out/package/ems-dnp3-pytest-*.zip
+            out/package/ems-dnp3-pytest-*.zip.sha256
+            out/release/release-closure-report.json
+            out/release/migration-compatibility-report.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Preserve diagnostic reports if the build fails
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ems-dnp3-build-diagnostics-${{ github.sha }}
+          path: |
+            out/build/windows-msvc-release/Testing/Temporary/*.log
+            out/release/*.json
+          if-no-files-found: ignore
+          retention-days: 7
