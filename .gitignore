@@ -12,6 +12,12 @@ htmlcov/
 build/
 dist/
 
+# These two upstream NuGet build inputs are source, not generated output.
+!/third_party/opendnp3/dotnet/nuget/build/
+/third_party/opendnp3/dotnet/nuget/build/*
+!/third_party/opendnp3/dotnet/nuget/build/opendnp3.props
+!/third_party/opendnp3/dotnet/nuget/build/opendnp3.targets
+
 # CMake and native build outputs
 out/
 CMakeUserPresets.json

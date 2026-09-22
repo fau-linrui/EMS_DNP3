@@ -143,6 +143,12 @@ python -m venv .venv
 是否存在。正常 Windows CRLF/LF 换行差异可接受；源码缺失、多余或实际内容变化
 会失败。请从已验证的离线归档恢复准确文件，不要为了通过检查修改锁文件里的哈希。
 
+若你从 `243537c` 拉取的源码报 `MISSING_SOURCE_FILE: dotnet/nuget/build/opendnp3.props`
+或 `opendnp3.targets`，这是仓库曾漏提交两个上游源码文件，不是缺少初始化步骤。
+在没有本地冲突的仓库根目录执行 `git pull --ff-only` 获取包含 2026-09-22 修复的
+版本，再执行 `.\scripts\doctor.ps1`；使用源码 ZIP 的用户应下载修复后的完整 ZIP。
+不需要初始化子模块、启用 .NET 构建或更改依赖锁，也不要跳过完整性检查。
+
 ## 4. 一键构建、测试和本机自检
 
 在仓库根目录执行：

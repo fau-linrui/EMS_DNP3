@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import shutil
+import subprocess
 from types import SimpleNamespace
 import zipfile
 
@@ -262,3 +264,86 @@ def test_nlohmann_reparse_point_is_rejected_without_reading_it(tmp_path: Path, m
     monkeypatch.setattr(Path, "lstat", synthetic_reparse)
     monkeypatch.setattr(Path, "open", guarded_open)
     assert any("reparse point" in issue.message for issue in _nlohmann_issues(tmp_path))
+
+
+@pytest.fixture
+def repository_git() -> tuple[Path, str]:
+    root = Path(__file__).resolve().parents[2]
+    if not (root / ".git").exists():
+        pytest.skip("Git index regression is not applicable to a source archive without .git")
+    executable = shutil.which("git")
+    assert executable is not None, "Git is required to check the source checkout's index"
+    result = _run_repository_git((root, executable), "rev-parse", "--show-toplevel")
+    assert result.returncode == 0, result.stderr
+    assert Path(result.stdout.strip()).resolve() == root, "must inspect this repository's index"
+    return root, executable
+
+
+def _run_repository_git(repository: tuple[Path, str], *arguments: str) -> subprocess.CompletedProcess[str]:
+    root, executable = repository
+    return subprocess.run(
+        [executable, "-C", str(root), *arguments],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        encoding="utf-8", timeout=30, check=False,
+    )
+
+
+def test_opendnp3_git_index_contains_every_locked_archive_file(repository_git: tuple[Path, str]) -> None:
+    """Local ignored files must not conceal source files missing from a clone."""
+    root, _ = repository_git
+    lock = json.loads((root / "third_party/opendnp3.lock.json").read_text(encoding="utf-8"))
+    archive_path = root / "third_party/distfiles/opendnp3-3.1.2.zip"
+    archive_record = lock["source_archive"]
+    assert archive_record["path"] == "third_party/distfiles/opendnp3-3.1.2.zip"
+    assert archive_path.stat().st_size == archive_record["bytes"]
+    assert digest(archive_path, "sha256") == archive_record["sha256"]
+    with zipfile.ZipFile(archive_path) as archive:
+        members = archive.infolist()
+        assert len(members) == archive_record["entries"]
+        prefix = "opendnp3-3.1.2/"
+        assert all(member.filename.startswith(prefix) for member in members)
+        expected = {
+            "third_party/opendnp3/" + member.filename[len(prefix):]
+            for member in members if not member.is_dir()
+        }
+
+    result = _run_repository_git(repository_git, "ls-files", "--stage", "-z", "--", "third_party/opendnp3")
+    assert result.returncode == 0, result.stderr
+    indexed: set[str] = set()
+    for record in result.stdout.split("\0"):
+        if not record:
+            continue
+        metadata, separator, path = record.partition("\t")
+        assert separator, "unexpected git ls-files record"
+        mode, _, stage = metadata.split()
+        assert mode in {"100644", "100755"} and stage == "0", f"not a merged regular source file: {path}"
+        indexed.add(path)
+    missing, extra = sorted(expected - indexed), sorted(indexed - expected)
+    assert not missing and not extra, (
+        f"OpenDNP3 Git index differs from the locked archive: "
+        f"missing ({len(missing)})={missing[:20]}, extra ({len(extra)})={extra[:20]}. "
+        "Files present only in the working tree do not reach a Git clone."
+    )
+
+
+def test_opendnp3_build_source_ignore_exceptions_are_exact(repository_git: tuple[Path, str]) -> None:
+    source_directory = "third_party/opendnp3/dotnet/nuget/build/"
+    allowed = [source_directory + name for name in ("opendnp3.props", "opendnp3.targets")]
+    ignored = [
+        source_directory + "unrelated.props",
+        source_directory + "unrelated.targets",
+        source_directory + "generated.obj",
+        source_directory + "nested/opendnp3.props",
+        "build/opendnp3.props",
+        "python/build/generated.obj",
+        "third_party/opendnp3/build/generated.obj",
+        "out/build/generated.obj",
+    ]
+    for path in allowed + ignored:
+        # Ignore the index so these assertions remain meaningful after git add.
+        result = _run_repository_git(repository_git, "check-ignore", "--no-index", "-q", "--", path)
+        assert result.returncode in {0, 1}, result.stderr
+        expected_ignored = path in ignored
+        assert (result.returncode == 0) == expected_ignored, (
+            f"{path}: expected {'ignored build output' if expected_ignored else 'trackable upstream source'}"
+        )
