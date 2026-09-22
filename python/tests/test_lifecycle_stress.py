@@ -43,30 +43,43 @@ def test_repeated_hello_shutdown_has_no_live_process_or_handle_growth() -> None:
 
     with Dnp3MasterClient(config) as warmup:
         assert warmup.hello_info["backend"] == "opendnp3"
+    del warmup
+    gc.collect()
+    before_clients_handles = current_windows_handle_count()
+    baseline_threads = threading.active_count()
+
+    # Live client objects own Python locks even before starting a host. On
+    # CPython 3.12/Windows these locks use kernel handles, so compare the same
+    # number of retained clients before and after their process lifecycles.
+    retained_clients = [Dnp3MasterClient(config) for _ in range(iterations)]
     gc.collect()
     baseline_handles = current_windows_handle_count()
-    baseline_threads = threading.active_count()
-    retained_clients: list[Dnp3MasterClient] = []
 
-    for _ in range(iterations):
-        client = Dnp3MasterClient(config)
+    for client in retained_clients:
         with client:
             assert client.hello_info["backend"] == "opendnp3"
         diagnostics = client.diagnostics
         assert diagnostics.returncode == 0
         assert diagnostics.cleanup_error is None
         assert not client.is_running
-        retained_clients.append(client)
 
     gc.collect()
     final_handles = current_windows_handle_count()
     final_threads = threading.active_count()
+
+    # Also verify that the clients' own synchronization resources are released.
+    del client
+    retained_clients.clear()
+    gc.collect()
+    released_handles = current_windows_handle_count()
     print(
         f"lifecycle_iterations={iterations} "
         f"handles={baseline_handles}->{final_handles} "
+        f"released_handles={before_clients_handles}->{released_handles} "
         f"threads={baseline_threads}->{final_threads}"
     )
     assert final_threads <= baseline_threads
     if baseline_handles is not None and final_handles is not None:
         assert final_handles <= baseline_handles + 8
-    retained_clients.clear()
+    if before_clients_handles is not None and released_handles is not None:
+        assert released_handles <= before_clients_handles + 8

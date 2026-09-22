@@ -183,7 +183,7 @@ out\build\windows-msvc-release\bin\dnp3-local-test-outstation.exe
 .\scripts\test-lifecycle.ps1 -Preset windows-msvc-release -Iterations 1000
 ```
 
-脚本会先预热一次，再比较当前 pytest 进程的句柄和线程数。通过条件是线程数不增长，句柄最终值不超过预热基线加 8（给 Windows/pytest 的小幅系统噪声留余量），并且每个 host 都以返回码 0 退出且无需强制清理。看到类似 `handles=148->150` 并不自动等于泄漏，应以 pytest 最终是否通过为准；若失败，不要提高阈值掩盖问题，应保留完整输出并定位未关闭的进程、管道或 Job Object。
+脚本会先预热一次，再预先创建全部 client，并在保留相同数量 client 的条件下比较启动前和关闭后的句柄数。这样不会把仍存活的 Python client 自身的锁句柄误判为子进程资源泄漏。随后释放全部 client 引用并执行垃圾回收，再与创建 client 前的句柄数比较。两次比较都要求最终值不超过各自基线加 8（给 Windows/pytest 的小幅系统噪声留余量）；线程数不得增长，每个 host 都必须以返回码 0 退出且无需强制清理。输出中的 `handles` 表示保留 client 时的比较，`released_handles` 表示释放 client 后的比较。若失败，不要提高阈值掩盖问题，应保留完整输出并定位未关闭的进程、管道或 Job Object。
 
 ### 4.1 生成正式 clean 发布包
 
