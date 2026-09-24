@@ -140,6 +140,10 @@ python-dist\dnp3_master_test_framework-0.6.1-py3-none-any.whl
 5.1 的错误偏好而误判失败，非零退出码仍会阻止验收。解释器探针只从 stdout 解析
 JSON，不能把警告混入 JSON。stdout 自身损坏或缺少必需结果仍判失败。
 
+解释器探针使用 ASCII 转义输出 JSON，解析后仍保留完整 Unicode 路径。在中文目录
+运行仓库测试时，这可避免 Windows 管道按 GBK 等代码页输出、父进程按 UTF-8
+解码而失败。回归覆盖 GBK、cp1252、ASCII、UTF-8，以及中文、空格和非 BMP 路径。
+
 ## 5. 兼容性声明边界
 
 脚本接受一个或多个 Python 3.10+ 解释器，并要求其中已安装 pytest 8.x 或 9.x。

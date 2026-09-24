@@ -29,7 +29,9 @@ def main() -> int:
             "path": str(Path(dnp3_master.__file__).resolve()),
             "version": dnp3_master.__version__,
         }
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    # Keep JSON portable across Windows pipe code pages; parsers restore the
+    # original Unicode path from escapes without relying on PYTHONIOENCODING.
+    print(json.dumps(result, ensure_ascii=True, sort_keys=True))
     return 0
 
 

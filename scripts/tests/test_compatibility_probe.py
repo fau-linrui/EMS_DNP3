@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+
+import pytest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -53,4 +56,29 @@ def test_installed_package_probe_respects_explicit_pythonpath() -> None:
 
     imported = Path(str(result["path"])).resolve()
     assert imported.is_relative_to(source.resolve())
+    assert result["version"] == "0.6.1"
+
+
+@pytest.mark.parametrize("stdio_encoding", ["gbk", "cp1252", "ascii", "utf-8"])
+@pytest.mark.parametrize("directory", ["测试临时文件", "测试 路径_Δ_😀"])
+def test_installed_package_probe_preserves_unicode_path_across_stdio_encodings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stdio_encoding: str,
+    directory: str,
+) -> None:
+    source = tmp_path / directory / "python" / "src"
+    package = source / "dnp3_master"
+    shutil.copytree(
+        REPOSITORY_ROOT / "python" / "src" / "dnp3_master",
+        package,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    # Reproduce legacy Windows pipe encodings even on UTF-8 CI machines.
+    monkeypatch.setenv("PYTHONUTF8", "0")
+    monkeypatch.setenv("PYTHONIOENCODING", stdio_encoding)
+
+    result = run_probe("installed-package", pythonpath=source)
+
+    assert Path(str(result["path"])).resolve() == (package / "__init__.py").resolve()
     assert result["version"] == "0.6.1"
